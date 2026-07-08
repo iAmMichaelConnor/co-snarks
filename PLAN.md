@@ -62,6 +62,13 @@ no pasting project code into external services. When in doubt, don't.
 4. **Blackbox priority**: document the full support matrix + difficulty
    (project-docs ch. 06); build-out only as needed by target circuits.
 5. **3-party honest-majority semi-honest REP3 is acceptable for now.**
+6a. **(2026-07-08, session 2) Implementation-independence principle.** The
+   co-noir Rust may be structured however is best practice (following
+   Taceo's existing conventions) — do NOT copy bb's C++ layout blindly.
+   The two implementations should stay as independent as possible so they
+   can be *differentially fuzzed* against each other later (ch. 13 §6);
+   the only mandatory coupling is behavioral: proof/VK byte parity and
+   mutual verifier acceptance at the KAT boundary.
 6. **(2026-07-08, later) Key project output: co-snarks from PXE secrets.**
    The user's notes / secret keys / private state live in their PXE, which
    today has no way to export them for secret-sharing. We must design the
@@ -127,7 +134,26 @@ Goal: a co-snark generated and verified end-to-end this week; baseline metrics.
 - [x] 1.3 Resolve the ZK-flavor question → both supported in-contract;
       ZK is our default. See Decisions item 3 / project-docs ch. 04 §5.
 
-### Phase 2 — sync co-noir to the v5-next target  (~2–4 wks, LOCAL ONLY)
+### Phase 2 — sync co-noir to the v5-next target  (~2–4 wks, LOCAL ONLY)  [STARTED 2026-07-08]
+
+**Pinned working set (re-verify at each session start, repos move daily):**
+- **Work branch**: `mc/update-co-noir` in `~/co-snarks` (branched off local
+  `main` @ `36da0ea8`; origin pushurl DISABLED as no-push rail; local
+  commits only, incremental, working-code gate — see ch. 14 §12).
+- **bb reference**: `~/aztec-packages-private`, target = `origin/v5-next`;
+  effective target tag = `v5.0.0-nightly.20260708` (bb tree verified
+  identical to v5-next 2026-07-08, twice). Diff range for all work items:
+  `v5.0.0-nightly.20260324..v5.0.0-nightly.20260708` (both tags exist in
+  aztec-packages-private).
+- **Noir tooling target**: `v1.0.0-beta.22` (= v5-next noir submodule
+  commit `c57152f912…`, exactly the upstream release tag; deps stay on
+  github.com/noir-lang/noir, vendoring fallback =
+  aztec-packages-private/noir/noir-repo).
+- **Oracle binaries**: `~/.bb/bb` = 5.0.0-nightly.20260324 (old pin);
+  `~/.bb-target/bb` = 5.0.0-rc.2 (UH-identical to v5-next — rc.2's bb diff
+  vs v5-next is vm2/AVM only); nargo via noirup (beta.20 now; beta.22 for
+  vector regen).
+- Public mirror for tags/releases: `~/ap-next` (public repo, v5-next).
 Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.md` §2:
 - [ ] 2.1 Regenerate/collect fresh bb KATs at the new pin (proofs + VKs for the
       test-vector circuits, both hashers, ZK on/off). Reuse Taceo's own
@@ -142,6 +168,11 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 - [ ] 2.4 ZK rework: masking randomness in witness rows, new row-disabling
       factor, drop padding_indicator_array, SSIPA 5th opening claim.
 - [ ] 2.5 Relation tuple reorder (alpha assignment).
+- [ ] 2.5a **Entity/get_all reorder (found 2026-07-08, ch. 03 §2 row 6):**
+      sumcheck-evaluation transmit order + VK commitment serialization
+      order — co-noir entities.rs get_all/precomputed order + transcript
+      send/receive sites + recursion verifier mirror. Do with 2.5 (same bb
+      commit).
 - [ ] 2.6 Builder/gate-level: ROM/RAM sorted-index pinning; EC add/MSM ACIR
       serde change (`is_infinite` removed); ECDSA-r1/SHA table changes (only
       gate-count constants matter where blackboxes are unimplemented).

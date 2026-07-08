@@ -1,4 +1,4 @@
-# Chapter 14 — Phase 0 command log (exact commands, in order, with outcomes)
+# Chapter 14 — Phase 0 + Phase 2 command log (exact commands, in order, with outcomes)
 
 *A faithful, chronological record of every command run during Phase 0
 (validate the co-noir pipeline at the current pin), including the ones that
@@ -364,3 +364,137 @@ All of these cost real time today; none are co-noir's fault.
 5. **`cleanup.sh` inside compare scripts deletes bystander artifacts**
    (§6) — keep hand-made artifacts in an isolated scratch dir, never in
    `examples/` or `test_vectors/` while a compare run is live.
+
+---
+
+# Phase 2 command log (sync co-noir → v5-next; started 2026-07-08)
+
+## 12. Setup: git branch + push rail + target oracle
+
+```bash
+# [OK] branch for all Phase 2 work; local commits authorized by Mike this
+# session (branch mc/update-co-noir). First commit 74ab4cc3 = Phase 0 state.
+git checkout -b mc/update-co-noir
+
+# [OK] hard safety rail: origin's push URL now points at a non-repo, so
+# `git push` physically fails (fetch still works — fetch URL untouched).
+# Undo (if ever needed): git config --unset remote.origin.pushurl
+git config remote.origin.pushurl "DISABLED-never-push-confidentiality-rule"
+git push --dry-run origin mc/update-co-noir   # → fatal: not a git repository ✓
+
+# [FAIL] target reference bb: the tag v5.0.0-nightly.20260708 has NO public
+# release assets (404) — the v5 line moved from nightlies to release
+# candidates (v5.0.0-rc.1/rc.2) around July.
+curl …/releases/download/v5.0.0-nightly.20260708/barretenberg-amd64-linux.tar.gz  # 404
+
+# [OK] resolution: in ~/ap-next (public repo), `git diff v5.0.0-rc.2
+# origin/v5-next -- barretenberg` touches ONLY vm2/ (the AVM) — UltraHonk
+# trees are identical. And v5.0.0-nightly.20260708's bb tree ≡ v5-next
+# (empty diff, re-verified). So bb v5.0.0-rc.2 is a valid UH parity oracle
+# for the v5-next target.
+mkdir -p ~/.bb-target && cd ~/.bb-target
+curl -sL …/releases/download/v5.0.0-rc.2/barretenberg-amd64-linux.tar.gz | tar xz
+~/.bb-target/bb --version   # 5.0.0-rc.2
+# NB: ~/.bb/bb stays at the OLD pin (5.0.0-nightly.20260324) — both oracles
+# are needed during the sync (old = regression reference, new = target).
+```
+
+## 13. Pre-flight plan validation (before any code change)
+
+Three parallel read-only verification passes launched over the actual code
+(results recorded when complete): (a) re-derive the bb UltraHonk diff
+OLD-pin→v5-next from the C++ and check ch. 03 §2's breaking-change list for
+completeness; (b) verify every ch. 11 file/line claim against co-noir's Rust;
+(c) pin down the exact Noir tooling target version + ACIR serde changes for
+the dependency bump.
+
+### 13.1 Result (c) — Noir pin bump [COMPLETE]
+
+- **Target confirmed: `v1.0.0-beta.22`** (v5-next noir submodule =
+  `c57152f912…` = exactly the upstream release-tag commit; ap-next agrees).
+  Cargo change: 5 dep lines in root `Cargo.toml` (acir/acvm/brillig/
+  noirc-abi/noirc-artifacts), `1.0.0-beta.20`→`22` in both `version` and
+  `tag`. Fallback vendoring possible from
+  `aztec-packages-private/noir/noir-repo/{acvm-repo,tooling}/…`.
+- **PLAN GAP FOUND — ch. 11 §4 missed a breaking ACIR change:** the
+  **`MemOp` overhaul** — `MemOp<F>`→ non-generic `MemOp`,
+  `operation: Expression<F>` → `MemOpKind` enum (serde: bool renamed
+  `"read"`; false=Read), `index`/`value`: `Expression<F>` → `Witness`.
+  Affected co-noir sites (won't compile post-bump):
+  `co-builder/src/acir_format.rs` (~L336, L928–1011 —
+  `is_read_operation(&mem_op.operation)`, q_c/linear-term checks),
+  `co-acvm/src/solver/memory_solver.rs` (L49 generic, L56/L103
+  `op.operation.q_c`).
+- `is_infinite` removal confirmed, **and it's semantic**: EC add/MSM
+  infinity now uses the `(0,0)` sentinel — co-acvm's explicit
+  `is_infinity`/`res_infinite` computation must be reworked, not re-typed
+  (`blackbox_solver.rs` L287/300/303/315; `acir_format.rs` L271/289/795/798).
+- New opt-in serialization `Format::MsgpackTagged=4` (beta.22); default
+  MsgpackCompact=3 unchanged → stock nargo artifacts fine, but if any
+  toolchain sets `NOIR_SERIALIZATION_FORMAT=msgpack-tagged`, co-noir needs
+  the beta.22 acir crate to read byte 4. `BlackBoxFunc` enum unchanged.
+- beta.21 compiler changes (InsideOut loop unrolling default, poseidon2
+  stdlib strip-down, division-truncation fix, SSA passes) ⇒ **all test
+  vectors must be recompiled with beta.22 nargo** (and old committed
+  artifacts may not even deserialize under new types).
+
+### 13.2 Result (b) — co-noir claims (ch. 11) [COMPLETE]
+
+All 10 ch. 11 claims CONFIRMED in substance; corrections that change the
+work plan's file list:
+
+- **THIRD relation mirror missed by ch. 11**: the recursion verifier has a
+  complete relation set at
+  `co-builder/src/honk_verifier/verifier_relations/` (own `mod.rs` L53-61
+  NUM_SUBRELATIONS sum, L152-161 relation order macro, L184-193 alpha-slice
+  macro; `permutation_relation.rs:27` NUM_RELATIONS=2). Items 2.2 and 2.3
+  must touch it alongside the plain + MPC mirrors.
+- **Path fixes**: Shamir randomness accounting is
+  `co-ultrahonk/src/co_ultra_prover.rs:163-202` (not co_decider/…); it
+  counts via per-relation `CRAND_PAIRS_FACTOR` (perm currently 8,
+  `co_decider/relations/permutation_relation.rs:62`) — a subrelation bump
+  does NOT auto-adjust it; re-derive by hand iff the new L₀·z_perm
+  subrelation adds MPC mults. ROM/RAM sorted-list pinning target is
+  `ultra_builder.rs` `process_{rom,ram}_array_*` (L1933/1989/2100/2220) —
+  `types/rom_ram.rs` is the recursion-verifier LUT, different thing.
+- **SUBRELATION_PARTIAL_LENGTHS isn't a named const** — it's the
+  `Univariate<F,N>` accumulator field widths (perm: r0:6, r1:3) → the 2.2
+  change = add `r2: Univariate<F,3>` + wire through scale/batch/accumulate.
+- **Current counts**: NUM_SUBRELATIONS=28, NUM_ALPHAS=27 (perm bump →
+  29/28; every alpha slice `[3..]` onward shifts in all three mod.rs files).
+- **Already satisfied** (down-scope ch. 11): CONST_PROOF_SIZE_LOG_N=25;
+  proof-length constants already yield 410/458/115; NUM_ALL_ENTITIES=41;
+  recursion size assert already targets 402/450+pubs. **Not present yet**
+  (to add): TRACE_OFFSET, 5th SSIPA opening claim (currently exactly 4,
+  `shplemini_prover.rs:675-709`), static proof-length asserts.
+- Masking rows currently randomized at the trace END
+  (`polynomial.rs:237-246`, NUM_MASKED_ROWS=3) — pre-change layout
+  confirmed; `padding_indicator_array` present in plain verifier + a
+  dedicated recursion file `honk_verifier/padding_indicator_array.rs` (to
+  delete in 2.4), NOT in the MPC prover (comment only).
+- KATs: only `add3u64` + `poseidon` have committed bb *proof* KATs (× 2
+  hashers); 5 pin locations confirmed (compare.sh, compare_mpc.sh, 2×
+  compile.sh, Readme.md).
+
+### 13.3 Result (a) — bb diff completeness [COMPLETE; 1 critical miss found]
+
+Audited all 416 bb commits in `v5.0.0-nightly.20260324..v5.0.0-nightly.
+20260708`. All 5 documented consensus changes CONFIRMED (hashes, substance,
+key hunks). **One material miss (now ch. 03 §2 row 6): the EntityId/
+`get_all()` reorder** riding on `c075fc182e` — proof sumcheck-evaluation
+order AND VK precomputed-commitment order both change (counts don't).
+"VK serialization structure unchanged" is REFUTED; ch. 03 corrected.
+Corrections: PAIRING_POINTS_SIZE = 8 not 16 (unchanged). Ruled out as
+NOT Ultra-breaking after code reading: optimized-Poseidon2 `3827e14505`
+(Mega-only; FS hashing identical), Grumpkin Libra length (ECCVM-only),
+n1-apps transcript commit (Translator-only). Secondary: TS flavor-codegen
+is now the source of truth for entity/relation order
+(`scripts/flavor-codegen/src/flavors/*.ts`); SSIPA constants renamed;
+2 verifier-hardening commits (accept/reject only); 2 ZK-only low-risk
+commits flagged. Verified NEW constants: TRACE_OFFSET=4, lagrange_first
+row 4, content row 5, subrelations 29 / alphas 28, perm partial lengths
+{6,3,3}, SSIPA claims 5 (transmitted 4, commitments 3), non-ZK proof
+without pubs = 402 fields (matches co-noir's existing constant).
+Open item: agent's computed ZK length (421+masking commitment) vs
+co-noir's `..._ZK = 450` — settle empirically from target-bb KAT bytes
+during 2.1 (the KATs adjudicate, not the arithmetic).

@@ -7,6 +7,19 @@
 in the co-noir tree 2026-07-08. Definition of done and the test harness are in
 ch. 13; the repeatable procedure/automation is ch. 12.*
 
+> **Working set for this phase** (authoritative copy in PLAN.md Phase 2
+> header; re-verify pins each session): work branch `mc/update-co-noir` in
+> `~/co-snarks` (push disabled; local incremental commits); bb diff range
+> `v5.0.0-nightly.20260324..v5.0.0-nightly.20260708` in
+> `~/aztec-packages-private` (the NEW tag ≡ `origin/v5-next`'s bb tree);
+> Noir target `v1.0.0-beta.22`; oracles `~/.bb/bb` (old pin) and
+> `~/.bb-target/bb` (= bb 5.0.0-rc.2, UltraHonk-identical to v5-next).
+> Corrections from the 2026-07-08 code-verification passes are in ch. 14
+> §13.1–13.3 and take precedence over this chapter's file lists where they
+> differ (notably: MemOp ACIR overhaul missing below; third relation mirror
+> in `co-builder/src/honk_verifier/verifier_relations/`; Shamir accounting
+> path is `co-ultrahonk/src/co_ultra_prover.rs:163-202`).
+
 ## 0. Orientation: the "mirror chain"
 
 Every proof-affecting change propagates through co-noir in the same order.
@@ -26,6 +39,14 @@ Rule of thumb: **make `ultrahonk` (plain) match bb exactly first** — its KAT
 byte-equality test against a real bb proof is the tightest correctness oracle.
 Only once plain is green do you mirror into `co-ultrahonk` (whose MPC output
 must equal the plain output for the same witness).
+
+**Independence principle (Mike, 2026-07-08 — PLAN decision 6a):** "mirror"
+means mirror the *math and the byte behavior*, never the C++ code structure.
+Structure the Rust however best practice dictates, following Taceo's existing
+conventions. Independent implementations are a feature: they enable
+differential fuzzing of bb-vs-co-noir later (ch. 13 §6). The only mandatory
+coupling is at the KAT boundary — proof/VK bytes and mutual verifier
+acceptance.
 
 ## 1. Pre-flight (before any code change)
 
@@ -67,6 +88,27 @@ list is these four.)
   site. The Shamir **randomness accounting** (`co_ultra_prover.rs:159-201`)
   counts per-subrelation work → update it or Shamir proving miscounts Beaver
   pairs.
+
+### 2.3a Entity/get_all reorder (ADDED 2026-07-08 — rides the same bb commit as 2.3)
+- **bb**: `c075fc182e` also reordered the flavor entity layout
+  (`EntityId`/`get_all()`): NEW order = `sigma_1..4, id_1..4,
+  lagrange_first, lagrange_last, q_lookup, table_1..4, q_m, q_r, q_o, q_c,
+  q_l, q_4, q_arith, q_delta_range, q_elliptic, q_memory, q_nnf,
+  q_poseidon2_external, q_poseidon2_internal`, then witnesses, then shifts
+  (`flavor/generated/ultra_flavor_generated.hpp:34-77`; source of truth =
+  `scripts/flavor-codegen/src/flavors/*.ts`). Proof's 41
+  `Sumcheck:evaluations` AND the VK's 28 precomputed commitments serialize
+  in this new order. Counts unchanged.
+- **co-noir**: the entity iteration order in
+  `co-noir-common/src/…/entities.rs` (precomputed/witness/shifted
+  get_all-equivalents), everywhere the sumcheck evaluations are
+  sent/received in transcript order (plain + co_decider + recursion
+  verifier), and VK to_buffer/from_buffer commitment order in
+  `keys/verification_key.rs`. Follow Taceo's structure — what must match is
+  the *serialized order*, not the code shape (PLAN decision 6a).
+- **Don't forget**: VK KATs and the in-circuit recursion verifier's
+  evaluation indexing both depend on this order; a mistake here looks like
+  "everything verifies except vs bb" — only bb cross-checks catch it.
 
 ### 2.3 Relation tuple reorder
 - **bb**: Ultra relation order became `Permutation, LogDerivLookup,

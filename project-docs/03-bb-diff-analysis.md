@@ -62,6 +62,7 @@ Four consensus-level deltas + a set of builder/gate changes:
 | `7dbe0b25c8` | 2026-04-21 | **VK + verifier math** | Masking/disabled rows moved from the *end* to the *top* of the trace (rows 0–3; content starts at row 5; `lagrange_first` at row 4) → **every circuit's VK changes**, non-ZK included. ZK reworked: masking randomness in witness rows 1–3, new row-disabling factor, `padding_indicator_array` removed from verifiers. |
 | `58bf73a289` | 2026-05-14 | **Verifier math (ZK)** | SmallSubgroupIPA argument change: adds a 5th (untransmitted) opening claim `A(1)=0` to the Shplonk batch → Shplonk nu-power assignment shifts. |
 | `c075fc182e` | 2026-05-28 | **Relation order** | Ultra relation tuple reordered (Permutation, LogDerivLookup, Arithmetic first) → alpha-to-subrelation assignment changes. |
+| `c075fc182e` (same commit; + Solidity aligners `03c48e2e44`, `12ee4f962f`) | 2026-05-28 | **Proof + VK byte ORDER** | **(Found in 2026-07-08 re-verification — previously missed.)** Flavor `EntityId`/`get_all()` layout reordered: NEW order puts `sigma_1..4, id_1..4, lagrange_first, lagrange_last, q_lookup, table_1..4` BEFORE the remaining selectors (`q_m, q_r, q_o, q_c, q_l, q_4, q_arith, …`), then witnesses, then shifts (`ultra_flavor_generated.hpp:34-77`). Consequences: the proof's 41 `Sumcheck:evaluations` are transmitted in the new order, and the VK's 28 precomputed commitments serialize in the new order. Entity/commitment COUNTS unchanged. |
 
 Builder/DSL changes affecting gates/VKs of affected programs (all A):
 ROM/RAM sorted-list index pinning (`1f7ed2ea79`); EC add/MSM opcode changes
@@ -73,10 +74,35 @@ proof size (`669e92b896`). Authoritative per-opcode gate counts:
 `dsl/acir_format/gate_count_constants.hpp`.
 
 Unchanged across the whole range (both A and B): public-input layout,
-`PAIRING_POINTS_SIZE = 16`, VK serialization structure, Poseidon2 *hash
-primitive* (the transcript hasher), KZG/Shplemini wire shape, the 4-wire/14-
-selector Ultra arithmetization, and the `bb prove --scheme ultra_honk` pipeline
-routing.
+`PAIRING_POINTS_SIZE = 8` (value corrected 2026-07-08 — was wrongly recorded
+as 16; bb `static_assert`s 8 at both tags), Poseidon2 *hash primitive* (the
+transcript hasher; the "optimized Poseidon2" commit `3827e14505` is
+Mega-only — Ultra keeps the standard gate and identical FS hashing),
+KZG/Shplemini wire shape, the 4-wire/14-selector Ultra arithmetization,
+entity/commitment COUNTS (41 non-ZK / 42 ZK entities; 28 VK commitments +
+3 metadata), BN254 `LIBRA_UNIVARIATES_LENGTH = 9`, and the
+`bb prove --scheme ultra_honk` pipeline routing.
+**REFUTED 2026-07-08:** "VK serialization structure unchanged" — the
+structure (count/shape) held, but the commitment ORDER changed with the
+EntityId reorder above.
+
+Secondary findings from the 2026-07-08 re-verification (agent-audited, all
+416 bb commits in range triaged):
+- **TS flavor-codegen refactor** `c0366aaa5c`: flavors now generated from
+  TypeScript specs (`scripts/flavor-codegen/src/flavors/*.ts` →
+  `flavor/generated/*_flavor_generated.hpp`) — the .ts files are now the
+  source of truth for entity/relation order. Constants relocated/renamed:
+  `NUM_SMALL_IPA_EVALUATIONS`→`NUM_SMALL_IPA_TRANSCRIPT_EVALS` (4),
+  `NUM_LIBRA_COMMITMENTS`→`NUM_SMALL_IPA_COMMITMENTS` (3), new
+  `NUM_SMALL_IPA_OPENING_CLAIMS` (5), all in `small_subgroup_ipa_utils.hpp`.
+- **Verifier-acceptance hardening** (accept/reject only, no byte change):
+  `1391c49546` rejects VKs with log_circuit_size=0; `5f09c55a57`
+  BB_ASSERT→throw_or_abort in IPA/KZG/Shplemini error paths. Mirror these
+  as clean `Err` returns in co-noir (nice fit with the Phase 0 finding that
+  co-noir panics on malformed input).
+- **ZK-only, flag for port**: `1f9d87ba3a` gemini masking poly
+  virtual→dyadic size (likely allocation-only; confirm ZK bytes unchanged);
+  `15a0b9a393` solidity ZK verifier optimization (verify gas-only).
 
 ## 3. Explicitly out of scope (confirmed separate from UltraHonk)
 
