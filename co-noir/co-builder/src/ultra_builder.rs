@@ -4993,3 +4993,93 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         Ok(res)
     }
 }
+
+#[cfg(test)]
+mod rom_ram_pinning_tests {
+    //! Security-regression tests for project-docs ch. 13 §3a#9 (ROM/RAM
+    //! field-wrap attack, bb PR #29). The index-delta sub-relation
+    //! `Δ² + Δ = 0` accepts `Δ ∈ {0, -1}`, so a sorted memory-index chain that
+    //! starts at the field value `p - 1` and wraps to `0` satisfies the delta
+    //! check — letting a malicious prover forge a read/write at the phantom
+    //! index `p - 1`. The fix (item 2.6) pins the FIRST sorted index witness to
+    //! the copy-constrained constant `zero_idx` instead of a free
+    //! `add_variable(0)`. These tests assert that structural pin, mirroring bb's
+    //! `EXPECT_EQ(sorted_0_idx_w, zero_idx())` in `rom_ram.test.cpp`. If the pin
+    //! is ever reverted the first sorted gate would carry a free witness and
+    //! these tests fail.
+    use super::*;
+    use ark_ff::{One, Zero};
+    use co_noir_common::types::Bn254G1;
+
+    type Fr = ark_bn254::Fr;
+
+    /// The first sorted ROM consistency gate must use `zero_idx` as its index
+    /// wire (start-of-chain pin).
+    #[test]
+    fn rom_first_sorted_index_pinned_to_zero() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut b = UltraCircuitBuilder::<Bn254G1>::new(0);
+
+        // ROM of size 3 holding [10, 20, 30].
+        let rom = b.create_rom_array(3);
+        for (i, v) in [10u64, 20, 30].into_iter().enumerate() {
+            let w = b.add_variable(Fr::from(v));
+            b.set_rom_element(rom, i, w);
+        }
+        // A read via a variable index (the attack would later mutate it).
+        let idx = b.add_variable(Fr::from(0u64));
+        let _ = b.read_rom_array(rom, idx, &mut driver).unwrap();
+
+        b.process_rom_arrays(&mut driver).unwrap();
+
+        // RomConsistencyCheck selectors: q_1 = q_2 = 1, q_3 = 0, q_m = 0.
+        let q1 = b.blocks.memory.q_1().clone();
+        let q2 = b.blocks.memory.q_2().clone();
+        let q3 = b.blocks.memory.q_3().clone();
+        let qm = b.blocks.memory.q_m().clone();
+        let wl = b.blocks.memory.w_l().clone();
+
+        let sorted_0 = (0..q1.len())
+            .find(|&i| q1[i].is_one() && q2[i].is_one() && q3[i].is_zero() && qm[i].is_zero());
+        let sorted_0 = sorted_0.expect("no sorted ROM consistency gate found");
+        assert_eq!(
+            wl[sorted_0], b.zero_idx,
+            "first sorted ROM index must be pinned to zero_idx (field-wrap guard)"
+        );
+    }
+
+    /// The first sorted RAM consistency gate must use `zero_idx` as its index
+    /// wire (start-of-chain pin).
+    #[test]
+    fn ram_first_sorted_index_pinned_to_zero() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut b = UltraCircuitBuilder::<Bn254G1>::new(0);
+
+        // RAM of size 3 initialised to [10, 20, 30], then one write.
+        let ram = b.create_ram_array(3, &mut driver);
+        for (i, v) in [10u64, 20, 30].into_iter().enumerate() {
+            let w = b.add_variable(Fr::from(v));
+            b.init_ram_element(&mut driver, ram, i, w).unwrap();
+        }
+        let idx = b.add_variable(Fr::from(0u64));
+        let val = b.add_variable(Fr::from(99u64));
+        b.write_ram_array(&mut driver, ram, idx, val).unwrap();
+
+        b.process_ram_arrays(&mut driver).unwrap();
+
+        // RamConsistencyCheck selectors: q_3 = 1, q_1 = q_2 = 0, q_m = 0.
+        let q1 = b.blocks.memory.q_1().clone();
+        let q2 = b.blocks.memory.q_2().clone();
+        let q3 = b.blocks.memory.q_3().clone();
+        let qm = b.blocks.memory.q_m().clone();
+        let wl = b.blocks.memory.w_l().clone();
+
+        let sorted_0 = (0..q3.len())
+            .find(|&i| q3[i].is_one() && q1[i].is_zero() && q2[i].is_zero() && qm[i].is_zero());
+        let sorted_0 = sorted_0.expect("no sorted RAM consistency gate found");
+        assert_eq!(
+            wl[sorted_0], b.zero_idx,
+            "first sorted RAM index must be pinned to zero_idx (field-wrap guard)"
+        );
+    }
+}
