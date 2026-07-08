@@ -14,6 +14,15 @@ pub trait HonkCurve<Des: PrimeField>: CurveGroup<BaseField: PrimeField> {
     const LIBRA_UNIVARIATES_LENGTH: usize;
 
     fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine;
+    /// Fallible variant of [`Self::g1_affine_from_xy`] for the untrusted
+    /// deserialization boundary (proof / VK parsing): reconstruct the affine
+    /// point without the on-curve `assert!` in ark-ec's `Affine::new`, then
+    /// reject a point that is not on the curve (or not in the prime-order
+    /// subgroup) with a clean error instead of panicking.
+    fn g1_affine_from_xy_checked(
+        x: Self::BaseField,
+        y: Self::BaseField,
+    ) -> crate::honk_proof::HonkProofResult<Self::Affine>;
     fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField);
 
     fn convert_scalarfield_into(src: &Self::ScalarField) -> Vec<Des>;
@@ -52,6 +61,18 @@ impl HonkCurve<ark_bn254::Fr> for ark_ec::short_weierstrass::Projective<ark_bn25
 
     fn g1_affine_from_xy(x: ark_bn254::Fq, y: ark_bn254::Fq) -> ark_bn254::G1Affine {
         ark_bn254::G1Affine::new(x, y)
+    }
+
+    fn g1_affine_from_xy_checked(
+        x: ark_bn254::Fq,
+        y: ark_bn254::Fq,
+    ) -> crate::honk_proof::HonkProofResult<ark_bn254::G1Affine> {
+        let p = ark_bn254::G1Affine::new_unchecked(x, y);
+        if p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve() {
+            Ok(p)
+        } else {
+            Err(crate::honk_proof::HonkProofError::PointNotOnCurve)
+        }
     }
 
     fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField) {
@@ -146,6 +167,18 @@ impl HonkCurve<ark_bn254::Fr> for short_weierstrass::Projective<GrumpkinConfig> 
 
     fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine {
         ark_grumpkin::Affine::new(x, y)
+    }
+
+    fn g1_affine_from_xy_checked(
+        x: Self::BaseField,
+        y: Self::BaseField,
+    ) -> crate::honk_proof::HonkProofResult<Self::Affine> {
+        let p = ark_grumpkin::Affine::new_unchecked(x, y);
+        if p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve() {
+            Ok(p)
+        } else {
+            Err(crate::honk_proof::HonkProofError::PointNotOnCurve)
+        }
     }
 
     fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField) {

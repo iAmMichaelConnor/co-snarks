@@ -209,7 +209,8 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             let y1 = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             let x = C::convert_basefield_back(&[x0, x1]);
             let y = C::convert_basefield_back(&[y0, y1]);
-            *el = C::g1_affine_from_xy(x, y);
+            // Untrusted input: reject off-curve VK commitments cleanly.
+            *el = C::g1_affine_from_xy_checked(x, y)?;
         }
 
         debug_assert!(offset == Self::SER_FULL_SIZE);
@@ -245,7 +246,8 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             offset += 32;
             let y = C::BaseField::from_be_bytes_mod_order(&buf[offset..offset + 32]);
             offset += 32;
-            *el = C::g1_affine_from_xy(x, y);
+            // Untrusted input: reject off-curve VK commitments cleanly.
+            *el = C::g1_affine_from_xy_checked(x, y)?;
         }
 
         debug_assert!(offset == Self::SER_FULL_SIZE_KECCAK);
