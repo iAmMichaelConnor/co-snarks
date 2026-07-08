@@ -1,4 +1,4 @@
-//! Security-regression tests (project-docs ch. 13 §3a).
+//! Security-regression tests.
 //!
 //! Each test pins a hardening fix at the verifier / deserialization boundary.
 //! These are NEGATIVE tests: they assert the verifier REJECTS (cleanly, without
@@ -89,7 +89,7 @@ fn baseline_valid_proof_accepts() {
     assert!(ok, "untampered proof must verify");
 }
 
-/// §3a#10 (trailing data). A proof carrying extra field elements past the last
+/// Trailing data. A proof carrying extra field elements past the last
 /// one the verifier reads must be REJECTED. Before the `assert_fully_consumed`
 /// check, co-noir accepted such a proof (bb rejects it) — Phase 0 finding 1.
 #[test]
@@ -111,7 +111,7 @@ fn trailing_proof_data_rejected() {
     assert!(res.is_err(), "trailing data should be a hard parse error");
 }
 
-/// §3a#10 (off-curve point, proof side). Corrupting a coordinate of the KZG `W`
+/// Off-curve point, proof side. Corrupting a coordinate of the KZG `W`
 /// commitment (the final point in the proof) must yield a clean rejection, not
 /// the ark-ec `is_on_curve` panic — Phase 0 finding 2.
 #[test]
@@ -134,7 +134,7 @@ fn offcurve_proof_point_rejected() {
     );
 }
 
-/// §3a#10 (off-curve point, VK side). A verification key whose commitment bytes
+/// Off-curve point, VK side. A verification key whose commitment bytes
 /// decode to an off-curve point must be rejected by `from_buffer` with a clean
 /// error, not a panic — Phase 0 finding 2.
 #[test]
@@ -172,14 +172,14 @@ fn baseline_zk_proof_accepts() {
 /// decider/SSIPA region is actually consumed and constrained by the verifier,
 /// not silently ignored.
 ///
-/// NOTE: this is deliberately NOT the full SSIPA A(1)=0 forgery of ch.13
-/// §3a#8. That test requires constructing the homogeneous-kernel perturbation
+/// NOTE: this is deliberately NOT the full SmallSubgroupIPA A(1)=0 forgery
+/// test. That one requires constructing the homogeneous-kernel perturbation
 /// (delta_A(1)=delta, delta_A(g^j) = -delta/(g-1), delta_s = c) that satisfies
 /// the standalone SSIPA identity yet forges the Libra inner product, and
 /// asserting rejection specifically through the Shplemini-batched path (the
-/// standalone consistency check accepts it). That is specified as a deferred
-/// item in project-docs ch.13 §3a and the improvement backlog; a naive version
-/// would give false confidence, so it is intentionally not faked here.
+/// standalone consistency check accepts it, so a test that bypasses Shplemini
+/// would pass while the hole remained). That is a known follow-up; a naive
+/// version would give false confidence, so it is intentionally not faked here.
 #[test]
 fn zk_proof_decider_field_tamper_rejected() {
     let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);

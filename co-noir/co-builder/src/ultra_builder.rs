@@ -4996,12 +4996,12 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
 #[cfg(test)]
 mod rom_ram_pinning_tests {
-    //! Security-regression tests for project-docs ch. 13 §3a#9 (ROM/RAM
-    //! field-wrap attack, bb PR #29). The index-delta sub-relation
+    //! Security-regression tests for the ROM/RAM field-wrap attack (bb PR #29).
+    //! The index-delta sub-relation
     //! `Δ² + Δ = 0` accepts `Δ ∈ {0, -1}`, so a sorted memory-index chain that
     //! starts at the field value `p - 1` and wraps to `0` satisfies the delta
     //! check — letting a malicious prover forge a read/write at the phantom
-    //! index `p - 1`. The fix (item 2.6) pins the FIRST sorted index witness to
+    //! index `p - 1`. The fix pins the FIRST sorted index witness to
     //! the copy-constrained constant `zero_idx` instead of a free
     //! `add_variable(0)`. These tests assert that structural pin, mirroring bb's
     //! `EXPECT_EQ(sorted_0_idx_w, zero_idx())` in `rom_ram.test.cpp`. If the pin
@@ -5081,5 +5081,56 @@ mod rom_ram_pinning_tests {
             wl[sorted_0], b.zero_idx,
             "first sorted RAM index must be pinned to zero_idx (field-wrap guard)"
         );
+    }
+}
+
+#[cfg(test)]
+mod plookup_table_regression_tests {
+    //! Regression tests for two proof-breaking plookup-table fixes that were
+    //! easy to miss (nothing exercised them): lookup table indices must start
+    //! at 1, and the SHA-256 CH-input L2 tables must be 10-bit. They guard
+    //! against a silent revert by a future refactor.
+    use super::*;
+    use crate::types::plookup::{BasicTableId, PlookupBasicTable};
+    use co_noir_common::types::Bn254G1;
+
+    type Fr = ark_bn254::Fr;
+    type Pbt = PlookupBasicTable<Bn254G1, PlainAcvmSolver<Fr>>;
+
+    /// Lookup basic-table indices must start at 1, not 0 (bb `0a7d0af035`): the
+    /// LogDerivLookup batched term must always contain at least β³, which fails
+    /// if a table can have index 0. `get_table` on a fresh builder must hand the
+    /// first-created table index 1, the second index 2.
+    #[test]
+    fn lookup_table_index_starts_at_one() {
+        let mut b = UltraCircuitBuilder::<Bn254G1>::new(0);
+        let first = b.get_table(BasicTableId::Sha256Base16).table_index;
+        assert_eq!(first, 1, "first lookup table_index must be 1, not 0");
+        // A different table id creates a second table -> index 2.
+        let second = b.get_table(BasicTableId::Sha256Base28Rotate3).table_index;
+        assert_eq!(second, 2, "second distinct lookup table_index must be 2");
+        // Re-requesting the first id returns the existing table (index unchanged).
+        let first_again = b.get_table(BasicTableId::Sha256Base16).table_index;
+        assert_eq!(first_again, 1, "re-request must return the cached table");
+    }
+
+    /// The SHA-256 CH-input L2 basic tables must be 10-bit, not 11-bit (bb
+    /// `bbbde54094`): an oversized backing table admits keys outside the
+    /// declared 10-bit slice, letting a prover witness an out-of-range slice.
+    /// A 10-bit sparse table has 2^10 = 1024 rows.
+    #[test]
+    fn sha256_ch_l2_tables_are_10_bit() {
+        for id in [
+            BasicTableId::Sha256Base16,
+            BasicTableId::Sha256Base28Rotate3,
+        ] {
+            let t = Pbt::create_basic_table(id.clone(), 0);
+            assert_eq!(
+                t.column_1.len(),
+                1 << 10,
+                "SHA table {id:?} must be 10-bit (1024 rows), not 11-bit (2048) \
+                 — oversized table = out-of-range-slice soundness hole"
+            );
+        }
     }
 }
