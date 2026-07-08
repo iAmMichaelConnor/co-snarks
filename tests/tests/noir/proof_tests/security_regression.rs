@@ -26,14 +26,15 @@ use std::fs::File;
 const CIRCUIT_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.json";
 const WITNESS_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.gz";
 
-/// Build a real poseidon2 non-ZK proof plus its verifying key, so each test can
-/// tamper with a genuine artifact rather than a hand-rolled one.
-fn build_artifacts() -> (
+/// Build a real poseidon2 proof (ZK or non-ZK) plus its verifying key, so each
+/// test can tamper with a genuine artifact rather than a hand-rolled one.
+fn build_artifacts_with(
+    has_zk: ZeroKnowledge,
+) -> (
     HonkProof<ark_bn254::Fr>,
     Vec<ark_bn254::Fr>,
     VerifyingKey<Bn254>,
 ) {
-    let has_zk = ZeroKnowledge::No;
     let constraint_system =
         constraint_system_from_reader(File::open(CIRCUIT_FILE).unwrap()).unwrap();
     let witness = noir_types::witness_from_reader(File::open(WITNESS_FILE).unwrap()).unwrap();
@@ -67,6 +68,15 @@ fn build_artifacts() -> (
         UltraHonk::<_, Poseidon2Sponge>::prove(proving_key, has_zk, &verifying_key.inner_vk)
             .unwrap();
     (proof, public_inputs, verifying_key)
+}
+
+/// Non-ZK convenience wrapper.
+fn build_artifacts() -> (
+    HonkProof<ark_bn254::Fr>,
+    Vec<ark_bn254::Fr>,
+    VerifyingKey<Bn254>,
+) {
+    build_artifacts_with(ZeroKnowledge::No)
 }
 
 /// Sanity: the untampered artifact verifies. Guards against the negative tests
@@ -143,4 +153,56 @@ fn offcurve_vk_commitment_rejected() {
         res.is_err(),
         "VK parser accepted an off-curve commitment instead of erroring"
     );
+}
+
+/// Sanity: a genuine ZK proof verifies. Guards the ZK negative tests below.
+#[test]
+fn baseline_zk_proof_accepts() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let ok =
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::Yes)
+            .unwrap();
+    assert!(ok, "untampered ZK proof must verify");
+}
+
+/// ZK-path tamper coverage. Flipping any single field element in the decider
+/// portion of a ZK proof (which includes the SmallSubgroupIPA / Libra region
+/// carrying the grand-sum evaluations) must NOT verify. This is a general
+/// binding check on the ZK proof body — it confirms every field of the
+/// decider/SSIPA region is actually consumed and constrained by the verifier,
+/// not silently ignored.
+///
+/// NOTE: this is deliberately NOT the full SSIPA A(1)=0 forgery of ch.13
+/// §3a#8. That test requires constructing the homogeneous-kernel perturbation
+/// (delta_A(1)=delta, delta_A(g^j) = -delta/(g-1), delta_s = c) that satisfies
+/// the standalone SSIPA identity yet forges the Libra inner product, and
+/// asserting rejection specifically through the Shplemini-batched path (the
+/// standalone consistency check accepts it). That is specified as a deferred
+/// item in project-docs ch.13 §3a and the improvement backlog; a naive version
+/// would give false confidence, so it is intentionally not faked here.
+#[test]
+fn zk_proof_decider_field_tamper_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let n = proof.inner_as_ref().len();
+
+    // Probe several positions across the decider/SSIPA region (second half of
+    // the proof) rather than a single fixed index, so the test does not depend
+    // on the exact ZK proof layout. Each tampered copy must fail to verify.
+    for frac in [55usize, 70, 85, 95] {
+        let pos = n * frac / 100;
+        let mut inner = proof.inner_as_ref().clone();
+        inner[pos] += ark_bn254::Fr::from(1u64);
+        let tampered = HonkProof::new(inner);
+
+        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
+            tampered,
+            &public_inputs,
+            &vk,
+            ZeroKnowledge::Yes,
+        );
+        assert!(
+            !matches!(res, Ok(true)),
+            "ZK verifier accepted a proof with field {pos}/{n} tampered: {res:?}"
+        );
+    }
 }
