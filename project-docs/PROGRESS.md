@@ -269,3 +269,62 @@ reference); then 2.4+2.6 (trace offset + ZK/SSIPA, entangled); then 2.3
 builder/DSL gates; green-up per ch. 11 §6 with plain poseidon KAT first.
 Shamir CRAND_PAIRS_FACTOR re-derivation needed if the new subrelation
 adds MPC mults (co_ultra_prover.rs:163-202).
+
+## Session 2 (continued) — 2026-07-08 evening — HANDOFF (token pause; step ④ agent in flight)
+
+### Committed state (branch mc/update-co-noir, all LOCAL, never pushed)
+```
+5bc7b050 docs: bb-spec-audit soundness lens → ch.13/11/PLAN
+9244b8d1 docs: mine WHY behind UH changes + mandatory security-regression tests
+5bc7b05..e70252e1 e70252e1 test: regenerate vectors (beta.22) + bb KATs at target pin (step ②)
+4e7abb95 feat: Noir beta.22 bump / ark 0.6 / MemOp / (0,0) sentinel (step ①)
+1a13fcdc feat: perm 3rd subrelation + relation/entity reorder (step ③)
+a1b7fa15 docs: Phase 2 pre-analysis
+74ab4cc3 docs: Phase 0 record + chapters 01–14
+```
+Phase 0 DONE; Phase 2 steps ①②③ DONE and committed. Green-up (2.7) not reached.
+
+### ⚠ UNCOMMITTED work in the tree = step ④ (items 2.4 trace-offset + 2.6 ZK/SSIPA)
+A background coding agent (Fable) is implementing 2.4+2.6. At pause it had:
+done the plain prover (SSIPA 5th claim A(1)=0 untransmitted; disabled-rows
+moved to trace top; honest virtual-round univariates replacing zero-padding),
+and was mid-way through the **co-ultrahonk MPC prover**; verifiers + the gate
+battery (incl. the KAT milestone) NOT yet done. `git status` shows ~22 modified
+source files under co-noir/{ultrahonk,co-ultrahonk,co-builder,co-noir-common}
+plus 4 modified `test_vectors/noir/*/kat/*` files.
+- Agent transcript (its full actions + final report if it finished):
+  `/tmp/claude-1011/-mnt-user-data-mike-co-snarks/08047b1f-880c-4cbd-984a-5ca7935f41da/tasks/a8dec8195a8170913.output`
+  (JSONL — read the LAST assistant message for the report; do NOT cat whole).
+
+### RECOVERY CHECKLIST for the next session (do in order)
+1. `git -C ~/co-snarks status -s` and `git branch --show-current` (expect
+   mc/update-co-noir). `git log --oneline -1` should be 5bc7b050.
+2. Read the agent transcript's final message. Three cases:
+   a. **Agent finished cleanly** (report present, gates run): review the diff
+      (`git diff`), independently re-run the step-④ gate (cargo check
+      --workspace; fmt+clippy touched crates; plaindriver poseidon self-verify
+      non-ZK+ZK; **the KAT milestone** `cargo test -p tests --release --test
+      noir -- plain`; ZK bb cross-verify with ~/.bb-target/bb; REP3 demo), then
+      commit as step ④ + append ch. 14 §17 result.
+   b. **Agent killed mid-flight** (no report; tree likely does NOT compile —
+      MPC prover / verifiers half-ported): either finish the remaining files
+      by hand using ch. 11 §2.4/§2.5/§2.6 + bb NEW-tag source, OR
+      `git checkout -- <the 22 co-noir source files>` to discard and re-run the
+      step-④ agent fresh (prompt is in this session's history / ch. 14 §17).
+      Do NOT commit a non-compiling tree.
+   c. **Still running**: wait for its notification; then case (a).
+3. **KAT files caution**: `test_vectors/noir/*/kat/*_proof_with_*` show as
+   modified. They MUST remain the target-bb bytes committed in e70252e1 (the
+   oracle), NOT be overwritten by co-noir's own output. Before committing step
+   ④, verify: `git diff e70252e1 -- test_vectors/noir/*/kat` should be empty,
+   OR the change must be a deliberate, bb-regenerated update — confirm with
+   ~/.bb-target/bb, never accept co-noir-generated KATs.
+4. Reference bb binaries: OLD pin `~/.bb/bb` (5.0.0-nightly.20260324); TARGET
+   `~/.bb-target/bb` (5.0.0-rc.2 ≡ v5-next UH). nargo = beta.22.
+5. Env: rustc 1.90 override in ~/co-snarks; RAYON cap = 80% of cores
+   (nproc*8/30 per party); watcher discipline memory applies.
+
+### After step ④: remaining Phase 2 = item 2.3 (builder/DSL gates: ROM/RAM
+### index-pinning security fix ch.13 §3a#9, EC gate-count parity TODO from
+### step ①), then 2.7 green-up (full suite + compare_mpc.sh both oracles +
+### the 3 mandatory security-regression tests, ch. 13 §3a).
