@@ -6,7 +6,9 @@ use crate::types::field_ct::BoolCT;
 use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
-use co_noir_common::constants::{NUM_SELECTORS, NUM_WIRES, PAIRING_POINT_ACCUMULATOR_SIZE};
+use co_noir_common::constants::{
+    NUM_SELECTORS, NUM_WIRES, NUM_ZERO_ROWS, PAIRING_POINT_ACCUMULATOR_SIZE, TRACE_OFFSET,
+};
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::polynomials::entities::ProverWitnessEntities;
 use num_bigint::BigUint;
@@ -245,11 +247,27 @@ impl<F: PrimeField> Default for UltraTraceBlocks<UltraTraceBlock<F>> {
 
 impl<F: PrimeField> UltraTraceBlocks<UltraTraceBlock<F>> {
     pub fn compute_offsets(&mut self) {
-        let mut offset = 1; // start at 1 because the 0th row is unused for selectors for Honk
+        // The trace content starts after the disabled/masking head rows (TRACE_OFFSET) and the zero
+        // row that enables shifts.
+        let mut offset = (TRACE_OFFSET + NUM_ZERO_ROWS) as u32;
         for block in self.get_mut() {
             block.trace_offset = offset;
             offset += block.len() as u32;
         }
+    }
+
+    /// The trace offset of the lookup block, i.e. the row at which the lookup table data is placed.
+    /// Computed from the block sizes alone so that it is correct even before `compute_offsets` has
+    /// been called (must stay consistent with the block order in `compute_offsets`).
+    pub fn get_lookup_block_offset(&self) -> usize {
+        let mut offset = TRACE_OFFSET + NUM_ZERO_ROWS;
+        for block in self.get() {
+            if std::ptr::eq(block, &self.lookup) {
+                break;
+            }
+            offset += block.len();
+        }
+        offset
     }
 
     pub(crate) fn get_total_content_size(&self) -> usize {

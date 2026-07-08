@@ -11,7 +11,19 @@ use crate::{
 pub const CONST_PROOF_SIZE_LOG_N: usize = 25;
 // For ZK Flavors: the number of the commitments required by Libra and SmallSubgroupIPA.
 pub const NUM_LIBRA_COMMITMENTS: usize = 3;
+// Number of SmallSubgroupIPA evaluations transmitted on the wire: G(r), A(g*r), A(r), Q(r).
 pub const NUM_SMALL_IPA_EVALUATIONS: usize = 4;
+// Total number of SmallSubgroupIPA opening claims batched into Shplonk. On top of the 4 transmitted
+// evaluations, this includes the untransmitted boundary opening A(1) = 0 (in transcript order the
+// claims are G(r), A(g*r), A(r), A(1), Q(r)).
+pub const NUM_SMALL_IPA_OPENING_CLAIMS: usize = NUM_SMALL_IPA_EVALUATIONS + 1;
+
+// The number of rows reserved at the top of the trace for row-disabling / ZK masking. Row 0 is the
+// zero row (for shifts), rows {1, 2, 3} hold the ZK masking values (zeros for non-ZK flavors),
+// lagrange_first sits at row TRACE_OFFSET, and the trace content starts at row
+// TRACE_OFFSET + NUM_ZERO_ROWS.
+pub const TRACE_OFFSET: usize =
+    crate::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK as usize;
 
 pub const SHIFTED_WITNESS_ENTITIES_SIZE: usize = 5;
 

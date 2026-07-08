@@ -10,16 +10,15 @@ use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{AddAssign, Index, IndexMut, MulAssign, SubAssign};
 
-// The number of last rows in ProverPolynomials that are randomized to mask
-// 1) witness commitments,
-// 2) multilinear evaluations of witness polynomials in Sumcheck
-// 3*) multilinear evaluations of shifts of witness polynomials in Sumcheck OR univariate evaluations required in ECCVM
+// The number of rows randomized to mask witness polynomials, hiding (1) witness commitments, (2) multilinear
+// evaluations of witness polynomials in Sumcheck, (3) evaluations of shifted witness polynomials in Sumcheck.
+// The masking values are placed at rows NUM_ZERO_ROWS .. TRACE_OFFSET + NUM_ZERO_ROWS - 1 = {1, 2, 3} of the trace
+// (the first NUM_ZERO_ROWS rows are zeroed out to support shifts).
 pub const NUM_MASKED_ROWS: u32 = 3;
 
-// To account for the masked entries of witness polynomials in ZK-Sumcheck, we are disabling all relations in the last
-// `NUM_MASKED_ROWS + 1` rows, where `+1` is needed for the shifts. Namely, any relation involving a shift of a masked
-// polynomial w_shift, can't be satisfied on the row `N - (NUM_MASKED_ROWS + 1)`, as `w_shift.at(N - (NUM_MASKED_ROWS +
-// 1))` is equal to the random value `w.at(N - NUM_MASKED_ROWS)`.
+// The first NUM_MASKED_ROWS + 1 rows are disabled in Sumcheck (= TRACE_OFFSET = NUM_DISABLED_ROWS_IN_SUMCHECK). The
+// +1 accounts for shifts: the relation at row TRACE_OFFSET involves w_shift(TRACE_OFFSET) = w(TRACE_OFFSET + 1),
+// but the row-disabling factor vanishes there, so the first row where relations are active is TRACE_OFFSET.
 pub const NUM_DISABLED_ROWS_IN_SUMCHECK: u32 = NUM_MASKED_ROWS + 1;
 pub const NUM_TRANSLATION_EVALUATIONS: u32 = 5;
 #[derive(Clone, Debug, Default)]
@@ -230,17 +229,17 @@ impl<F: PrimeField> Polynomial<F> {
         }
     }
     /**
-     * @brief Add random values to the coefficients of a polynomial. In practice, this is used for ensuring the
-     * commitment and evaluation of a polynomial don't leak information about the coefficients in the context of zero
-     * knowledge.
+     * @brief Write random ZK masking values at positions {1, 2, 3} (the disabled head region after the zero row).
+     * In practice, this is used for ensuring the commitment and evaluation of a polynomial don't leak information
+     * about the coefficients in the context of zero knowledge.
      */
     pub fn mask<R: Rng + CryptoRng>(&mut self, rng: &mut R) {
-        let virtual_size = self.coefficients.len();
+        use crate::constants::NUM_ZERO_ROWS;
         assert!(
-            virtual_size >= NUM_MASKED_ROWS as usize,
+            self.coefficients.len() >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
             "Insufficient space for masking"
         );
-        for i in (virtual_size - NUM_MASKED_ROWS as usize..virtual_size).rev() {
+        for i in NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize {
             self.coefficients[i] = F::rand(rng);
         }
     }
@@ -275,8 +274,11 @@ impl<F: PrimeField> Polynomial<F> {
         let n = evaluation_points.len();
         let dim = Utils::get_msb64(self.coefficients.len() as u64 - 1) as usize + 1; // Round up to next power of 2
 
-        // To simplify handling of edge cases, we assume that the index space is always a power of 2
-        assert_eq!(self.coefficients.len(), 1 << n);
+        // To simplify handling of edge cases, we assume that the index space is always a power of 2.
+        // The polynomial is treated as multilinear in `n >= dim` variables, extended by zero beyond
+        // its actual size (the evaluation is multiplied by (1 - u_k) for k = dim, ..., n - 1).
+        assert_eq!(self.coefficients.len(), 1 << dim);
+        assert!(n >= dim);
 
         // We first fold over dim rounds l = 0,...,dim-1.
         // in round l, n_l is the size of the buffer containing the Polynomial partially evaluated
@@ -475,39 +477,33 @@ impl<F: PrimeField> Default for RowDisablingPolynomial<F> {
     }
 }
 impl<F: PrimeField> RowDisablingPolynomial<F> {
+    /**
+     * @brief Compute the evaluations at 0 and 1 of L^{(i)}(X) = L(u_0, ..., u_{i-1}, X, 0, ..., 0), where
+     * L = L_0 + L_1 + L_2 + L_3 is the indicator of the disabled rows at the TOP of the trace.
+     *
+     * @details During rounds 0 and 1, the restriction of L to the surviving disabled edge is identically 1.
+     * After round 1, L^{(i)}(X) = \prod_{k=2}^{i-1} (1 - u_k) * (1 - X).
+     * Called with (round_challenge, round_idx) after round `round_idx` has completed.
+     */
     pub fn update_evaluations(&mut self, round_challenge: F, round_idx: usize) {
         if round_idx == 1 {
-            self.eval_at_0 = F::zero();
+            self.eval_at_1 = F::zero();
         }
         if round_idx >= 2 {
-            self.eval_at_1 *= round_challenge;
+            self.eval_at_0 *= F::one() - round_challenge;
         }
     }
 
+    /**
+     * @brief Compute the evaluation of 1 - L at the sumcheck challenge, i.e.
+     * 1 - \prod_{k=2}^{d-1} (1 - u_k). This is circuit-size independent: the verifier evaluates it
+     * over ALL (virtual) sumcheck challenges, so no padding indicator is needed.
+     */
     pub fn evaluate_at_challenge(multivariate_challenge: &[F], log_circuit_size: usize) -> F {
         let mut evaluation_at_multivariate_challenge = F::one();
 
         for val in multivariate_challenge.iter().take(log_circuit_size).skip(2) {
-            evaluation_at_multivariate_challenge *= val;
-        }
-
-        F::one() - evaluation_at_multivariate_challenge
-    }
-    /**
-     * @brief A variant of the above that uses `padding_indicator_array`.
-     *
-     * @param multivariate_challenge Sumcheck evaluation challenge
-     * @param padding_indicator_array An array with first log_n entries equal to 1, and the remaining entries are 0.
-     */
-    pub fn evaluate_at_challenge_with_padding(
-        multivariate_challenge: &[F],
-        padding_indicator_array: &[F],
-    ) -> F {
-        let mut evaluation_at_multivariate_challenge = F::one();
-
-        for (idx, &indicator) in padding_indicator_array.iter().enumerate().skip(2) {
-            evaluation_at_multivariate_challenge *=
-                F::one() - indicator + indicator * multivariate_challenge[idx];
+            evaluation_at_multivariate_challenge *= F::one() - val;
         }
 
         F::one() - evaluation_at_multivariate_challenge

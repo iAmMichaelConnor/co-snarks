@@ -20,7 +20,7 @@ use co_noir_common::{
 use itertools::izip;
 use mpc_core::MpcState as _;
 use mpc_net::Network;
-use ultrahonk::{NUM_SMALL_IPA_EVALUATIONS, Utils};
+use ultrahonk::{NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_OPENING_CLAIMS, Utils};
 
 impl<
     T: NoirUltraHonkProver<P>,
@@ -177,8 +177,7 @@ impl<
         a_0.add_assign_slice(batched_to_be_shifted.shifted());
 
         // Construct the d-1 Gemini foldings of A₀(X)
-        let fold_polynomials =
-            self.compute_fold_polynomials(log_n, multilinear_challenge, a_0, has_zk);
+        let fold_polynomials = self.compute_fold_polynomials(log_n, multilinear_challenge, a_0);
 
         let mut commitments = Vec::with_capacity(fold_polynomials.len());
         for f_poly in fold_polynomials.iter().take(virtual_log_n - 1) {
@@ -238,7 +237,6 @@ impl<
         log_n: usize,
         multilinear_challenge: &[P::ScalarField],
         a_0: SharedPolynomial<T, P>,
-        has_zk: ZeroKnowledge,
     ) -> Vec<SharedPolynomial<T, P>> {
         tracing::trace!("Compute fold polynomials");
         // Note: bb uses multithreading here
@@ -273,10 +271,12 @@ impl<
             a_l = a_l_fold.coefficients;
         }
 
-        // Perform virtual rounds.
-        // After the first `log_n - 1` rounds, the prover's `fold` univariates stabilize. With ZK, the verifier multiplies
-        // the evaluations by 0, otherwise, when `virtual_log_n > log_n`, the prover honestly computes and sends the
-        // constant folds.
+        // Virtual rounds (indices log_n .. virtual_log_n - 1).
+        // After real folding, the fold polynomials are constant: FOLD_{log_n} is the evaluation of
+        // the batched polynomial at (u_0, ..., u_{log_n - 1}), and each subsequent virtual fold is
+        // multiplied by (1 - u_k) (zero-extension semantics). The prover honestly computes and
+        // commits to these constants; since a constant polynomial satisfies (f(X) - f(x))/(X - x) = 0,
+        // they contribute nothing to the Shplonk quotient.
         let last = &fold_polynomials[fold_polynomials.len() - 1];
         let u_last = multilinear_challenge[log_n - 1];
         let final_eval = T::add(
@@ -284,12 +284,7 @@ impl<
             T::mul_with_public(u_last, T::sub(last[1], last[0])),
         );
         let mut const_fold = SharedPolynomial::new_zero(1);
-        // Temporary fix: when we're running a zk proof, the verifier uses a `padding_indicator_array`. So the evals in
-        // rounds past `log_n - 1` will be ignored. Hence the prover also needs to ignore them, otherwise Shplonk will fail.
-        const_fold[0] = T::mul_with_public(
-            P::ScalarField::from(if has_zk == ZeroKnowledge::Yes { 0 } else { 1 }),
-            final_eval,
-        );
+        const_fold[0] = final_eval;
         fold_polynomials.push(const_fold);
 
         // FOLD_{log_n+1}, ..., FOLD_{d_v-1}
@@ -301,10 +296,7 @@ impl<
         {
             tail *= P::ScalarField::one() - challenge; // multiply by (1 - u_k)
             let mut next_const = SharedPolynomial::new_zero(1);
-            next_const[0] = T::mul_with_public(
-                P::ScalarField::from(if has_zk == ZeroKnowledge::Yes { 0 } else { 1 }),
-                T::mul_with_public(tail, final_eval),
-            );
+            next_const[0] = T::mul_with_public(tail, final_eval);
             fold_polynomials.push(next_const);
         }
 
@@ -506,7 +498,7 @@ impl<
         circuit_size: u32,
         crs: &ProverCrs<P>,
         sumcheck_output: SumcheckOutput<P::ScalarField>,
-        libra_polynomials: Option<[SharedPolynomial<T, P>; NUM_SMALL_IPA_EVALUATIONS]>,
+        libra_polynomials: Option<[SharedPolynomial<T, P>; NUM_LIBRA_COMMITMENTS]>,
     ) -> HonkProofResult<ShpleminiOpeningClaim<T, P>> {
         let has_zk = ZeroKnowledge::from(libra_polynomials.is_some());
 
@@ -740,43 +732,61 @@ impl<
      * verifier, and populate a vector of the opening claims.
      *
      */
+    /// Build the five SmallSubgroupIPA opening claims, in transcript order:
+    /// G(r), A(g*r), A(r), A(1) = 0 (untransmitted boundary opening), Q(r).
+    /// `libra_polynomials` holds [G, A, Q] in commitment order.
     fn compute_libra_opening_claims(
         gemini_r: P::ScalarField,
-        libra_polynomials: [SharedPolynomial<T, P>; NUM_SMALL_IPA_EVALUATIONS],
+        libra_polynomials: [SharedPolynomial<T, P>; NUM_LIBRA_COMMITMENTS],
         transcript: &mut Transcript<TranscriptFieldType, H>,
         net: &N,
         state: &mut T::State,
     ) -> HonkProofResult<Vec<ShpleminiOpeningClaim<T, P>>> {
         tracing::trace!("Compute libra opening claims");
-        let mut libra_opening_claims = Vec::with_capacity(NUM_SMALL_IPA_EVALUATIONS);
+        let mut libra_opening_claims = Vec::with_capacity(NUM_SMALL_IPA_OPENING_CLAIMS);
 
         let subgroup_generator = P::get_subgroup_generator();
+        let [concatenated, grand_sum, quotient] = libra_polynomials;
 
-        let libra_eval_labels = [
-            "Libra:concatenation_eval",
-            "Libra:shifted_grand_sum_eval",
-            "Libra:grand_sum_eval",
-            "Libra:quotient_eval",
+        // (label, polynomial, evaluation point, transmitted)
+        let claim_data = [
+            ("Libra:concatenation_eval", concatenated, gemini_r, true),
+            (
+                "Libra:shifted_grand_sum_eval",
+                grand_sum.clone(),
+                gemini_r * subgroup_generator,
+                true,
+            ),
+            ("Libra:grand_sum_eval", grand_sum.clone(), gemini_r, true),
+            // The boundary opening A(1) = 0 is not transmitted: the verifier hardcodes the
+            // evaluation to zero and it is enforced by the batched PCS opening.
+            ("", grand_sum, P::ScalarField::one(), false),
+            ("Libra:quotient_eval", quotient, gemini_r, true),
         ];
-        let evaluation_points = [gemini_r, gemini_r * subgroup_generator, gemini_r, gemini_r];
 
-        let mut to_open = Vec::with_capacity(libra_eval_labels.len());
-        for (poly, point) in izip!(libra_polynomials, evaluation_points) {
-            let eval = T::eval_poly(&poly.coefficients, point);
-
-            let new_claim = ShpleminiOpeningClaim {
+        let mut to_open = Vec::new();
+        let mut open_labels = Vec::new();
+        for (label, poly, point, transmitted) in claim_data {
+            let evaluation = if transmitted {
+                let eval = T::eval_poly(&poly.coefficients, point);
+                to_open.push(eval);
+                open_labels.push(label);
+                eval
+            } else {
+                // A share of the fixed boundary value 0
+                T::ArithmeticShare::default()
+            };
+            libra_opening_claims.push(ShpleminiOpeningClaim {
                 polynomial: poly,
                 opening_pair: OpeningPair {
                     challenge: point,
-                    evaluation: eval,
+                    evaluation,
                 },
                 gemini_fold: false,
-            };
-            to_open.push(new_claim.opening_pair.evaluation);
-            libra_opening_claims.push(new_claim);
+            });
         }
         let opened = T::open_many(&to_open, net, state)?;
-        for (val, label) in izip!(opened, libra_eval_labels) {
+        for (val, label) in izip!(opened, open_labels) {
             transcript.send_fr_to_verifier::<P>(label.to_string(), val);
         }
 

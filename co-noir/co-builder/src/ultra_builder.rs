@@ -38,13 +38,13 @@ use co_acvm::Rep3AcvmSolver;
 use co_acvm::ShamirAcvmSolver;
 use co_acvm::{PlainAcvmSolver, mpc::NoirWitnessExtensionProtocol};
 use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUTS_SIZE};
+use co_noir_common::constants::{NUM_ZERO_ROWS, TRACE_OFFSET};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::honk_proof::{HonkProofResult, TranscriptFieldType};
 use co_noir_common::keys::plain_proving_key::PlainProvingKey;
 use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
 use co_noir_common::polynomials::entities::PrecomputedEntities;
-use co_noir_common::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK;
 use co_noir_common::utils::Utils;
 use itertools::izip;
 use mpc_core::gadgets::poseidon2::POSEIDON2_BN254_T4_PARAMS;
@@ -175,7 +175,6 @@ pub struct GenericUltraCircuitBuilder<
     pub(crate) tau: BTreeMap<u32, u32>,
     constant_variable_indices: BTreeMap<P::ScalarField, u32>,
     pub(crate) zero_idx: u32,
-    one_idx: u32,
     pub blocks: GateBlocks<P::ScalarField>, // Storage for wires and selectors for all gate types
     pub(crate) num_gates: usize,
     pub circuit_finalized: bool,
@@ -2599,18 +2598,16 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
     }
 
     pub fn compute_dyadic_size(&self) -> usize {
-        // for the lookup argument the circuit size must be at least as large as the sum of all tables used
-        let min_size_due_to_lookups = self.get_tables_size();
+        // For the lookup argument the circuit size must be at least as large as the sum of all tables
+        // used. The table data is placed at the lookup block's trace offset.
+        let tables_size = self.get_tables_size();
+        let tables_end = self.blocks.get_lookup_block_offset() + tables_size;
 
-        // minimum size of execution trace due to everything else
-        let min_size_of_execution_trace = self.blocks.get_total_content_size();
+        // Minimum size of the execution trace due to everything else: the disabled/masking head rows,
+        // the zero row enabling shifts, and the content of all trace blocks.
+        let trace_end = TRACE_OFFSET + NUM_ZERO_ROWS + self.blocks.get_total_content_size();
 
-        // The number of gates is the maximum required by the lookup argument or everything else, plus an optional zero row
-        // to allow for shifts.
-        let num_zero_rows = 1;
-        let total_num_gates = NUM_DISABLED_ROWS_IN_SUMCHECK as usize
-            + num_zero_rows
-            + std::cmp::max(min_size_due_to_lookups, min_size_of_execution_trace);
+        let total_num_gates = std::cmp::max(tables_end, trace_end);
 
         // Next power of 2 (dyadic circuit size)
         Self::get_circuit_subgroup_size(total_num_gates)
@@ -3937,17 +3934,6 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
     }
 }
 
-impl<P: HonkCurve<TranscriptFieldType>> UltraCircuitBuilder<P> {
-    pub fn get_num_gates_added_to_ensure_nonzero_polynomials() -> usize {
-        let mut builder = Self::new(0);
-        let num_gates_prior = builder.get_num_gates();
-        builder.add_gates_to_ensure_all_polys_are_non_zero(&mut PlainAcvmSolver::default());
-        let num_gates_post = builder.get_num_gates(); // accounts for finalization gates
-
-        num_gates_post - num_gates_prior
-    }
-}
-
 impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::ScalarField>>
     GenericUltraCircuitBuilder<P, T>
 {
@@ -4012,7 +3998,6 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             tau: BTreeMap::new(),
             constant_variable_indices: BTreeMap::new(),
             zero_idx: 0,
-            one_idx: 1,
             blocks: GateBlocks::default(),
             num_gates: 0,
             circuit_finalized: false,
@@ -4076,7 +4061,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         };
         builder.build_constraints(driver, constraint_system, crs, &metadata)?;
 
-        builder.finalize_circuit(true, driver)?;
+        builder.finalize_circuit(driver)?;
 
         Ok(builder)
     }
@@ -4105,12 +4090,12 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         };
         builder.build_constraints(driver, constraint_system, crs, &metadata)?;
 
-        builder.finalize_circuit(true, driver)?;
+        builder.finalize_circuit(driver)?;
 
         Ok(builder.compute_dyadic_size())
     }
 
-    pub fn finalize_circuit(&mut self, ensure_nonzero: bool, driver: &mut T) -> eyre::Result<()> {
+    pub fn finalize_circuit(&mut self, driver: &mut T) -> eyre::Result<()> {
         // /**
         //  * First of all, add the gates related to ROM arrays and range lists.
         //  * Note that the total number of rows in an UltraPlonk program can be divided as following:
@@ -4140,10 +4125,8 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             // Gates added after first call to finalize will not be processed since finalization is only performed once
             tracing::warn!("WARNING: Redundant call to finalize_circuit(). Is this intentional?");
         } else {
-            if ensure_nonzero {
-                self.add_gates_to_ensure_all_polys_are_non_zero(driver);
-            }
-
+            // Note: barretenberg no longer adds dummy "ensure non-zero" gates; commitments to
+            // all-zero polynomials are simply points at infinity.
             self.process_non_native_field_multiplications();
             self.process_rom_arrays(driver)?;
             self.process_ram_arrays(driver)?;
@@ -4960,442 +4943,5 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         b.assert_equal(&b_accumulator, self, driver);
 
         Ok(res)
-    }
-
-    pub fn add_gates_to_ensure_all_polys_are_non_zero(&mut self, driver: &mut T) {
-        // q_m, q_1, q_2, q_3, q_4
-        self.blocks.arithmetic.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks.arithmetic.q_m().push(P::ScalarField::one());
-        self.blocks.arithmetic.q_1().push(P::ScalarField::one());
-        self.blocks.arithmetic.q_2().push(P::ScalarField::one());
-        self.blocks.arithmetic.q_3().push(P::ScalarField::one());
-        self.blocks.arithmetic.q_4().push(P::ScalarField::one());
-        self.blocks.arithmetic.q_c().push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_delta_range()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_arith()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_elliptic()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_memory()
-            .push(P::ScalarField::zero());
-        self.blocks.arithmetic.q_nnf().push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .arithmetic
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        // q_delta_range
-        self.blocks.delta_range.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks.delta_range.q_m().push(P::ScalarField::zero());
-        self.blocks.delta_range.q_1().push(P::ScalarField::zero());
-        self.blocks.delta_range.q_2().push(P::ScalarField::zero());
-        self.blocks.delta_range.q_3().push(P::ScalarField::zero());
-        self.blocks.delta_range.q_4().push(P::ScalarField::zero());
-        self.blocks.delta_range.q_c().push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_delta_range()
-            .push(P::ScalarField::one());
-        self.blocks
-            .delta_range
-            .q_arith()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_elliptic()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_memory()
-            .push(P::ScalarField::zero());
-        self.blocks.delta_range.q_nnf().push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .delta_range
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.delta_range,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
-
-        // q_elliptic
-        self.blocks.elliptic.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks.elliptic.q_m().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_1().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_2().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_3().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_4().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_c().push(P::ScalarField::zero());
-        self.blocks
-            .elliptic
-            .q_delta_range()
-            .push(P::ScalarField::zero());
-        self.blocks.elliptic.q_arith().push(P::ScalarField::zero());
-        self.blocks
-            .elliptic
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .elliptic
-            .q_elliptic()
-            .push(P::ScalarField::one());
-        self.blocks.elliptic.q_memory().push(P::ScalarField::zero());
-        self.blocks.elliptic.q_nnf().push(P::ScalarField::zero());
-        self.blocks
-            .elliptic
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .elliptic
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.elliptic,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
-
-        // q_memory
-        self.blocks.memory.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks.memory.q_m().push(P::ScalarField::zero());
-        self.blocks.memory.q_1().push(P::ScalarField::zero());
-        self.blocks.memory.q_2().push(P::ScalarField::zero());
-        self.blocks.memory.q_3().push(P::ScalarField::zero());
-        self.blocks.memory.q_4().push(P::ScalarField::zero());
-        self.blocks.memory.q_c().push(P::ScalarField::zero());
-        self.blocks
-            .memory
-            .q_delta_range()
-            .push(P::ScalarField::zero());
-        self.blocks.memory.q_arith().push(P::ScalarField::zero());
-        self.blocks
-            .memory
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks.memory.q_elliptic().push(P::ScalarField::zero());
-        self.blocks.memory.q_memory().push(P::ScalarField::one());
-        self.blocks.memory.q_nnf().push(P::ScalarField::zero());
-        self.blocks
-            .memory
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .memory
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.memory,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
-
-        // q_nnf
-        self.blocks
-            .nnf
-            .populate_wires(self.zero_idx, self.zero_idx, self.zero_idx, self.zero_idx);
-        self.blocks.nnf.q_m().push(P::ScalarField::zero());
-        self.blocks.nnf.q_1().push(P::ScalarField::zero());
-        self.blocks.nnf.q_2().push(P::ScalarField::zero());
-        self.blocks.nnf.q_3().push(P::ScalarField::zero());
-        self.blocks.nnf.q_4().push(P::ScalarField::zero());
-        self.blocks.nnf.q_c().push(P::ScalarField::zero());
-        self.blocks.nnf.q_delta_range().push(P::ScalarField::zero());
-        self.blocks.nnf.q_arith().push(P::ScalarField::zero());
-        self.blocks.nnf.q_lookup_type().push(P::ScalarField::zero());
-        self.blocks.nnf.q_elliptic().push(P::ScalarField::zero());
-        self.blocks.nnf.q_memory().push(P::ScalarField::zero());
-        self.blocks.nnf.q_nnf().push(P::ScalarField::one());
-        self.blocks
-            .nnf
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .nnf
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.nnf,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
-
-        // Add nonzero values in w_4 and q_c (q_4*w_4 + q_c --> 1*1 - 1 = 0)
-        self.one_idx = self.put_constant_variable(P::ScalarField::one());
-        self.create_big_add_gate(
-            &AddQuad {
-                a: self.zero_idx,
-                b: self.zero_idx,
-                c: self.zero_idx,
-                d: self.one_idx,
-                a_scaling: P::ScalarField::zero(),
-                b_scaling: P::ScalarField::zero(),
-                c_scaling: P::ScalarField::zero(),
-                d_scaling: P::ScalarField::one(),
-                const_scaling: -P::ScalarField::one(),
-            },
-            false,
-        );
-
-        // Take care of all polys related to lookups (q_lookup, tables, sorted, etc)
-        // by doing a dummy lookup with a special table.
-        // Note: the 4th table poly is the table index: this is not the value of the table
-        // type enum but rather the index of the table in the list of all tables utilized
-        // in the circuit. Therefore we naively need two different basic tables (indices 0, 1)
-        // to get a non-zero value in table_4.
-        // The multitable operates on 2-bit values, so the maximum is 3
-        let left_value = 3;
-        let right_value = 3;
-
-        let left_witness_value = T::AcvmType::from(P::ScalarField::from(left_value as u64));
-        let right_witness_value = T::AcvmType::from(P::ScalarField::from(right_value as u64));
-
-        let left_witness_index = self.add_variable(left_witness_value.to_owned());
-        let right_witness_index = self.add_variable(right_witness_value.to_owned());
-        let dummy_accumulators = Plookup::get_lookup_accumulators(
-            self,
-            driver,
-            MultiTableId::HonkDummyMulti,
-            left_witness_value,
-            right_witness_value,
-            true,
-        )
-        .expect("Values are public so no network needed");
-        self.create_gates_from_plookup_accumulators(
-            MultiTableId::HonkDummyMulti,
-            dummy_accumulators,
-            left_witness_index,
-            Some(right_witness_index),
-        );
-
-        // mock a poseidon external gate, with all zeros as input
-        self.blocks.poseidon2_external.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks
-            .poseidon2_external
-            .q_m()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_1()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_2()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_3()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_c()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_arith()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_4()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_delta_range()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_elliptic()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_memory()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_nnf()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_external
-            .q_poseidon2_external()
-            .push(P::ScalarField::one());
-        self.blocks
-            .poseidon2_external
-            .q_poseidon2_internal()
-            .push(P::ScalarField::zero());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        // dummy gate to be read into by previous poseidon external gate via shifts
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.poseidon2_external,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
-
-        // mock a poseidon internal gate, with all zeros as input
-        self.blocks.poseidon2_internal.populate_wires(
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-        );
-        self.blocks
-            .poseidon2_internal
-            .q_m()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_1()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_2()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_3()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_c()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_arith()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_4()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_delta_range()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_lookup_type()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_elliptic()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_memory()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_nnf()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_poseidon2_external()
-            .push(P::ScalarField::zero());
-        self.blocks
-            .poseidon2_internal
-            .q_poseidon2_internal()
-            .push(P::ScalarField::one());
-
-        self.check_selector_length_consistency();
-        self.num_gates += 1;
-
-        // dummy gate to be read into by previous poseidon internal gate via shifts
-        create_unconstrained_gate!(
-            self,
-            &mut self.blocks.poseidon2_internal,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx,
-            self.zero_idx
-        );
     }
 }

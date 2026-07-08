@@ -21,7 +21,7 @@ use super::types::ProverMemory;
 use crate::{NUM_ALPHAS, Utils};
 use ark_ff::{One, Zero};
 use co_noir_common::{
-    constants::PERMUTATION_ARGUMENT_VALUE_SEPARATOR,
+    constants::{PERMUTATION_ARGUMENT_VALUE_SEPARATOR, TRACE_OFFSET},
     crs::ProverCrs,
     honk_curve::HonkCurve,
     honk_proof::{HonkProofError, HonkProofResult, TranscriptFieldType},
@@ -214,11 +214,13 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
 
+        // Skip the disabled head region to preserve the ZK masking values at rows {1, 2, 3}
         for (i, (q_lookup, lookup_read_tag)) in izip!(
             proving_key.polynomials.precomputed.q_lookup().iter(),
             proving_key.polynomials.witness.lookup_read_tags().iter(),
         )
         .enumerate()
+        .skip(TRACE_OFFSET)
         {
             if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
                 continue;
@@ -334,33 +336,27 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     fn compute_grand_product(&mut self, proving_key: &PlainProvingKey<C>) {
         tracing::trace!("compute grand product");
 
-        let has_active_ranges = proving_key.active_region_data.size() > 0;
-
         // Barretenberg uses multithreading here
 
         // Set the domain over which the grand product must be computed. This may be less than the dyadic circuit size, e.g
         // the permutation grand product does not need to be computed beyond the index of the last active wire
         let domain_size = proving_key.final_active_wire_idx + 1;
 
-        let active_domain_size = if has_active_ranges {
-            proving_key.active_region_data.size()
-        } else {
-            domain_size
-        };
+        // The grand product starts after the disabled/reserved head rows (where lagrange_first lives),
+        // preserving the ZK masking values at rows {1, 2, 3}.
+        let gp_start = TRACE_OFFSET;
+        let active_size = domain_size - gp_start;
 
-        // In Barretenberg circuit size is taken from the q_c polynomial
-        let mut numerator = Vec::with_capacity(active_domain_size - 1);
-        let mut denominator = Vec::with_capacity(active_domain_size - 1);
+        // The size of the iteration domain is one less than the active domain since the final value of
+        // the grand product is constructed only in the relation and not explicitly in the polynomial.
+        let mut numerator = Vec::with_capacity(active_size - 1);
+        let mut denominator = Vec::with_capacity(active_size - 1);
 
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
 
-        for i in 0..active_domain_size - 1 {
-            let idx = if has_active_ranges {
-                proving_key.active_region_data.get_idx(i)
-            } else {
-                i
-            };
+        for i in 0..active_size - 1 {
+            let idx = i + gp_start;
             numerator.push(self.compute_grand_product_numerator(proving_key, idx));
             denominator.push(self.grand_product_denominator(proving_key, idx));
         }
@@ -369,7 +365,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         // Compute the accumulating product of the numerator and denominator terms.
         // In Barretenberg, this is done in parallel across multiple threads, however we just do the computation signlethreaded for simplicity
 
-        for i in 1..active_domain_size - 1 {
+        for i in 1..active_size - 1 {
             numerator[i] = numerator[i] * numerator[i - 1];
             denominator[i] = denominator[i] * denominator[i - 1];
         }
@@ -377,40 +373,16 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         // invert denominator
         Utils::batch_invert(&mut denominator);
 
-        // Step (3) Compute z_perm[i] = numerator[i] / denominator[i]
+        // Step (3) Compute z_perm[gp_start + i + 1] = numerator[i] / denominator[i].
+        // z_perm remains 0 at rows 0..=gp_start (row gp_start hosts lagrange_first, where the
+        // permutation relation reads z_perm + lagrange_first); for ZK, the masking values at rows
+        // {1, 2, 3} are added later when committing.
         self.memory
             .z_perm
             .resize(proving_key.circuit_size as usize, C::ScalarField::zero());
 
-        // For Ultra/Mega, the first row is an inactive zero row thus the grand prod takes value 1 at both i = 0 and i = 1
-        self.memory.z_perm[1] = C::ScalarField::one();
-
-        // Compute grand product values corresponding only to the active regions of the trace
-        for i in 0..active_domain_size - 1 {
-            let idx = if has_active_ranges {
-                proving_key.active_region_data.get_idx(i + 1)
-            } else {
-                i + 1
-            };
-            self.memory.z_perm[idx] = numerator[i] * denominator[i];
-        }
-
-        // Final step: If active/inactive regions have been specified, the value of the grand product in the inactive
-        // regions have not yet been set. The polynomial takes an already computed constant value across each inactive
-        // region (since no copy constraints are present there) equal to the value of the grand product at the first index
-        // of the subsequent active region.
-        if has_active_ranges {
-            for i in 0..domain_size {
-                for j in 0..proving_key.active_region_data.num_ranges() - 1 {
-                    let previous_range_end = proving_key.active_region_data.get_range(j).1;
-                    let next_range_start = proving_key.active_region_data.get_range(j + 1).0;
-                    // Set the value of the polynomial if the index falls in an inactive region
-                    if i >= previous_range_end && i < next_range_start {
-                        self.memory.z_perm[i] = self.memory.z_perm[next_range_start];
-                        break;
-                    }
-                }
-            }
+        for i in 0..active_size - 1 {
+            self.memory.z_perm[gp_start + i + 1] = numerator[i] * denominator[i];
         }
     }
 

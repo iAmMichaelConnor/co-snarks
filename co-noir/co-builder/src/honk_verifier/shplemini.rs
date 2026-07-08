@@ -16,7 +16,9 @@ use co_noir_common::{
     polynomials::entities::WITNESS_ENTITIES_SIZE,
 };
 use co_noir_common::{
-    constants::{NUM_SMALL_IPA_EVALUATIONS, SHIFTED_WITNESS_ENTITIES_SIZE},
+    constants::{
+        NUM_SMALL_IPA_EVALUATIONS, NUM_SMALL_IPA_OPENING_CLAIMS, SHIFTED_WITNESS_ENTITIES_SIZE,
+    },
     polynomials::entities::PRECOMPUTED_ENTITIES_SIZE,
     types::ZeroKnowledge,
 };
@@ -38,7 +40,6 @@ impl ShpleminiVerifier {
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
         H: TranscriptHasherCT<C>,
     >(
-        padding_indicator_array: &[FieldCT<C::ScalarField>],
         claim_batcher: &mut ClaimBatcher<C, T>,
         multivariate_challenge: &[FieldCT<C::ScalarField>],
         g1_identity: &BigGroup<C::ScalarField, T>,
@@ -193,7 +194,6 @@ impl ShpleminiVerifier {
         // Reconstruct Aᵢ(r²ⁱ) for i=0, ..., d - 1 from the batched evaluation of the multilinear polynomials and
         // Aᵢ(−r²ⁱ) for i = 0, ..., d - 1. In the case of interleaving, we compute A₀(r) as A₀₊(r) + P₊(r^s).
         let gemini_fold_pos_evaluations = Self::compute_fold_pos_evaluations(
-            padding_indicator_array,
             &batched_evaluation,
             multivariate_challenge,
             &gemini_eval_challenge_powers,
@@ -206,7 +206,6 @@ impl ShpleminiVerifier {
         // contributions from Aᵢ(−r²ⁱ) for i=1, … , d − 1 to the constant term accumulator, add corresponding scalars
         // for the batch mul
         Self::batch_gemini_claims_received_from_prover(
-            padding_indicator_array,
             &fold_commitments,
             &gemini_fold_neg_evaluations,
             &gemini_fold_pos_evaluations,
@@ -353,7 +352,6 @@ impl ShpleminiVerifier {
         C: HonkCurve<TranscriptFieldType>,
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
     >(
-        padding_indicator_array: &[FieldCT<C::ScalarField>],
         batched_evaluation: &FieldCT<C::ScalarField>,
         evaluation_point: &[FieldCT<C::ScalarField>],
         challenge_powers: &[FieldCT<C::ScalarField>],
@@ -407,21 +405,11 @@ impl ShpleminiVerifier {
             )?;
             eval_pos = eval_pos.multiply(&tmp, builder, driver)?;
 
-            // If current index is bigger than log_n, we propagate `batched_evaluation` to the next
-            // round.  Otherwise, current `eval_pos` A₍ₗ₋₁₎(−r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2.
-            let lhs = padding_indicator_array[l - 1].multiply(&eval_pos, builder, driver)?;
-            let rhs = one
-                .sub(&padding_indicator_array[l - 1], builder, driver)
-                .multiply(&eval_pos_prev, builder, driver)?;
-            eval_pos_prev = lhs.add(&rhs, builder, driver);
-
-            // If current index is bigger than log_n, we emplace 0, which is later multiplied against
-            // Commitment::one().
-            fold_pos_evaluations.push(padding_indicator_array[l - 1].multiply(
-                &eval_pos_prev,
-                builder,
-                driver,
-            )?);
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
+            eval_pos_prev = eval_pos;
+            fold_pos_evaluations.push(eval_pos_prev.clone());
         }
 
         fold_pos_evaluations.reverse();
@@ -479,7 +467,6 @@ impl ShpleminiVerifier {
         C: HonkCurve<TranscriptFieldType>,
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
     >(
-        padding_indicator_array: &[FieldCT<C::ScalarField>],
         fold_commitments: &[BigGroup<C::ScalarField, T>],
         gemini_neg_evaluations: &[FieldCT<C::ScalarField>],
         gemini_pos_evaluations: &[FieldCT<C::ScalarField>],
@@ -536,11 +523,11 @@ impl ShpleminiVerifier {
             constant_term_accumulator.add_assign(&lhs.add(&rhs, builder, driver), builder, driver);
 
             // Place the scaling factor to the 'scalars' vector
-            scalars.push(padding_indicator_array[j].neg().multiply(
-                &scaling_factor_neg.add(&scaling_factor_pos, builder, driver),
-                builder,
-                driver,
-            )?);
+            scalars.push(
+                scaling_factor_neg
+                    .add(&scaling_factor_pos, builder, driver)
+                    .neg(),
+            );
 
             // Move com(Aᵢ) to the 'commitments' vector
             commitments.push(fold_commitments[j - 1].clone());
@@ -642,10 +629,13 @@ impl ShpleminiVerifier {
         // Add Libra commitments to the vector of commitments
         commitments.extend_from_slice(libra_commitments);
 
-        // Compute corresponding scalars and the correction to the constant term
-        let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS] =
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
             array::from_fn(|_| FieldCT::default());
-        let mut batching_scalars: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS] =
+        let mut batching_scalars: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
             array::from_fn(|_| FieldCT::default());
 
         // Compute Shplonk denominators and invert them
@@ -668,10 +658,25 @@ impl ShpleminiVerifier {
         )?;
 
         denominators[2] = denominators[0].clone();
-        denominators[3] = denominators[0].clone();
+        denominators[3] = one.divide(
+            &shplonk_evaluation_challenge.sub(&one, builder, driver),
+            builder,
+            driver,
+        )?;
+        denominators[4] = denominators[0].clone();
+
+        // The evaluations of the five claims (in transcript order G(r), A(g*r), A(r), A(1), Q(r));
+        // slot 3 is the fixed boundary value A(1) = 0, which is not transmitted.
+        let claim_evaluations = [
+            libra_evaluations[0].clone(),
+            libra_evaluations[1].clone(),
+            libra_evaluations[2].clone(),
+            FieldCT::from(C::ScalarField::ZERO),
+            libra_evaluations[3].clone(),
+        ];
 
         // Compute the scalars to be multiplied against the commitments
-        for idx in 0..NUM_SMALL_IPA_EVALUATIONS {
+        for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor = denominators[idx].multiply(
                 &shplonk_batching_challenge_powers[2 * virtual_log_n + idx],
                 builder,
@@ -679,16 +684,21 @@ impl ShpleminiVerifier {
             )?;
             batching_scalars[idx] = scaling_factor.neg();
             *constant_term_accumulator = constant_term_accumulator.add(
-                &scaling_factor.multiply(&libra_evaluations[idx], builder, driver)?,
+                &scaling_factor.multiply(&claim_evaluations[idx], builder, driver)?,
                 builder,
                 driver,
             );
         }
 
-        // To save a scalar mul, add the sum of the batching scalars corresponding to the big sum evaluations
+        // To save scalar muls, group the batching scalars of the claims backed by the grand sum
+        // commitment (A(g*r), A(r), and A(1))
         scalars.push(batching_scalars[0].clone());
-        scalars.push(batching_scalars[1].add(&batching_scalars[2], builder, driver));
-        scalars.push(batching_scalars[3].clone());
+        scalars.push(
+            batching_scalars[1]
+                .add(&batching_scalars[2], builder, driver)
+                .add(&batching_scalars[3], builder, driver),
+        );
+        scalars.push(batching_scalars[4].clone());
 
         Ok(())
     }
@@ -935,7 +945,7 @@ impl ShpleminiVerifier {
         let mut num_powers = 2 * virtual_log_n;
 
         if has_zk {
-            num_powers += NUM_SMALL_IPA_EVALUATIONS;
+            num_powers += NUM_SMALL_IPA_OPENING_CLAIMS;
         }
 
         let mut result = Vec::with_capacity(num_powers);

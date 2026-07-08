@@ -298,7 +298,6 @@ impl SumcheckProverRound {
             relation_parameters,
             gate_separators,
             alphas,
-            self.round_size,
             round_index,
             row_disabling_polynomial,
         );
@@ -309,7 +308,7 @@ impl SumcheckProverRound {
         round_univariate + libra_round_univariate - contribution_from_disabled_rows
     }
 
-    fn compute_libra_round_univariate<P: HonkCurve<TranscriptFieldType>>(
+    pub(crate) fn compute_libra_round_univariate<P: HonkCurve<TranscriptFieldType>>(
         zk_sumcheck_data: &ZKSumcheckData<P>,
         round_idx: usize,
     ) -> SumcheckRoundOutput<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH_ZK> {
@@ -342,7 +341,6 @@ impl SumcheckProverRound {
         relation_parameters: &RelationParameters<P::ScalarField>,
         gate_separators: &GateSeparatorPolynomial<P::ScalarField>,
         alphas: &[P::ScalarField; crate::NUM_ALPHAS],
-        round_size: usize,
         round_idx: usize,
         row_disabling_polynomial: &RowDisablingPolynomial<P::ScalarField>,
     ) -> SumcheckRoundOutput<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH_ZK> {
@@ -352,14 +350,11 @@ impl SumcheckProverRound {
         // Construct extended edge containers
         let mut extended_edges = ProverUnivariates::<P::ScalarField>::default();
 
-        // In Round 0, we have to compute the contribution from 2 edges: n - 1 = (1,1,...,1) and n-4 = (0,1,...,1).
-        let start_edge_idx = if round_idx == 0 {
-            round_size - 4
-        } else {
-            round_size - 2
-        };
+        // The disabled rows sit at the TOP of the trace (rows 0..3). In Round 0 they cover 2 edges
+        // (rows {0,1} and {2,3}); after the first partial evaluation they collapse to a single edge.
+        let end_edge_idx = if round_idx == 0 { 4 } else { 2 };
 
-        for edge_idx in (start_edge_idx..round_size).step_by(2) {
+        for edge_idx in (0..end_edge_idx).step_by(2) {
             Self::extend_edges(&mut extended_edges, polynomials, edge_idx);
             Self::accumulate_relation_univariates::<P>(
                 &mut univariate_accumulators,
@@ -391,6 +386,46 @@ impl SumcheckProverRound {
         gate_separators: &GateSeparatorPolynomial<P::ScalarField>,
         alphas: &[P::ScalarField; crate::NUM_ALPHAS],
     ) -> SumcheckRoundOutput<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH> {
+        Self::compute_virtual_contribution_inner::<P, BATCHED_RELATION_PARTIAL_LENGTH>(
+            polynomials,
+            relation_parameters,
+            gate_separators,
+            alphas,
+        )
+    }
+
+    /// ZK variant of the virtual round contribution: the relation contribution at the single
+    /// non-zero edge is scaled by the row-disabling factor (1 - L^{(i)})(X).
+    pub(crate) fn compute_virtual_contribution_zk<P: HonkCurve<TranscriptFieldType>>(
+        polynomials: &AllEntities<Vec<P::ScalarField>>,
+        relation_parameters: &RelationParameters<P::ScalarField>,
+        gate_separators: &GateSeparatorPolynomial<P::ScalarField>,
+        alphas: &[P::ScalarField; crate::NUM_ALPHAS],
+        row_disabling_polynomial: &RowDisablingPolynomial<P::ScalarField>,
+    ) -> SumcheckRoundOutput<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH_ZK> {
+        let mut result = Self::compute_virtual_contribution_inner::<
+            P,
+            BATCHED_RELATION_PARTIAL_LENGTH_ZK,
+        >(polynomials, relation_parameters, gate_separators, alphas);
+
+        // Multiply by (1 - L^{(i)})(X), extended from its evaluations at 0 and 1
+        let mut row_disabling_factor =
+            Univariate::<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH_ZK>::default();
+        row_disabling_factor.extend_from(&[
+            P::ScalarField::one() - row_disabling_polynomial.eval_at_0,
+            P::ScalarField::one() - row_disabling_polynomial.eval_at_1,
+        ]);
+        result *= row_disabling_factor;
+
+        result
+    }
+
+    fn compute_virtual_contribution_inner<P: HonkCurve<TranscriptFieldType>, const SIZE: usize>(
+        polynomials: &AllEntities<Vec<P::ScalarField>>,
+        relation_parameters: &RelationParameters<P::ScalarField>,
+        gate_separators: &GateSeparatorPolynomial<P::ScalarField>,
+        alphas: &[P::ScalarField; crate::NUM_ALPHAS],
+    ) -> SumcheckRoundOutput<P::ScalarField, SIZE> {
         // Initialize univariate accumulator
         let mut univariate_accumulators = AllRelationAcc::<P::ScalarField>::default();
         let mut extended_edges = ProverUnivariates::<P::ScalarField>::default();

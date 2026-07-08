@@ -298,11 +298,11 @@ impl<P: HonkCurve<TranscriptFieldType>> SmallSubgroupIPAProver<P> {
         (lagrange_first_monomial, lagrange_last_monomial)
     }
 
-    // Getter to pass the witnesses to ShpleminiProver. Big sum polynomial is evaluated at 2 points (and is small)
-    pub(crate) fn into_witness_polynomials(self) -> [Polynomial<P::ScalarField>; 4] {
+    // Getter to pass the witnesses to ShpleminiProver: {G, A, Q} in commitment order. Code that
+    // needs a per-claim polynomial clones the grand sum polynomial A (it is small).
+    pub(crate) fn into_witness_polynomials(self) -> [Polynomial<P::ScalarField>; 3] {
         [
             self.concatenated_polynomial,
-            self.grand_sum_polynomial.to_owned(),
             self.grand_sum_polynomial,
             self.grand_sum_identity_quotient,
         ]

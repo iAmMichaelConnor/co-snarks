@@ -17,7 +17,11 @@ pub const NUM_ALPHAS: usize = decider::relations::NUM_SUBRELATIONS - 1;
 pub const CONST_PROOF_SIZE_LOG_N: usize = 25;
 // For ZK Flavors: the number of the commitments required by Libra and SmallSubgroupIPA.
 pub const NUM_LIBRA_COMMITMENTS: usize = 3;
+// Number of SmallSubgroupIPA evaluations transmitted on the wire: G(r), A(g*r), A(r), Q(r).
 pub const NUM_SMALL_IPA_EVALUATIONS: usize = 4;
+// Total number of SmallSubgroupIPA opening claims batched into Shplonk; includes the untransmitted
+// boundary opening A(1) = 0 (claim order: G(r), A(g*r), A(r), A(1), Q(r)).
+pub const NUM_SMALL_IPA_OPENING_CLAIMS: usize = NUM_SMALL_IPA_EVALUATIONS + 1;
 
 pub struct Utils {}
 

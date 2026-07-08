@@ -7,7 +7,7 @@ use crate::types::types::{CycleNode, CyclicPermutation};
 use ark_ec::CurveGroup;
 use ark_ff::One;
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
-use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUT_WIRE_INDEX};
+use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUT_WIRE_INDEX, TRACE_OFFSET};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::polynomials::entities::PrecomputedEntities;
@@ -70,8 +70,9 @@ pub fn create_prover_instance<
     // Construct and add to proving key the wire, selector and copy constraint polynomials
     populate_trace(id, &mut proving_key, &mut circuit, dyadic_circuit_size);
 
-    // First and last lagrange polynomials (in the full circuit size)
-    proving_key.polynomials.precomputed.lagrange_first_mut()[0] = C::ScalarField::one();
+    // First and last lagrange polynomials (lagrange_first at the first active row after the
+    // disabled region)
+    proving_key.polynomials.precomputed.lagrange_first_mut()[TRACE_OFFSET] = C::ScalarField::one();
     proving_key.polynomials.precomputed.lagrange_last_mut()[final_active_wire_idx] =
         C::ScalarField::one();
 
@@ -159,7 +160,7 @@ fn populate_trace<
         builder,
         copy_cycles,
         circuit_size,
-        &proving_key.active_region_data,
+        proving_key.final_active_wire_idx,
     );
 }
 
@@ -283,7 +284,6 @@ pub fn construct_lookup_polynomials<
             .get_table_polynomials_mut(),
         circuit,
         dyadic_circuit_size,
-        0,
     );
     construct_lookup_read_counts(
         driver,

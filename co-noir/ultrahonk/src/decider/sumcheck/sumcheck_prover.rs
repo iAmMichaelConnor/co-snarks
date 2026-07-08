@@ -9,7 +9,7 @@ use co_noir_common::transcript::{Transcript, TranscriptHasher};
 use crate::Utils;
 use crate::decider::decider_prover::Decider;
 use crate::decider::sumcheck::SumcheckOutput;
-use crate::decider::sumcheck::sumcheck_round_prover::{SumcheckProverRound, SumcheckRoundOutput};
+use crate::decider::sumcheck::sumcheck_round_prover::SumcheckProverRound;
 use crate::decider::sumcheck::zk_data::ZKSumcheckData;
 use crate::decider::types::{ClaimedEvaluations, GateSeparatorPolynomial, PartiallyEvaluatePolys};
 
@@ -236,7 +236,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             multivariate_d as usize,
         );
 
-        let mut multivariate_challenge = Vec::with_capacity(multivariate_d as usize);
+        let mut multivariate_challenge = Vec::with_capacity(virtual_log_n);
         let round_idx = 0;
 
         tracing::trace!("Sumcheck prove round {}", round_idx);
@@ -311,16 +311,44 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         }
         tracing::trace!("Completed {multivariate_d} rounds of sumcheck");
 
-        // Zero univariates are used to pad the proof to the fixed size CONST_PROOF_SIZE_LOG_N.
-        let zero_univariate =
-            SumcheckRoundOutput::<P::ScalarField, BATCHED_RELATION_PARTIAL_LENGTH_ZK>::default();
+        // Virtual rounds: the prover's multilinear polynomials in `multivariate_d` variables are
+        // extended by zero to polynomials in `virtual_log_n` variables. The round univariates are
+        // computed honestly: relation contribution at the single non-zero edge, scaled by the
+        // row-disabling factor (1 - L), plus the Libra univariate of the round. The row-disabling
+        // polynomial is circuit-size independent, so it keeps being updated through virtual rounds,
+        // and the Libra data covers all `virtual_log_n` rounds.
+        let mut virtual_gate_separator = GateSeparatorPolynomial::construct_virtual_separator(
+            &self.memory.gate_challenges,
+            &multivariate_challenge,
+        );
         for idx in multivariate_d as usize..virtual_log_n {
+            let mut round_univariate = SumcheckProverRound::compute_virtual_contribution_zk::<P>(
+                &partially_evaluated_polys,
+                &self.memory.relation_parameters,
+                &virtual_gate_separator,
+                &self.memory.alphas,
+                &row_disabling_polynomial,
+            );
+            let libra_round_univariate =
+                SumcheckProverRound::compute_libra_round_univariate(zk_sumcheck_data, idx);
+            round_univariate += libra_round_univariate;
+
             transcript.send_fr_iter_to_verifier::<P, _>(
                 format!("Sumcheck:univariate_{idx}"),
-                &zero_univariate.evaluations,
+                &round_univariate.evaluations,
             );
             let round_challenge = transcript.get_challenge::<P>(format!("Sumcheck:u_{idx}"));
             multivariate_challenge.push(round_challenge);
+
+            // Fold the partially evaluated polynomials for zero-extension: PE[0] *= (1 - u_k)
+            for poly in partially_evaluated_polys.iter_mut() {
+                if !poly.is_empty() {
+                    poly[0] *= P::ScalarField::one() - round_challenge;
+                }
+            }
+            zk_sumcheck_data.update_zk_sumcheck_data(round_challenge, idx);
+            row_disabling_polynomial.update_evaluations(round_challenge, idx);
+            virtual_gate_separator.partially_evaluate(round_challenge);
         }
 
         // Claimed evaluations of Prover polynomials are extracted and added to the transcript. When Flavor has ZK, the
@@ -331,15 +359,14 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             .gemini_masking_poly
             .as_ref()
             .expect("Gemini masking polynomial must be prepared in Oink")
-            .evaluate_mle(&multivariate_challenge[0..multivariate_d as usize]);
+            .evaluate_mle(&multivariate_challenge);
         Self::add_evals_to_transcript(
             transcript,
             &multivariate_evaluations,
             Some(gemini_masking_evaluation),
         );
 
-        // The evaluations of Libra uninvariates at \f$ g_0(u_0), \ldots, g_{d-1} (u_{d-1}) \f$ are added to the
-        // transcript.
+        // The claimed Libra evaluation covers all rounds (real + virtual).
         let mut libra_evaluation = zk_sumcheck_data.constant_term;
         for libra_eval in zk_sumcheck_data.libra_evaluations.iter() {
             libra_evaluation += libra_eval;

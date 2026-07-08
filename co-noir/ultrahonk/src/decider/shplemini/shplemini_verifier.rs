@@ -1,6 +1,7 @@
 use super::types::{PolyF, PolyG, PolyGShift};
 use crate::{
     CONST_PROOF_SIZE_LOG_N, NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_EVALUATIONS,
+    NUM_SMALL_IPA_OPENING_CLAIMS,
     decider::{
         decider_verifier::DeciderVerifier,
         types::{ClaimedEvaluations, VerifierCommitments},
@@ -115,7 +116,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         transcript: &mut Transcript<TranscriptFieldType, H>,
         zk_data: ShpleminiZkData<P>,
         consistency_checked: &mut bool,
-        padding_indicator_array: &[P::ScalarField],
         // const std::vector<RefVector<Commitment>>& concatenation_group_commitments = {},
         // RefSpan<P::ScalarField> concatenated_evaluations = {}
     ) -> HonkVerifyResult<ShpleminiVerifierOpeningClaim<P>> {
@@ -258,7 +258,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         // for i = 0, ..., n-1.
         // In the case of interleaving, we compute A₀(r) as A₀₊(r) + P₊(r^s).
         let gemini_fold_pos_evaluations = Self::compute_fold_pos_evaluations(
-            padding_indicator_array,
             &batched_evaluation,
             &multivariate_challenge,
             &gemini_eval_challenge_powers,
@@ -270,7 +269,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         // contributions from Aᵢ(−r²ⁱ) for i=1, … , n−1 to the constant term accumulator, add corresponding scalars for
         // the batch mul
         Self::batch_gemini_claims_received_from_prover(
-            padding_indicator_array,
             &fold_commitments,
             &gemini_fold_neg_evaluations,
             &gemini_fold_pos_evaluations,
@@ -434,9 +432,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
      * @param scalars Output vector where the computed scalars will be stored.
      * @param constant_term_accumulator The accumulator for the summands of the constant term.
      */
-    #[expect(clippy::too_many_arguments)]
     fn batch_gemini_claims_received_from_prover(
-        padding_indicator_array: &[P::ScalarField],
         fold_commitments: &[P::Affine],
         gemini_neg_evaluations: &[P::ScalarField],
         gemini_pos_evaluations: &[P::ScalarField],
@@ -470,7 +466,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             // Place the scaling factor to the 'scalars' vector
             opening_claim
                 .scalars
-                .push(-padding_indicator_array[j] * (scaling_factor_neg + scaling_factor_pos));
+                .push(-(scaling_factor_neg + scaling_factor_pos));
             // Move com(Aᵢ) to the 'commitments' vector
             opening_claim.commitments.push(fold_commitments[j - 1]);
         }
@@ -500,7 +496,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
      * @return Evaluation \f$ A_0(r) \f$.
      */
     pub fn compute_fold_pos_evaluations(
-        padding_indicator_array: &[P::ScalarField],
         batched_evaluation: &P::ScalarField,
         evaluation_point: &[P::ScalarField], // CONST_PROOF_SIZE
         challenge_powers: &[P::ScalarField], // r_squares CONST_PROOF_SIZE_LOG_N
@@ -514,8 +509,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let mut eval_pos_prev = *batched_evaluation;
 
         let mut fold_pos_evaluations = Vec::with_capacity(virtual_log_n);
-        // Either a computed eval of A_i at r^{2^i}, or 0
-        let mut value_to_emplace;
 
         // Add the contribution of P-((-r)ˢ) to get A_0(-r), which is 0 if there are no interleaved polynomials
         evals[0] += p_neg;
@@ -536,14 +529,11 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 .inverse()
                 .expect("Non-zero denominator");
 
-            // If current index is bigger than log_n, we propagate `batched_evaluation` to the next
-            // round. Otherwise, current `eval_pos` A₍ₗ₋₁₎(−r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2.
-            eval_pos_prev = padding_indicator_array[l - 1] * eval_pos
-                + (P::ScalarField::one() - padding_indicator_array[l - 1]) * eval_pos_prev;
-            // If current index is bigger than log_n, we emplace 0, which is later multiplied against
-            // Commitment::one().
-            value_to_emplace = padding_indicator_array[l - 1] * eval_pos_prev;
-            fold_pos_evaluations.push(value_to_emplace);
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
+            eval_pos_prev = eval_pos;
+            fold_pos_evaluations.push(eval_pos_prev);
         }
 
         fold_pos_evaluations.reverse();
@@ -586,9 +576,12 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             commitments.push(commitment);
         }
 
-        // Compute corresponding scalars and the correction to the constant term
-        let mut denominators = [P::ScalarField::zero(); NUM_SMALL_IPA_EVALUATIONS];
-        let mut batching_scalars = [P::ScalarField::zero(); NUM_SMALL_IPA_EVALUATIONS];
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
+        let mut batching_scalars = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
         let subgroup_generator = P::get_subgroup_generator();
 
         // Compute Shplonk denominators and invert them
@@ -600,22 +593,35 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             .inverse()
             .expect("non-zero");
         denominators[2] = denominators[0];
-        denominators[3] = denominators[0];
+        denominators[3] = (*shplonk_evaluation_challenge - P::ScalarField::one())
+            .inverse()
+            .expect("non-zero");
+        denominators[4] = denominators[0];
 
-        // Compute the scalars to be multiplied against the commitments [libra_concatenated], [grand_sum], [grand_sum], and
+        // The evaluations of the five claims; slot 3 is the fixed boundary value A(1) = 0.
+        let claim_evaluations = [
+            libra_evaluations[0],
+            libra_evaluations[1],
+            libra_evaluations[2],
+            P::ScalarField::zero(),
+            libra_evaluations[3],
+        ];
+
+        // Compute the scalars to be multiplied against the commitments [libra_concatenated], [grand_sum], and
         // [libra_quotient]
-        for idx in 0..NUM_SMALL_IPA_EVALUATIONS {
+        for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor =
                 denominators[idx] * shplonk_batching_challenge_powers[2 * virtual_log_n + idx];
             batching_scalars[idx] = -scaling_factor;
-            *constant_term_accumulator += scaling_factor * libra_evaluations[idx];
+            *constant_term_accumulator += scaling_factor * claim_evaluations[idx];
         }
 
-        // To save a scalar mul, add the sum of the batching scalars corresponding to the big sum evaluations
-        scalars.reserve(NUM_SMALL_IPA_EVALUATIONS - 1);
+        // To save scalar muls, group the batching scalars of the claims backed by the grand sum
+        // commitment (A(g*r), A(r), and A(1))
+        scalars.reserve(NUM_LIBRA_COMMITMENTS);
         scalars.push(batching_scalars[0]);
-        scalars.push(batching_scalars[1] + batching_scalars[2]);
-        scalars.push(batching_scalars[3]);
+        scalars.push(batching_scalars[1] + batching_scalars[2] + batching_scalars[3]);
+        scalars.push(batching_scalars[4]);
         Ok(())
     }
 
@@ -753,7 +759,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
 
         // Shplonk evaluation and batching challenges are re-used in SmallSubgroupIPA.
         if has_zk == ZeroKnowledge::Yes {
-            num_powers += NUM_SMALL_IPA_EVALUATIONS;
+            num_powers += NUM_SMALL_IPA_OPENING_CLAIMS;
         }
 
         // if committed_sumcheck {

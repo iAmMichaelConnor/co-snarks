@@ -21,14 +21,11 @@ use super::types::ProverMemory;
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
-    constants::PERMUTATION_ARGUMENT_VALUE_SEPARATOR,
+    constants::{NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR, TRACE_OFFSET},
     crs::ProverCrs,
     honk_curve::HonkCurve,
     honk_proof::{HonkProofError, HonkProofResult, TranscriptFieldType},
-    keys::{
-        proving_key::ProvingKey, types::ActiveRegionData,
-        verification_key::VerifyingKeyBarretenberg,
-    },
+    keys::{proving_key::ProvingKey, verification_key::VerifyingKeyBarretenberg},
     mpc::NoirUltraHonkProver,
     polynomials::{
         polynomial::{NUM_MASKED_ROWS, Polynomial},
@@ -83,12 +80,13 @@ impl<
     ) -> HonkProofResult<()> {
         tracing::trace!("mask polynomial");
 
-        let virtual_size = polynomial.coefficients.len();
+        // Write random ZK masking values at positions {1, 2, 3} (the disabled head region after
+        // the zero row).
         assert!(
-            virtual_size >= NUM_MASKED_ROWS as usize,
+            polynomial.coefficients.len() >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
             "Insufficient space for masking"
         );
-        for i in (virtual_size - NUM_MASKED_ROWS as usize..virtual_size).rev() {
+        for i in NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize {
             polynomial.coefficients[i] = T::rand(self.net, self.state)?;
         }
 
@@ -257,6 +255,13 @@ impl<
         )
         .enumerate()
         {
+            // Skip the disabled head region: for ZK, the read tags there hold masking randomness,
+            // which must not contribute to the inverses (the head rows of lookup_inverses receive
+            // their own masking when the polynomial is committed).
+            if i < TRACE_OFFSET {
+                q_lookup_mul_read_tag.push(T::ArithmeticShare::default());
+                continue;
+            }
             // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
             // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
             //     continue;
@@ -350,25 +355,20 @@ impl<
         pub2: &Polynomial<C::ScalarField>,
         beta: &C::ScalarField,
         gamma: &C::ScalarField,
+        start_idx: usize,
         output_len: usize,
-        active_region_data: &ActiveRegionData,
     ) -> HonkProofResult<Vec<T::ArithmeticShare>> {
-        debug_assert!(shared1.len() >= output_len);
-        debug_assert!(shared2.len() >= output_len);
-        debug_assert!(pub1.len() >= output_len);
-        debug_assert!(pub2.len() >= output_len);
-        let has_active_ranges = active_region_data.size() > 0;
+        debug_assert!(shared1.len() >= start_idx + output_len);
+        debug_assert!(shared2.len() >= start_idx + output_len);
+        debug_assert!(pub1.len() >= start_idx + output_len);
+        debug_assert!(pub2.len() >= start_idx + output_len);
 
         // We drop the last element since it is not needed for the grand product
         let mut mul1 = Vec::with_capacity(output_len);
         let mut mul2 = Vec::with_capacity(output_len);
 
         for i in 0..output_len {
-            let idx = if has_active_ranges {
-                active_region_data.get_idx(i)
-            } else {
-                i
-            };
+            let idx = i + start_idx;
             let id = state.id();
             let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
             let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
@@ -382,19 +382,16 @@ impl<
     fn compute_grand_product(&mut self, proving_key: &ProvingKey<T, C>) -> HonkProofResult<()> {
         tracing::trace!("compute grand product");
 
-        let has_active_ranges = proving_key.active_region_data.size() > 0;
-
         // Barretenberg uses multithreading here
 
         // Set the domain over which the grand product must be computed. This may be less than the dyadic circuit size, e.g
         // the permutation grand product does not need to be computed beyond the index of the last active wire
         let domain_size = proving_key.final_active_wire_idx + 1;
 
-        let active_domain_size = if has_active_ranges {
-            proving_key.active_region_data.size()
-        } else {
-            domain_size
-        };
+        // The grand product starts after the disabled/reserved head rows (where lagrange_first
+        // lives), preserving the ZK masking values at rows {1, 2, 3}.
+        let gp_start = TRACE_OFFSET;
+        let active_size = domain_size - gp_start;
 
         // In Barretenberg circuit size is taken from the q_c polynomial
         // Step (1)
@@ -410,8 +407,8 @@ impl<
             proving_key.polynomials.precomputed.sigma_2(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
+            active_size - 1,
         )?;
         let denom2 = Self::batched_grand_product_num_denom(
             self.net,
@@ -422,8 +419,8 @@ impl<
             proving_key.polynomials.precomputed.sigma_4(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
+            active_size - 1,
         )?;
         let num1 = Self::batched_grand_product_num_denom(
             self.net,
@@ -434,8 +431,8 @@ impl<
             proving_key.polynomials.precomputed.id_2(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
+            active_size - 1,
         )?;
         let num2 = Self::batched_grand_product_num_denom(
             self.net,
@@ -446,8 +443,8 @@ impl<
             proving_key.polynomials.precomputed.id_4(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
+            active_size - 1,
         )?;
 
         // TACEO TODO could batch here as well
@@ -469,38 +466,16 @@ impl<
         // Step (3) Compute z_perm[i] = numerator[i] / denominator[i]
         let mul = T::mul_many(&numerator, &denominator, self.net, self.state)?;
 
+        // z_perm remains 0 at rows 0..=gp_start (row gp_start hosts lagrange_first, where the
+        // permutation relation reads z_perm + lagrange_first); for ZK, the masking values at rows
+        // {1, 2, 3} are added later when committing.
         self.memory.z_perm.resize(
             proving_key.circuit_size as usize,
             T::ArithmeticShare::default(),
         );
-        self.memory.z_perm[1] = T::promote_to_trivial_share(self.state.id(), C::ScalarField::one());
 
-        // Compute grand product values corresponding only to the active regions of the trace
         for (i, mul) in mul.into_iter().enumerate() {
-            let idx = if has_active_ranges {
-                proving_key.active_region_data.get_idx(i + 1)
-            } else {
-                i + 1
-            };
-            self.memory.z_perm[idx] = mul
-        }
-
-        // Final step: If active/inactive regions have been specified, the value of the grand product in the inactive
-        // regions have not yet been set. The polynomial takes an already computed constant value across each inactive
-        // region (since no copy constraints are present there) equal to the value of the grand product at the first index
-        // of the subsequent active region.
-        if has_active_ranges {
-            for i in 0..domain_size {
-                for j in 0..proving_key.active_region_data.num_ranges() - 1 {
-                    let previous_range_end = proving_key.active_region_data.get_range(j).1;
-                    let next_range_start = proving_key.active_region_data.get_range(j + 1).0;
-                    // Set the value of the polynomial if the index falls in an inactive region
-                    if i >= previous_range_end && i < next_range_start {
-                        self.memory.z_perm[i] = self.memory.z_perm[next_range_start];
-                        break;
-                    }
-                }
-            }
+            self.memory.z_perm[gp_start + i + 1] = mul
         }
 
         Ok(())

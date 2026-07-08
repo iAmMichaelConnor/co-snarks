@@ -71,8 +71,9 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         if self.has_zk == ZeroKnowledge::Yes {
             let log_subgroup_size = Utils::get_msb64(P::SUBGROUP_SIZE as u64);
             let commitment_key = &crs.monomials[..1 << (log_subgroup_size + 1)];
+            // The Libra masking data covers all `virtual_log_n` rounds (real + virtual)
             let mut zk_sumcheck_data: ZKSumcheckData<P> = ZKSumcheckData::<P>::new::<H, _>(
-                Utils::get_msb64(circuit_size as u64) as usize,
+                virtual_log_n,
                 transcript,
                 commitment_key,
                 &mut self.rng,

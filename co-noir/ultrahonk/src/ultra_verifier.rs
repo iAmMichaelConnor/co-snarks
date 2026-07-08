@@ -43,14 +43,6 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         };
         memory.gate_challenges = Self::generate_gate_challenges(&mut transcript, virtual_log_n);
         let decider_verifier = DeciderVerifier::new(memory);
-        decider_verifier.verify::<P>(
-            log_circuit_size
-                .try_into()
-                .expect("log circuit size fits in u32"),
-            &crs,
-            transcript,
-            has_zk,
-            virtual_log_n,
-        )
+        decider_verifier.verify::<P>(&crs, transcript, has_zk, virtual_log_n)
     }
 }

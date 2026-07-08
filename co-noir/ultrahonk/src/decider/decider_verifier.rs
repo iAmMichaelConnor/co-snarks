@@ -8,7 +8,7 @@ use co_noir_common::constants::{
 };
 
 use ark_ec::{AffineRepr, pairing::Pairing};
-use ark_ff::{One, Zero};
+use ark_ff::One;
 use co_noir_common::{
     honk_curve::HonkCurve,
     honk_proof::TranscriptFieldType,
@@ -65,7 +65,6 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
 
     pub(crate) fn verify<P: Pairing<G1 = C, G1Affine = C::Affine>>(
         mut self,
-        log_circuit_size: u32,
         crs: &P::G2Affine,
         mut transcript: Transcript<TranscriptFieldType, H>,
         has_zk: ZeroKnowledge,
@@ -73,17 +72,6 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     ) -> HonkVerifyResult<bool> {
         tracing::trace!("Decider verification");
 
-        let mut padding_indicator_array = vec![C::ScalarField::one(); virtual_log_n];
-
-        if has_zk == ZeroKnowledge::Yes {
-            for (idx, value) in padding_indicator_array.iter_mut().enumerate() {
-                *value = if idx < log_circuit_size as usize {
-                    C::ScalarField::one()
-                } else {
-                    C::ScalarField::zero()
-                };
-            }
-        }
         let (sumcheck_output, libra_commitments) = if has_zk == ZeroKnowledge::Yes {
             let mut libra_commitments = Vec::with_capacity(NUM_LIBRA_COMMITMENTS);
 
@@ -95,7 +83,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             let sumcheck_output = self.sumcheck_verify::<BATCHED_RELATION_PARTIAL_LENGTH_ZK>(
                 &mut transcript,
                 has_zk,
-                &padding_indicator_array,
+                virtual_log_n,
             )?;
             if !sumcheck_output.verified {
                 tracing::trace!("Sumcheck failed");
@@ -116,7 +104,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             let sumcheck_output = self.sumcheck_verify::<BATCHED_RELATION_PARTIAL_LENGTH>(
                 &mut transcript,
                 has_zk,
-                &padding_indicator_array,
+                virtual_log_n,
             )?;
             if !sumcheck_output.verified {
                 tracing::trace!("Sumcheck failed");
@@ -136,7 +124,6 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 gemini_masking_evaluation: sumcheck_output.claimed_gemini_masking_evaluation,
             },
             &mut consistency_checked,
-            &padding_indicator_array,
         )?;
 
         let pairing_points = Self::reduce_verify_shplemini(&mut opening_claim, transcript)?;

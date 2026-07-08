@@ -1,5 +1,5 @@
 use crate::{
-    NUM_SMALL_IPA_EVALUATIONS, Utils,
+    NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_OPENING_CLAIMS, Utils,
     decider::{
         decider_prover::Decider,
         decider_verifier::DeciderVerifier,
@@ -18,7 +18,6 @@ use co_noir_common::{
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
 };
-use itertools::izip;
 
 impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>> Decider<P, H> {
     fn get_f_polynomials(
@@ -149,13 +148,12 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let mut a_0 = batched_unshifted.to_owned();
         a_0 += batched_to_be_shifted.shifted().as_ref();
         // Construct the d-1 Gemini foldings of A₀(X)
-        let fold_polynomials =
-            Self::compute_fold_polynomials(log_n, multilinear_challenge, a_0, has_zk);
+        let fold_polynomials = Self::compute_fold_polynomials(log_n, multilinear_challenge, a_0);
 
-        // If virtual_log_n >= log_n, pad the fold commitments with dummy group elements [1]_1.
+        // Send commitments to all virtual_log_n - 1 fold polynomials (the virtual-round folds are
+        // honestly committed constants).
         for (l, f_poly) in fold_polynomials.iter().take(virtual_log_n - 1).enumerate() {
             let res = Utils::commit(&f_poly.coefficients, commitment_key)?;
-            // When has_zk is true, we are sending commitments to 0. Seems to work, but maybe brittle.
             transcript.send_point_to_verifier::<P>(format!("Gemini:FOLD_{}", l + 1), res.into());
         }
 
@@ -199,7 +197,6 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         log_n: usize,
         multilinear_challenge: &[P::ScalarField],
         a_0: Polynomial<P::ScalarField>,
-        has_zk: ZeroKnowledge,
     ) -> Vec<Polynomial<P::ScalarField>> {
         tracing::trace!("Compute fold polynomials");
         // Note: bb uses multithreading here
@@ -232,18 +229,17 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             a_l = a_l_fold.coefficients;
         }
 
-        // Perform virtual rounds.
-        // After the first `log_n - 1` rounds, the prover's `fold` univariates stabilize. With ZK, the verifier multiplies
-        // the evaluations by 0, otherwise, when `virtual_log_n > log_n`, the prover honestly computes and sends the
-        // constant folds.
+        // Virtual rounds (indices log_n .. virtual_log_n - 1).
+        // After real folding, the fold polynomials are constant: FOLD_{log_n} is the evaluation of
+        // the batched polynomial at (u_0, ..., u_{log_n - 1}), and each subsequent virtual fold is
+        // multiplied by (1 - u_k) (zero-extension semantics). The prover honestly computes and
+        // commits to these constants; since a constant polynomial satisfies (f(X) - f(x))/(X - x) = 0,
+        // they contribute nothing to the Shplonk quotient.
         let last = &fold_polynomials[fold_polynomials.len() - 1];
         let u_last = multilinear_challenge[log_n - 1];
         let final_eval = last[0] + u_last * (last[1] - last[0]);
         let mut const_fold = Polynomial::new_zero(1);
-        // Temporary fix: when we're running a zk proof, the verifier uses a `padding_indicator_array`. So the evals in
-        // rounds past `log_n - 1` will be ignored. Hence the prover also needs to ignore them, otherwise Shplonk will fail.
-        const_fold[0] =
-            final_eval * P::ScalarField::from(if has_zk == ZeroKnowledge::Yes { 0 } else { 1 });
+        const_fold[0] = final_eval;
         fold_polynomials.push(const_fold);
 
         // FOLD_{log_n+1}, ..., FOLD_{d_v-1}
@@ -255,9 +251,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         {
             tail *= P::ScalarField::one() - challenge; // multiply by (1 - u_k)
             let mut next_const = Polynomial::new_zero(1);
-            next_const[0] = final_eval
-                * tail
-                * P::ScalarField::from(if has_zk == ZeroKnowledge::Yes { 0 } else { 1 });
+            next_const[0] = final_eval * tail;
             fold_polynomials.push(next_const);
         }
 
@@ -443,7 +437,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         circuit_size: u32,
         crs: &ProverCrs<P>,
         sumcheck_output: SumcheckOutput<P::ScalarField>,
-        libra_polynomials: Option<[Polynomial<P::ScalarField>; NUM_SMALL_IPA_EVALUATIONS]>,
+        libra_polynomials: Option<[Polynomial<P::ScalarField>; NUM_LIBRA_COMMITMENTS]>,
     ) -> HonkProofResult<ShpleminiOpeningClaim<P::ScalarField>> {
         let has_zk = self.has_zk;
 
@@ -672,37 +666,52 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
      * verifier, and populate a vector of the opening claims.
      *
      */
+    /// Build the five SmallSubgroupIPA opening claims, in transcript order:
+    /// G(r), A(g*r), A(r), A(1) = 0 (untransmitted boundary opening), Q(r).
+    /// `libra_polynomials` holds [G, A, Q] in commitment order.
     fn compute_libra_opening_claims(
         gemini_r: P::ScalarField,
-        libra_polynomials: [Polynomial<P::ScalarField>; NUM_SMALL_IPA_EVALUATIONS],
+        libra_polynomials: [Polynomial<P::ScalarField>; NUM_LIBRA_COMMITMENTS],
         transcript: &mut Transcript<TranscriptFieldType, H>,
     ) -> Vec<ShpleminiOpeningClaim<P::ScalarField>> {
         tracing::trace!("Compute libra opening claims");
-        let mut libra_opening_claims = Vec::with_capacity(NUM_SMALL_IPA_EVALUATIONS);
+        let mut libra_opening_claims = Vec::with_capacity(NUM_SMALL_IPA_OPENING_CLAIMS);
 
         let subgroup_generator = P::get_subgroup_generator();
+        let [concatenated, grand_sum, quotient] = libra_polynomials;
 
-        let libra_eval_labels = [
-            "Libra:concatenation_eval",
-            "Libra:shifted_grand_sum_eval",
-            "Libra:grand_sum_eval",
-            "Libra:quotient_eval",
+        // (label, polynomial, evaluation point, transmitted)
+        let claim_data = [
+            ("Libra:concatenation_eval", concatenated, gemini_r, true),
+            (
+                "Libra:shifted_grand_sum_eval",
+                grand_sum.clone(),
+                gemini_r * subgroup_generator,
+                true,
+            ),
+            ("Libra:grand_sum_eval", grand_sum.clone(), gemini_r, true),
+            // The boundary opening A(1) = 0 is not transmitted: the verifier hardcodes the
+            // evaluation to zero and it is enforced by the batched PCS opening.
+            ("", grand_sum, P::ScalarField::one(), false),
+            ("Libra:quotient_eval", quotient, gemini_r, true),
         ];
-        let evaluation_points = [gemini_r, gemini_r * subgroup_generator, gemini_r, gemini_r];
 
-        for (label, poly, point) in izip!(libra_eval_labels, libra_polynomials, evaluation_points) {
-            let eval = poly.eval_poly(point);
-            let new_claim = ShpleminiOpeningClaim {
+        for (label, poly, point, transmitted) in claim_data {
+            let evaluation = if transmitted {
+                let eval = poly.eval_poly(point);
+                transcript.send_fr_to_verifier::<P>(label.to_string(), eval);
+                eval
+            } else {
+                P::ScalarField::zero()
+            };
+            libra_opening_claims.push(ShpleminiOpeningClaim {
                 polynomial: poly,
                 opening_pair: OpeningPair {
                     challenge: point,
-                    evaluation: eval,
+                    evaluation,
                 },
                 gemini_fold: false,
-            };
-            transcript
-                .send_fr_to_verifier::<P>(label.to_string(), new_claim.opening_pair.evaluation);
-            libra_opening_claims.push(new_claim);
+            });
         }
 
         libra_opening_claims

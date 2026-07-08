@@ -6,8 +6,9 @@ use crate::{
     CONST_PROOF_SIZE_LOG_N, co_decider::co_decider_prover::CoDecider,
     co_decider::types::ProverMemory, co_oink::co_oink_prover::CoOink,
 };
-use co_noir_common::constants::MAX_PARTIAL_RELATION_LENGTH;
+use co_noir_common::constants::{MAX_PARTIAL_RELATION_LENGTH, TRACE_OFFSET};
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
+use co_noir_common::polynomials::polynomial::NUM_MASKED_ROWS;
 use co_noir_common::{
     constants::PAIRING_POINT_ACCUMULATOR_SIZE,
     crs::ProverCrs,
@@ -122,10 +123,15 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         verifying_key: &VerifyingKeyBarretenberg<C>,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
         // init MPC protocol
+        let virtual_log_n = if H::USE_PADDING {
+            CONST_PROOF_SIZE_LOG_N
+        } else {
+            proving_key.circuit_size.next_power_of_two().ilog2() as usize
+        };
         let num_pairs = if num_parties == 3 {
             0 // Precomputation is done on the fly since it requires no communication
         } else {
-            ultrahonk_num_randomness(&proving_key, has_zk)
+            ultrahonk_num_randomness(&proving_key, has_zk, virtual_log_n)
         };
         let preprocessing = ShamirPreprocessing::new(num_parties, threshold, num_pairs, net)?;
         let mut state = ShamirState::from(preprocessing);
@@ -160,21 +166,23 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     }
 }
 
-fn ultrahonk_num_randomness<C, T>(proving_key: &ProvingKey<T, C>, has_zk: ZeroKnowledge) -> usize
+fn ultrahonk_num_randomness<C, T>(
+    proving_key: &ProvingKey<T, C>,
+    has_zk: ZeroKnowledge,
+    virtual_log_n: usize,
+) -> usize
 where
     C: HonkCurve<TranscriptFieldType>,
     T: NoirUltraHonkProver<C>,
 {
     // TODO because a lot is skipped in sumcheck prove, we generate a lot more than we really need
-    let active_domain_size_mul = if proving_key.active_region_data.size() > 0 {
-        proving_key.active_region_data.size() - 1
-    } else {
-        proving_key.final_active_wire_idx
-    };
+    // The grand product is computed over the contiguous rows [TRACE_OFFSET, final_active_wire_idx),
+    // i.e. final_active_wire_idx - TRACE_OFFSET rows.
+    let grand_product_num_rows = proving_key.final_active_wire_idx - TRACE_OFFSET;
 
     let n = proving_key.circuit_size as usize;
     let num_pairs_oink_prove = CRAND_PAIRS_FACTOR_N * n
-        + CRAND_PAIRS_FACTOR_DOMAIN_SIZE_MINUS_ONE * active_domain_size_mul
+        + CRAND_PAIRS_FACTOR_DOMAIN_SIZE_MINUS_ONE * grand_product_num_rows
         + CRAND_PAIRS_CONST;
     // log2(n) * ((n >>= 1) / 2) == n - 1
     let num_pairs_sumcheck_prove = CRAND_PAIRS_FACTOR * MAX_PARTIAL_RELATION_LENGTH * (n - 1);
@@ -182,21 +190,32 @@ where
     let num_pairs_sumcheck_disabled_contributions = if has_zk == ZeroKnowledge::No {
         0
     } else {
-        // compute_disabled_contribution: log2(n) rounds, each once relation, plus additional in round 0
+        // compute_disabled_contribution: 2 edges in round 0, then 1 edge in each of the remaining
+        // log2(n) - 1 real rounds => log2(n) + 1 edges in total
         (n.ilog(2) as usize + 1) * CRAND_PAIRS_FACTOR * MAX_PARTIAL_RELATION_LENGTH
+    };
+
+    // For ZK, each virtual round (virtual_log_n - log2(n) of them) computes an honest round
+    // univariate: one relation evaluation at a single edge.
+    let num_pairs_sumcheck_virtual_rounds = if has_zk == ZeroKnowledge::No {
+        0
+    } else {
+        (virtual_log_n - n.ilog2() as usize) * CRAND_PAIRS_FACTOR * MAX_PARTIAL_RELATION_LENGTH
     };
 
     let num_zk_randomness = if has_zk == ZeroKnowledge::No {
         0
     } else {
-        n // compute_batched_polys
-        + 1 // ZKData::new
-        + n.ilog2() as usize * C::LIBRA_UNIVARIATES_LENGTH // generate_libra_univariates
-        + 2 // compute_concatenated_libra_polynomial
-        + 3 // compute_grand_sum_polynomial
+        n // commit_to_masking_poly (Gemini masking polynomial, oink)
+        + 8 * NUM_MASKED_ROWS as usize // mask_polynomial: w_l/w_r/w_o, read_counts/read_tags/w_4, lookup_inverses/z_perm
+        + 1 // ZKSumcheckData constant_term
+        + virtual_log_n * C::LIBRA_UNIVARIATES_LENGTH // generate_libra_univariates (all virtual rounds)
+        + 2 // compute_concatenated_libra_polynomial masking
+        + 3 // compute_grand_sum_polynomial masking
     };
     num_pairs_oink_prove
         + num_pairs_sumcheck_prove
         + num_pairs_sumcheck_disabled_contributions
+        + num_pairs_sumcheck_virtual_rounds
         + num_zk_randomness
 }
