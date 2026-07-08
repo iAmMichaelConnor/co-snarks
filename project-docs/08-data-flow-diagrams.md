@@ -36,8 +36,8 @@ it exists (ch. 02) plus the Aztec pattern (ch. 04).*
   the finished standard proof.
 
 Trust: any SINGLE node can be fully compromised (read all its data) without
-revealing anything. Two colluding nodes break privacy. Nobody can forge a
-false proof (soundness comes from the SNARK, not the MPC).
+revealing anything. Two colluding nodes break privacy. No false proof can
+verify (soundness comes from the SNARK, not the MPC).
 
 ## D2 — Single-owner proof delegation, end to end (the "split-witness" flow)
 

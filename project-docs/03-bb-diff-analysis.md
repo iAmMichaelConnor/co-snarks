@@ -152,40 +152,40 @@ security classification and what a re-implementation MUST preserve:*
 | **SSIPA A(1)=0 `58bf73a289`** | **SOUNDNESS FIX** | **Verifier — claim must ride the Shplemini batch** |
 | Relation/entity reorder `c075fc182e` | Engineering (+350MiB memory regression) | Consistency only |
 | CONST_PROOF_SIZE_LOG_N 28→25 `1f144a3040` | Engineering (25 = SRS max; cuts recursion gates) | Consistency only |
-| **ROM/RAM index pinning `1f7ed2ea79`** | **SOUNDNESS FIX (field-wrap attack)** | **Prover-side circuit construction** |
+| **ROM/RAM index pinning `1f7ed2ea79`** | **SOUNDNESS FIX (field-wrap case)** | **Prover-side circuit construction** |
 | Recursion size assert `669e92b896` | Hardening (DX) | Constraint construction |
 | Reject log_circuit_size=0 `1391c49546` | Hardening (OOB write in verifier) | Verifier |
-| Graceful verifier failures `5f09c55a57` | Hardening (AUDIT-driven, findings #2479–#2513) | Verifier + deserialization |
+| Graceful verifier failures `5f09c55a57` | Hardening (from bb's internal review process) | Verifier + deserialization |
 
-**The three that carry attack narratives:**
+**The three with the clearest soundness rationale:**
 
 1. **SSIPA `A(1)=0` (PR #44, private security repo).** Without the fifth
    opening, the SSIPA algebraic identity at random r has a one-dimensional
    kernel: at X=1 the boundary condition and the j=0 recurrence collapse
    into a single linear equation, so a homogeneous perturbation
-   (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1), δ_s matching) satisfies the identity and
-   **forges the claimed Libra inner-product s' = s + δ_s** — breaking
-   ZK-sumcheck soundness in every ZK flavor. The fix adds an untransmitted
-   claim A(1)=0 (value hardcoded to 0 on BOTH sides, never read from the
-   transcript) that supplies the missing rank-1 constraint.
+   (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1), δ_s matching) satisfies the identity while
+   **producing an invalid claimed Libra inner-product s' = s + δ_s** —
+   breaking ZK-sumcheck soundness in every ZK flavor. The fix adds an
+   untransmitted claim A(1)=0 (value hardcoded to 0 on BOTH sides, never
+   read from the transcript) that supplies the missing rank-1 constraint.
    ⚠ **Port requirement**: the verifier must reconstruct the claim with
    the FIXED value 0 and route it through the Shplemini/Shplonk batched
    opening — bb's own README warns the local `check_consistency` identity
-   check alone still accepts the forgery. bb ships a
-   malicious-prover regression test (shplemini.test.cpp) — port it.
+   check alone still accepts this invalid case. bb ships a regression test
+   for exactly this case (shplemini.test.cpp) — port it.
 
 2. **ROM/RAM first-sorted-index pinning (PR #29, private security repo).**
    The index-delta subrelation (Δ²+Δ=0) has roots {0,−1} over the field,
    and the first sorted index was an unconstrained free witness
-   (`add_variable(FF(0))`) — so a malicious prover could start the sorted
-   chain at p−1 (≡ −1), wrap to 0 legally, and **read/write forged values
-   at phantom index p−1**. Fix: bind the first sorted index to
-   `zero_idx()` (backed by a real `fix_witness` gate w·1+0=0) and pin the
-   chain end; all indices become symbolically bounded in [0, N−1] without
-   leaning on Schwartz–Zippel. ⚠ **Port requirement** (phase-2 item 2.6
-   builder work): copy-constrain to a genuinely-constrained zero witness —
-   a fresh `add_variable(0)` reopens the attack. Port bb's
-   rom_ram.test.cpp field-wrap regression test.
+   (`add_variable(FF(0))`) — so the sorted chain could start at p−1
+   (≡ −1), wrap to 0 legally, and **read/write unconstrained values at
+   phantom index p−1**. Fix: bind the first sorted index to `zero_idx()`
+   (backed by a real `fix_witness` gate w·1+0=0) and pin the chain end;
+   all indices become symbolically bounded in [0, N−1] without leaning on
+   Schwartz–Zippel. ⚠ **Port requirement** (phase-2 item 2.6 builder
+   work): copy-constrain to a genuinely-constrained zero witness — a
+   fresh `add_variable(0)` reopens the gap. Port bb's rom_ram.test.cpp
+   field-wrap regression test.
 
 3. **z_perm init subrelation is a dependency of the trace move.** Before:
    z_perm(0)=0 was enforced *implicitly* by z_perm being opened as a
