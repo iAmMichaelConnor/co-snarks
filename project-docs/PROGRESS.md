@@ -391,3 +391,66 @@ cross-verify; heavy compare_mpc.sh sweep deferred to 2.7.
 (examples recompile + compare*.sh with ~/.bb-target-src/bb slot + ch. 13
 §3a security regressions incl. mirroring bb's Rom/RamMaliciousFieldWrap +
 slow circuit set).
+
+## Session 3 (continued) — 2026-07-08 late — ⚠ RECOVERY STATE (multi-branch, mid-flight)
+
+**Read this first if the session was interrupted/disconnected.** Work is split
+across 4 branches in 4 git worktrees (parallel agents). Nothing is pushed
+(confidentiality rule). Recovery anchor + merge plan below.
+
+### Backup anchor (recover-from-anything)
+- Tag `backup/phase2-code-complete-6c528309` → commit `6c528309` = Phase-2
+  code-complete (items 2.1–2.6 done). `git reset --hard
+  backup/phase2-code-complete-6c528309` restores that state. Tags are immune
+  to branch ops.
+
+### Branches + worktrees (all local, never pushed)
+- `mc/update-co-noir` @ `6c528309` — MAIN working branch, checked out in the
+  main worktree `~/co-snarks`. Has UNCOMMITTED sweep changes (script pins):
+  `co-noir/co-noir/Readme.md`, `examples/{compare,compare_mpc,compile}.sh`,
+  `test_vectors/noir/compile.sh`. These are legit 2.7 artifacts — commit them
+  before merging. This is the merge TARGET.
+- `mc/secreg-27` @ `bac2fe03` — worktree `.claude/worktrees/secreg27`.
+  Verifier hardening + security-regression tests (ch.13 §3a). 4 commits on
+  6c528309: `a7621aa4` (off-curve + trailing-bytes fix + tests), `e713391d`
+  (ROM/RAM field-wrap tests), `bac2fe03` (ZK tamper tests). Touches only
+  co-builder/co-noir-common/ultrahonk/tests — DISJOINT from docs.
+- `mc/docs-27` @ `fea0f8a6` — worktree `.claude/worktrees/docs27`. Docs:
+  ch.11 AS-BUILT, README refresh, NEW ch.15 improvement backlog (37 items),
+  ch.13/ch.15 §3a status reconciliation, this recovery note. Commits
+  `737db8ee`, `fea0f8a6`. Touches PLAN.md + project-docs/* only.
+- `mc/recgen-27` @ `6c528309` — worktree `.claude/worktrees/recgen27`. A
+  background Sonnet agent is regenerating recursion/recursion_zk inner-proof
+  vectors (see task #8) to fix the one 2.7 failure. May have uncommitted
+  Prover.toml + target/ changes; read its report before merging.
+- (ignore `…/baseline-lint` detached worktree — unrelated, from an old session.)
+
+### Merge plan (execute once both background agents finish; all conflict-free —
+### verified disjoint file sets + `git merge-tree` shows no conflicts)
+1. In the main worktree, commit the sweep's uncommitted script pins on
+   `mc/update-co-noir`.
+2. `git merge mc/secreg-27` then `git merge mc/docs-27` (fast/clean).
+3. Read the recgen agent report; if recursion is fixed, merge `mc/recgen-27`
+   (regenerated Prover.toml). If it found a real code bug, do NOT merge —
+   see task #8.
+4. `git worktree remove` the three side worktrees after merge.
+5. DO NOT merge into `mc/update-co-noir` while the sweep agent is still
+   running there (it runs cargo test in that tree) — wait for its completion
+   notification.
+
+### Background agents in flight (outputs are JSONL under
+### `/tmp/claude-1011/-mnt-user-data-mike-co-snarks/<session>/tasks/`)
+- SWEEP (2.7 parity): running in main tree; last seen mid cargo-test-suite.
+  Result so far: ALL non-recursion circuits pass plain + MPC vs
+  `~/.bb-target-src/bb`; only recursion/recursion_zk fail (stale vectors).
+  Logs: `scratchpad/sweep27/{compare_plain,compare_mpc,cargo_tests}.log`.
+- RECGEN (task #8): regenerating recursion vectors; verdict pending
+  (staleness-fixed vs real recursion-verifier bug).
+
+### Oracle reminder
+THE bb oracle = `~/.bb-target-src/bb` (source-built at v5.0.0-nightly.20260708;
+`--version` prints zeros — expected). NOT `~/.bb-target/bb` (rc.2, wrong).
+
+### Open tasks (harness task list): #7 merge+reconcile, #8 recursion regen.
+### Deferred: SSIPA A(1)=0 forgery test (ch.13 §3a#8). Open: non-canonical
+### (≥-modulus) field-encoding rejection (ch.15 §1.3).
