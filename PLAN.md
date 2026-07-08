@@ -212,16 +212,13 @@ ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
       nightly → UH-breaking changes detected on merge.
 - [ ] 4.2 Identify the ~6 proof-format-defining bb dirs; add co-snark-impact
       note to bb PR review guidance.
-- [ ] 4.3 **Seed co-noir's differential-fuzz / soundness-claim set from
-      bb-spec-audit** (decision 6a payoff). The bb-spec-audit lane
-      (`~/claudebox`, graph on `cb/bb-spec-audit` branch of private
-      `barretenberg-claude`) builds per-module soundness claim graphs;
-      its current scope is `cycle_group ⇄ ultra_circuit_builder` (= co-noir's
-      EC-builder area). Mirror each published module's atomic **verifier/
-      builder** claims into co-noir negative tests — same protocol ⇒ claims
-      transfer. Soundness lens (ch. 13 §9): prover = completeness/privacy
-      only; soundness is verifier + co-builder. Do NOT stand up a parallel
-      claim-graph lane for co-noir — reuse bb's.
+- [ ] 4.3 **Grow the co-noir differential-fuzz / negative-test set as
+      anti-drift** (decision 6a payoff). Add negative tests pinning the
+      per-module invariants of the EC-builder area (`cycle_group` ⇄
+      ultra_circuit_builder); the same protocol invariants bb enforces
+      transfer directly. Soundness lens (guides where to spend review effort):
+      the prover carries completeness and privacy, while soundness lives in
+      the verifier and the circuit builder — so negative tests belong there.
 
 ### Phase 5 — Aztec integration (successor project; scope after Phase 2)
 - [ ] 5.0 **PXE secret sharer** (key output per decision 6): choose the
@@ -261,15 +258,4 @@ ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
 - `~/aztec-packages-private` — bb + Noir reference (target `origin/v5-next`).
 - `~/ap-next` — public aztec-packages v5-next (PXE dev; tag/release mirror).
 - `~/monty-hall-aztec` — stale in-contract UH demo (ch. 04).
-- `~/claudebox` — Mike's Claude-orchestration tooling. Contains two bb
-  knowledge sources reused by this project (ch. 13 §9):
-  (a) **bb-spec-audit** `claudebox/claude-files/bb-spec-audit/` — soundness
-  claim-graph methodology; live graph on `cb/bb-spec-audit` branch of
-  private `AztecProtocol/barretenberg-claude`; scope = cycle_group ⇄
-  ultra_circuit_builder;
-  (b) **bb-correctness facts** `claudebox/claude-files/bb-correctness/.../
-  barretenberg-facts.md` — curated bb soundness invariants (BB-ECC-001
-  infinity sentinel, BB-RANGE-001 reject-not-truncate, BB-HONK-001 copy-
-  constraints-need-full-prover, etc.) + audit-principles P1–P14 under
-  `claude-files/*-audit/skills/audit-principles/`.
 
