@@ -1,11 +1,11 @@
 # UltraHonk
 
-This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0-nightly.20260324. To get Barretenberg with this version, use the following commands:
+This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0-nightly.20260708. To get Barretenberg with this version, use the following commands:
 
 ```bash
 git clone https://github.com/AztecProtocol/aztec-packages.git
 cd aztec-packages
-git checkout tags/v5.0.0-nightly.20260324
+git checkout tags/v5.0.0-nightly.20260708
 ```
 
 To compile Barretenberg, one can use:
@@ -20,8 +20,8 @@ cmake --build --preset default --parallel --target bb
 Alternatively, prebuilt `bb` binaries for v5-era nightlies are published as GitHub release assets under the *unprefixed* tag name (note: older `bbup` versions construct an `aztec-packages-v*` URL and silently download garbage — "not in gzip format"):
 
 ```bash
-curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.0-nightly.20260324/barretenberg-amd64-linux.tar.gz | tar xz -C ~/.bb
-~/.bb/bb --version   # 5.0.0-nightly.20260324
+curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.0-nightly.20260708/barretenberg-amd64-linux.tar.gz | tar xz -C ~/.bb
+~/.bb/bb --version   # 5.0.0-nightly.20260708
 ```
 
 ## Building this workspace
@@ -40,7 +40,7 @@ First, one needs to create the circuit file from a Noir source code. Your Noir p
 - `Nargo.toml`: Similar to Cargo.toml, just for Noir projects.
 - `Prover.toml`: The inputs for the main function in `src/main.nr` used in proof generation.
 
-To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0-beta.20.
+To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0-beta.22.
 Then you can just execute the following command:
 
 ```bash

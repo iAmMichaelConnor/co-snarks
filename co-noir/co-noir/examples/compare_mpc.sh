@@ -7,10 +7,10 @@ export CARGO_TERM_QUIET=true
 # 186 (3x)→~950ms; small circuits even prefer fewer threads. Override via
 # env if experimenting: RAYON_NUM_THREADS=16 bash compare_mpc.sh
 export RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-$(($(nproc --all)*8/30))}
-BARRETENBERG_BINARY=~/.bb/bb  ##specify the $BARRETENBERG_BINARY path here
+BARRETENBERG_BINARY=${BARRETENBERG_BINARY:-$HOME/.bb-target-src/bb}  ##specify the $BARRETENBERG_BINARY path here (env-overridable)
 
-NARGO_VERSION=1.0.0-beta.20 ##specify the desired nargo version here
-BARRETENBERG_VERSION=5.0.0-nightly.20260324 ##specify the desired barretenberg version here or use the corresponding one for this nargo version
+NARGO_VERSION=1.0.0-beta.22 ##specify the desired nargo version here
+BARRETENBERG_VERSION=5.0.0-nightly.20260708 ##specify the desired barretenberg version here or use the corresponding one for this nargo version
 
 exit_code=0
 
@@ -29,7 +29,7 @@ cargo build --release --bin co-noir
 r=$(bash -c "nargo --version")
 if  [[ $r != "nargo version = $NARGO_VERSION"* ]];
 then
-    bash -c "noirup -v ${NARGO_VERSION}"
+    echo "WARNING: nargo version mismatch (got: '$r', expected: 'nargo version = $NARGO_VERSION...'). Not auto-installing; continuing anyway."
 fi
 
 ## use one of these two methods
@@ -41,7 +41,7 @@ fi
 r=$(bash -c "$BARRETENBERG_BINARY --version 2> /dev/null")
 if  [[ $r != "$BARRETENBERG_VERSION" ]];
 then
-    bash -c "bbup -v ${BARRETENBERG_VERSION}"
+    echo "WARNING: bb version mismatch (got: '$r', expected: '$BARRETENBERG_VERSION'). Not auto-installing; continuing anyway (source-built bb may report a placeholder version)."
 fi
 
 echo "Using nargo version $NARGO_VERSION"

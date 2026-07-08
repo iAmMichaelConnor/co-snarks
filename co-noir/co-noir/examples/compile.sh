@@ -8,7 +8,7 @@ NARGO_VERSION=1.0.0-beta.22 ##specify the desired nargo version here
 r=$(bash -c "nargo --version")
 if  [[ $r != "nargo version = $NARGO_VERSION"* ]];
 then
-    bash -c "noirup -v ${NARGO_VERSION}"
+    echo "WARNING: nargo version mismatch (got: '$r', expected: 'nargo version = $NARGO_VERSION...'). Not auto-installing; continuing anyway."
 fi
 
 for folder in "$script_dir"/test_vectors/*; do
