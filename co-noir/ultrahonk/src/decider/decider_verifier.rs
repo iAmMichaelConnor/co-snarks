@@ -43,6 +43,8 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         tracing::trace!("Reduce and verify opening pair");
 
         let quotient_commitment = transcript.receive_point_from_prover::<C>("KZG:W".to_string())?;
+        // KZG:W is the last field read from the proof; reject any trailing data.
+        transcript.assert_fully_consumed()?;
         opening_pair.commitments.push(quotient_commitment);
         opening_pair.scalars.push(opening_pair.challenge);
         let p_1 = -quotient_commitment.into_group();

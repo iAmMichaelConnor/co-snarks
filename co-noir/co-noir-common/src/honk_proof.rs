@@ -19,6 +19,12 @@ pub enum HonkProofError {
     /// Invalid key length
     #[error("Invalid key length")]
     InvalidKeyLength,
+    /// A deserialized group element is not a valid curve point
+    #[error("Point is not on the curve")]
+    PointNotOnCurve,
+    /// The proof buffer was not fully consumed by the verifier (trailing data)
+    #[error("Proof not fully consumed: {read} of {total} field elements read")]
+    ProofNotFullyConsumed { read: usize, total: usize },
     /// Corrupted Key
     #[error("Corrupted Key")]
     CorruptedKey,
