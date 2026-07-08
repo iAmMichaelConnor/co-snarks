@@ -50,13 +50,17 @@ pub struct AllRelationsEvals<F: PrimeField> {
     r_pos_int: Poseidon2InternalRelationEvals<F>,
 }
 
-pub(crate) const NUM_SUBRELATIONS: usize = UltraArithmeticRelation::NUM_RELATIONS
-    + UltraPermutationRelation::NUM_RELATIONS
+// The order of the relations matches the Ultra flavor's relation tuple in barretenberg
+// (Permutation, LogDerivLookup, Arithmetic, DeltaRangeConstraint, Elliptic, Memory,
+// NonNativeField, Poseidon2External, Poseidon2Internal), which determines the
+// alpha-power-to-subrelation assignment.
+pub(crate) const NUM_SUBRELATIONS: usize = UltraPermutationRelation::NUM_RELATIONS
+    + LogDerivLookupRelation::NUM_RELATIONS
+    + UltraArithmeticRelation::NUM_RELATIONS
     + DeltaRangeConstraintRelation::NUM_RELATIONS
     + EllipticRelation::NUM_RELATIONS
     + MemoryRelation::NUM_RELATIONS
     + NonNativeFieldRelation::NUM_RELATIONS
-    + LogDerivLookupRelation::NUM_RELATIONS
     + Poseidon2ExternalRelation::NUM_RELATIONS
     + Poseidon2InternalRelation::NUM_RELATIONS;
 
@@ -150,9 +154,9 @@ macro_rules! accumulate_all_relations {
         }
 
         // Apply to all relations
-        process_relation!(UltraArithmeticRelation, r_arith);
         process_relation!(UltraPermutationRelation, r_perm);
         process_relation!(LogDerivLookupRelation, r_lookup);
+        process_relation!(UltraArithmeticRelation, r_arith);
         process_relation!(DeltaRangeConstraintRelation, r_delta);
         process_relation!(EllipticRelation, r_elliptic);
         process_relation!(MemoryRelation, r_memory);
@@ -182,15 +186,22 @@ macro_rules! scale_and_batch_all {
         }
 
         // Apply to all relations
-        process_relation!(r_arith, &[$first_scalar, $challenges[0].clone()]);
-        process_relation!(r_perm, &$challenges[1..3]);
-        process_relation!(r_lookup, &$challenges[3..6]);
-        process_relation!(r_delta, &$challenges[6..10]);
-        process_relation!(r_elliptic, &$challenges[10..12]);
-        process_relation!(r_memory, &$challenges[12..18]);
-        process_relation!(r_nnf, &$challenges[18..19]);
-        process_relation!(r_pos_ext, &$challenges[19..23]);
-        process_relation!(r_pos_int, &$challenges[23..]);
+        process_relation!(
+            r_perm,
+            &[
+                $first_scalar,
+                $challenges[0].clone(),
+                $challenges[1].clone()
+            ]
+        );
+        process_relation!(r_lookup, &$challenges[2..5]);
+        process_relation!(r_arith, &$challenges[5..7]);
+        process_relation!(r_delta, &$challenges[7..11]);
+        process_relation!(r_elliptic, &$challenges[11..13]);
+        process_relation!(r_memory, &$challenges[13..19]);
+        process_relation!(r_nnf, &$challenges[19..20]);
+        process_relation!(r_pos_ext, &$challenges[20..24]);
+        process_relation!(r_pos_int, &$challenges[24..]);
 
         HonkProofResult::Ok(())
     }};

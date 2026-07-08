@@ -518,6 +518,23 @@ decision): `cargo fmt --all -- --check` && `cargo clippy --workspace
 dependency-tag bump (stale crate graph) and is expectedly red while a
 refactor is mid-flight.
 
+**REVISED after step ① retrospective (Mike + Claude, 2026-07-08) — the
+test loop for the remaining work items 2.2–2.6 shrinks to match the
+surgical nature of the changes** (step ①'s heavy gates were one-time
+costs of the ark-0.6 dependency overhaul; ark 0.6 is validated forever):
+1. per edit: `cargo check -p <touched crate>` (seconds);
+2. per commit: fmt + `clippy -p` touched crates + ONE plaindriver
+   self-verify smoke (~2 s; prover+verifier updated in lockstep must stay
+   self-consistent even mid-sync);
+3. per milestone (post 2.2+2.5+2.5a; post 2.4+2.6): the plain
+   poseidon/add3u64 KAT byte-equality tests — the only meaningful oracle
+   mid-sync, and the one check never to skip (self-verification cannot
+   catch bb-incompatible byte order);
+4. once at green-up (2.7): full suite + compare_mpc.sh both oracles +
+   negative tests (= definition of done, not a loop).
+Never again in phase 2: circom/mpc suites (ark-validated), workspace-wide
+clippy per commit.
+
 Error surface (2026-07-08): `noir-types` (2), `co-brillig` (47), downstream
 crates (co-acvm/co-builder) not yet reached.
 
@@ -606,3 +623,65 @@ vs old-format prover) until 2.2–2.6 land. Committed: `e70252e1`.
 Next: work item 2.2 (perm subrelation, 3 mirrors) in lockstep with
 2.5+2.5a (relation-tuple + entity reorders), then 2.4+2.6 (trace offset +
 ZK/SSIPA), per the amended green-up order.
+
+## 16. Phase 2 step ③ — relations + entity reorders (2.2 + 2.5 + 2.5a)
+
+*(In progress — launched 2026-07-08 ~17:3x as a delegated coding task;
+this section records the setup now and the commands/results on landing.)*
+
+Scope (one lockstep unit — all three ride bb commit `c075fc182e` or
+entangle through alpha bookkeeping):
+- 2.2 third permutation subrelation (z_perm init identity) in all THREE
+  relation mirrors (`ultrahonk`, `co-ultrahonk`,
+  `co-builder/honk_verifier/verifier_relations`) — subrelations 28→29,
+  alphas 27→28, partial lengths {6,3}→{6,3,3};
+- 2.5 relation-tuple reorder (Permutation, LogDerivLookup, Arithmetic
+  first) + alpha-slice renumbering in the three `mod.rs` files;
+- 2.5a entity/get_all reorder (sigmas/ids/lagranges/q_lookup/tables before
+  the other selectors) — sumcheck-evaluation transmit order + VK
+  commitment serialization + recursion-verifier indexing.
+References given to the implementer: NEW-tag generated flavor headers via
+`git show v5.0.0-nightly.20260708:barretenberg/cpp/src/barretenberg/
+flavor/generated/ultra_flavor_generated.hpp` (+ ZK variant, + the TS
+sources under `scripts/flavor-codegen/src/flavors/`), with instruction to
+trust bb code over any paraphrase. Open question the implementer must
+settle from the algebra: whether the new subrelation adds a shared×shared
+MPC mult (→ CRAND_PAIRS_FACTOR + Shamir randomness re-derive) — expected
+NO (lagrange polys are public; public×shared is linear).
+
+Gate for this step (reduced loop, §"REVISED" above): check/fmt/clippy on
+touched crates + plaindriver self-verify non-ZK AND ZK + 3-party REP3
+demo self-verify. KAT-vs-bb NOT expected green until 2.4+2.6.
+
+### 16.1 Result ✅ (landed 2026-07-08; all gates green; independently re-verified)
+
+- **2.2**: 3rd subrelation = `L_first·z_perm = 0` (accumulator 2, partial
+  length 3; bb comment: forces z_perm[0]=0 so `(z_perm+L_first)`=1 at row
+  0, else a cheating prover could seed z_perm arbitrarily). Implemented in
+  all THREE mirrors; in co-ultrahonk it's `mul_with_public_many`
+  (public×shared, linear) → **CRAND_PAIRS_FACTOR stays 8, Shamir
+  randomness accounting unchanged** (comment left at the constant).
+- **2.5**: new tuple order Perm, LogDeriv, Arith, Delta, Elliptic, Memory,
+  NNF, Pos2Ext, Pos2Int; subrelations 29, alphas 28; new slices perm
+  [1,e0,e1], lookup e[2..5], arith e[5..7], delta e[7..11], elliptic
+  e[11..13], memory e[13..19], nnf e[19..20], pos_ext e[20..24], pos_int
+  e[24..28]. bb convention confirmed in relations/utils.hpp: α_{0,0}=1 →
+  the PERMUTATION grand-product subrelation is now the unscaled one. In
+  the recursion verifier the accumulate order is load-bearing (constant-1
+  fast path must run first) — handled.
+- **2.5a**: precomputed order renumbered exactly to the generated hpp —
+  sigma_1..4(0-3), id_1..4(4-7), lagrange_first(8), lagrange_last(9),
+  q_lookup(10), table_1..4(11-14), then selectors in bb's odd sub-order
+  q_m,q_r,q_o,q_c,q_l,q_4(15-20), q_arith..q_pos2int(21-27). Witness +
+  shifted partitions were already correct; ZK masking entity already at
+  position 0. All order-sensitive consumers (VK to_buffer both hashers,
+  Sumcheck:evaluations, recursion from_elements, shplemini) iterate the
+  one struct → followed automatically. Side effect: selectors no longer
+  contiguous → `get_selectors_mut` returns disjoint refs in trace-block
+  order; UltraTraceBlock indices decoupled (block-local 0..13).
+- Gates: workspace check clean; fmt/clippy(-D) touched crates clean;
+  plaindriver poseidon self-verify non-ZK + ZK ✓ (ZK re-run independently
+  ✓); REP3 3-party demo (keccak path) ✓. Independent spot-checks: bb C++
+  algebra read directly ✓; entity indices ✓.
+- Note: examples/test_vectors/poseidon artifact was still beta.20 →
+  regenerated with nargo beta.22 (pre-existing issue, unrelated).

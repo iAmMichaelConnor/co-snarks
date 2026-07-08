@@ -9,6 +9,7 @@ use ark_ff::{PrimeField, Zero};
 pub(crate) struct UltraPermutationRelationAcc<F: PrimeField> {
     pub(crate) r0: Univariate<F, 6>,
     pub(crate) r1: Univariate<F, 3>,
+    pub(crate) r2: Univariate<F, 3>,
 }
 
 impl<F: PrimeField> UltraPermutationRelationAcc<F> {
@@ -16,6 +17,7 @@ impl<F: PrimeField> UltraPermutationRelationAcc<F> {
         assert!(elements.len() == UltraPermutationRelation::NUM_RELATIONS);
         self.r0 *= elements[0];
         self.r1 *= elements[1];
+        self.r2 *= elements[2];
     }
 
     pub(crate) fn extend_and_batch_univariates<const SIZE: usize>(
@@ -37,6 +39,13 @@ impl<F: PrimeField> UltraPermutationRelationAcc<F> {
             partial_evaluation_result,
             true,
         );
+
+        self.r2.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            true,
+        );
     }
 }
 
@@ -44,6 +53,7 @@ impl<F: PrimeField> UltraPermutationRelationAcc<F> {
 pub(crate) struct UltraPermutationRelationEvals<F: PrimeField> {
     pub(crate) r0: F,
     pub(crate) r1: F,
+    pub(crate) r2: F,
 }
 
 impl<F: PrimeField> UltraPermutationRelationEvals<F> {
@@ -52,13 +62,14 @@ impl<F: PrimeField> UltraPermutationRelationEvals<F> {
 
         *result += self.r0 * running_challenge[0];
         *result += self.r1 * running_challenge[1];
+        *result += self.r2 * running_challenge[2];
     }
 }
 
 pub(crate) struct UltraPermutationRelation {}
 
 impl UltraPermutationRelation {
-    pub(crate) const NUM_RELATIONS: usize = 2;
+    pub(crate) const NUM_RELATIONS: usize = 3;
 }
 
 impl<F: PrimeField> Relation<F> for UltraPermutationRelation {
@@ -164,6 +175,17 @@ impl<F: PrimeField> Relation<F> for UltraPermutationRelation {
         for i in 0..univariate_accumulator.r1.evaluations.len() {
             univariate_accumulator.r1.evaluations[i] += tmp.evaluations[i];
         }
+
+        ///////////////////////////////////////////////////////////////////////
+
+        // Contribution (3): Enforce z_perm starts at 0. The grand product initialization relies on
+        // z_perm[0] = 0 so that (z_perm + L_first) evaluates to 1 at the first row.
+        // Without this constraint, a cheating prover could set z_perm[0] to a non-zero value.
+        let tmp = (lagrange_first.to_owned() * z_perm) * scaling_factor;
+
+        for i in 0..univariate_accumulator.r2.evaluations.len() {
+            univariate_accumulator.r2.evaluations[i] += tmp.evaluations[i];
+        }
     }
 
     fn verify_accumulate(
@@ -234,5 +256,14 @@ impl<F: PrimeField> Relation<F> for UltraPermutationRelation {
         let tmp = (lagrange_last.to_owned() * z_perm_shift) * scaling_factor;
 
         univariate_accumulator.r1 += tmp;
+
+        ///////////////////////////////////////////////////////////////////////
+
+        // Contribution (3): Enforce z_perm starts at 0. The grand product initialization relies on
+        // z_perm[0] = 0 so that (z_perm + L_first) evaluates to 1 at the first row.
+        // Without this constraint, a cheating prover could set z_perm[0] to a non-zero value.
+        let tmp = (lagrange_first.to_owned() * z_perm) * scaling_factor;
+
+        univariate_accumulator.r2 += tmp;
     }
 }

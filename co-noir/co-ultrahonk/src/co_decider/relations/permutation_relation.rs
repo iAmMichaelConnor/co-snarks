@@ -15,6 +15,7 @@ use ultrahonk::prelude::Univariate;
 pub(crate) struct UltraPermutationRelationAcc<T: NoirUltraHonkProver<P>, P: CurveGroup> {
     pub(crate) r0: SharedUnivariate<T, P, 6>,
     pub(crate) r1: SharedUnivariate<T, P, 3>,
+    pub(crate) r2: SharedUnivariate<T, P, 3>,
 }
 
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Default for UltraPermutationRelationAcc<T, P> {
@@ -22,6 +23,7 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Default for UltraPermutationRelat
         Self {
             r0: Default::default(),
             r1: Default::default(),
+            r2: Default::default(),
         }
     }
 }
@@ -31,6 +33,7 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> UltraPermutationRelationAcc<T, P>
         assert!(elements.len() == UltraPermutationRelation::NUM_RELATIONS);
         self.r0.scale_inplace(elements[0]);
         self.r1.scale_inplace(elements[1]);
+        self.r2.scale_inplace(elements[2]);
     }
 
     pub(crate) fn extend_and_batch_univariates<const SIZE: usize>(
@@ -52,13 +55,22 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> UltraPermutationRelationAcc<T, P>
             partial_evaluation_result,
             true,
         );
+
+        self.r2.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            true,
+        );
     }
 }
 
 pub(crate) struct UltraPermutationRelation {}
 
 impl UltraPermutationRelation {
-    pub(crate) const NUM_RELATIONS: usize = 2;
+    pub(crate) const NUM_RELATIONS: usize = 3;
+    // The third subrelation (lagrange_first * z_perm) is a public-times-shared product and thus
+    // requires no MPC multiplication, so CRAND_PAIRS_FACTOR is unchanged.
     pub(crate) const CRAND_PAIRS_FACTOR: usize = 8;
 }
 
@@ -244,6 +256,14 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P
         T::mul_assign_with_public_many(&mut tmp, scaling_factors);
 
         fold_accumulator!(univariate_accumulator.r1, tmp);
+
+        // Contribution (3): Enforce z_perm starts at 0. The grand product initialization relies on
+        // z_perm[0] = 0 so that (z_perm + L_first) evaluates to 1 at the first row.
+        // Without this constraint, a cheating prover could set z_perm[0] to a non-zero value.
+        let mut tmp = T::mul_with_public_many(lagrange_first, z_perm);
+        T::mul_assign_with_public_many(&mut tmp, scaling_factors);
+
+        fold_accumulator!(univariate_accumulator.r2, tmp);
 
         Ok(())
     }

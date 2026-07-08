@@ -18,13 +18,14 @@ use co_noir_common::{
 pub(crate) struct UltraPermutationRelationEvals<F: PrimeField> {
     pub(crate) r0: FieldCT<F>,
     pub(crate) r1: FieldCT<F>,
+    pub(crate) r2: FieldCT<F>,
 }
 
-impl_relation_evals!(UltraPermutationRelationEvals, r0, r1);
+impl_relation_evals!(UltraPermutationRelationEvals, r0, r1, r2);
 pub(crate) struct UltraPermutationRelation;
 
 impl UltraPermutationRelation {
-    pub(crate) const NUM_RELATIONS: usize = 2;
+    pub(crate) const NUM_RELATIONS: usize = 3;
 }
 
 impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for UltraPermutationRelation {
@@ -110,8 +111,20 @@ impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for UltraPermutationRelation
         );
 
         let mut mul_raw_data = FieldCT::multiply_many_raw(
-            &[t1, t5, lagrange_last.clone(), lagrange_last.clone()],
-            &[t2, t6, public_input_delta.clone(), z_perm_shift.clone()],
+            &[
+                t1,
+                t5,
+                lagrange_last.clone(),
+                lagrange_last.clone(),
+                lagrange_first.clone(),
+            ],
+            &[
+                t2,
+                t6,
+                public_input_delta.clone(),
+                z_perm_shift.clone(),
+                z_perm.clone(),
+            ],
             builder,
             driver,
         )?;
@@ -157,6 +170,18 @@ impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for UltraPermutationRelation
         accumulator
             .r1
             .add_assign(&lagrange_last_by_z_perm_shift_scaled, builder, driver);
+
+        // Contribution (3): Enforce z_perm starts at 0. The grand product initialization relies on
+        // z_perm[0] = 0 so that (z_perm + L_first) evaluates to 1 at the first row.
+        // Without this constraint, a cheating prover could set z_perm[0] to a non-zero value.
+        let lagrange_first_z_perm = FieldCT::commit_mul(&mut mul_raw_data[4], builder)?;
+
+        let lagrange_first_by_z_perm_scaled =
+            lagrange_first_z_perm.multiply(scaling_factor, builder, driver)?;
+
+        accumulator
+            .r2
+            .add_assign(&lagrange_first_by_z_perm_scaled, builder, driver);
 
         Ok(())
     }
