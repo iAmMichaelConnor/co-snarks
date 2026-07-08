@@ -2156,10 +2156,10 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         for (i, record) in records.into_iter().enumerate() {
             let index = record.index;
             let value = self.get_variable(record.value_witness.try_into().unwrap());
-            // The index-delta sub-relation has roots {0,-1} in the field, so a sorted chain
-            // starting at p-1 satisfies the delta=1 check when transitioning to 0. Pin the first
-            // sorted gate's index witness to the constant zero (copy-constrained through its
-            // fix_witness gate) so a malicious prover cannot start the chain at p-1.
+            // The index-delta sub-relation has roots {0,-1} in the field, so an unpinned sorted
+            // chain could start at p-1 and still satisfy the delta=1 check when transitioning to
+            // 0. Pin the first sorted gate's index witness to the constant zero (copy-constrained
+            // through its fix_witness gate) so the chain is bound to start at 0.
             let index_witness = if i == 0 {
                 self.zero_idx
             } else {
@@ -4996,17 +4996,17 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
 #[cfg(test)]
 mod rom_ram_pinning_tests {
-    //! Security-regression tests for the ROM/RAM field-wrap attack (bb PR #29).
-    //! The index-delta sub-relation
-    //! `Δ² + Δ = 0` accepts `Δ ∈ {0, -1}`, so a sorted memory-index chain that
-    //! starts at the field value `p - 1` and wraps to `0` satisfies the delta
-    //! check — letting a malicious prover forge a read/write at the phantom
-    //! index `p - 1`. The fix pins the FIRST sorted index witness to
-    //! the copy-constrained constant `zero_idx` instead of a free
-    //! `add_variable(0)`. These tests assert that structural pin, mirroring bb's
-    //! `EXPECT_EQ(sorted_0_idx_w, zero_idx())` in `rom_ram.test.cpp`. If the pin
-    //! is ever reverted the first sorted gate would carry a free witness and
-    //! these tests fail.
+    //! Tests for ROM/RAM sorted-index chain pinning (bb PR #29).
+    //! The index-delta sub-relation `Δ² + Δ = 0` accepts `Δ ∈ {0, -1}`, so an
+    //! unpinned sorted memory-index chain could start at the field value
+    //! `p - 1` and wrap to `0` while still satisfying the delta check —
+    //! encoding an out-of-range access at the phantom index `p - 1`. The fix
+    //! pins the FIRST sorted index witness to the copy-constrained constant
+    //! `zero_idx` instead of a free `add_variable(0)`, keeping the chain bound
+    //! to `[0, N-1]`. These tests assert that structural pin, mirroring bb's
+    //! `EXPECT_EQ(sorted_0_idx_w, zero_idx())` in `rom_ram.test.cpp`; if it is
+    //! ever reverted the first sorted gate would carry a free witness and they
+    //! fail.
     use super::*;
     use ark_ff::{One, Zero};
     use co_noir_common::types::Bn254G1;
@@ -5026,7 +5026,7 @@ mod rom_ram_pinning_tests {
             let w = b.add_variable(Fr::from(v));
             b.set_rom_element(rom, i, w);
         }
-        // A read via a variable index (the attack would later mutate it).
+        // A read via a variable (non-constant) index.
         let idx = b.add_variable(Fr::from(0u64));
         let _ = b.read_rom_array(rom, idx, &mut driver).unwrap();
 
@@ -5129,7 +5129,7 @@ mod plookup_table_regression_tests {
                 t.column_1.len(),
                 1 << 10,
                 "SHA table {id:?} must be 10-bit (1024 rows), not 11-bit (2048) \
-                 — oversized table = out-of-range-slice soundness hole"
+                 — an oversized backing table would admit keys outside the declared 10-bit slice"
             );
         }
     }

@@ -172,14 +172,15 @@ fn baseline_zk_proof_accepts() {
 /// decider/SSIPA region is actually consumed and constrained by the verifier,
 /// not silently ignored.
 ///
-/// NOTE: this is deliberately NOT the full SmallSubgroupIPA A(1)=0 forgery
+/// NOTE: this is deliberately NOT the full SmallSubgroupIPA A(1)=0 consistency
 /// test. That one requires constructing the homogeneous-kernel perturbation
 /// (delta_A(1)=delta, delta_A(g^j) = -delta/(g-1), delta_s = c) that satisfies
-/// the standalone SSIPA identity yet forges the Libra inner product, and
-/// asserting rejection specifically through the Shplemini-batched path (the
-/// standalone consistency check accepts it, so a test that bypasses Shplemini
-/// would pass while the hole remained). That is a known follow-up; a naive
-/// version would give false confidence, so it is intentionally not faked here.
+/// the standalone SSIPA identity yet changes the claimed Libra inner product,
+/// and asserting rejection specifically through the Shplemini-batched path (the
+/// standalone consistency check accepts such a perturbation, so a test that
+/// bypasses Shplemini would pass without exercising the real enforcement). That
+/// is a known follow-up; a naive version would give false confidence, so it is
+/// intentionally not written here.
 #[test]
 fn zk_proof_decider_field_tamper_rejected() {
     let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
