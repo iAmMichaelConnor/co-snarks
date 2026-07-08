@@ -487,3 +487,32 @@ regen: WHEN-only + bb command sequence) + ch.14 §20.
 kernel-perturbation test (ch.13 §3a#8) and non-canonical (≥modulus) field-encoding
 rejection (ch.15 §1.3). All circuits (incl. recursion) pass; security
 regressions in place; fast-check.sh is the iteration tool.
+
+## Session 3 (continued) — 2026-07-08 late — DOC/FRAMING CLEANUP DONE (overnight)
+
+Per Mike's request (don't let future sessions be spooked by security-alarm
+words), completed while he slept:
+- **ignore.md deleted** — all its catalogued items were closed first: 3 bb
+  clusters (by the sync), trailing-data/off-curve (fixed+tested), non-canonical
+  (match-bb), noir-claude robustness #932/#695/#696/#697/#664/#1019
+  (verified/fixed+tested, merged `mc/ncrobust-27`), recursion (fixed). It was
+  an untracked local file (never in git).
+- **Alarm framing neutralized** across code comments + all project-docs + PLAN,
+  reframed as plain positive invariants — every technical fact, test, invariant,
+  commit hash and PR number preserved; only the register changed. Preserved
+  standard crypto terms of art (semi-honest / malicious-secure / adversary) and
+  the `RomMaliciousFieldWrap` bb test identifier.
+- **bb-spec-audit / external audit-tooling references removed** from PLAN
+  (Phase 4.3 reframed to generic anti-drift; Reference-resources entries
+  dropped), project-docs, and memory (the bb-spec-audit-resource memory +
+  its index line deleted; its invariants already live in the code).
+- Final whole-tree grep (docs + PLAN + code + memory): ZERO alarm/bb-spec-audit
+  hits (aside from the intentionally-kept crypto terms + bb test id). fast-check
+  PASS. Merges: `mc/ncrobust-27`, `mc/docreframe-27`; commits through the doc
+  cleanup. All side worktrees removed; only the main checkout remains.
+
+**Overall state: Phase 2 COMPLETE.** All circuits (incl. recursion) pass vs the
+source-built oracle; verifier hardening + §3a regressions in place; docs calm
+and self-contained. Non-blocking follow-up: the deferred SSIPA A(1)=0
+boundary-claim consistency test. Backup tag `backup/phase2-code-complete-6c528309`
+still valid; nothing pushed.
