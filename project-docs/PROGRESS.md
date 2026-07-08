@@ -223,3 +223,49 @@ point deserialization); Q2/Q3 (ch. 09 §5) still open for Mike.
   demo scripts set no cap (each party grabs all cores — 3× oversubscribed);
   that explains demo 752 ms vs 520 ms at nproc/3. Re-measure at larger
   circuit sizes during 0.5.
+
+## Session 2 (continued) — 2026-07-08, Phase 2 started: pre-analysis + steps ①②
+
+**Pre-analysis (3 parallel code-verification agents; ch. 14 §13):** plan
+approach confirmed; 3 real gaps found+fixed in docs — (1) CRITICAL:
+EntityId/get_all reorder missed (proof sumcheck-eval order + VK commitment
+order both change; new work item 2.5a); (2) ACIR MemOp overhaul missing
+from the beta.22 bump plan; (3) third relation mirror
+(honk_verifier/verifier_relations) under-specified. Noir target confirmed
+beta.22. PAIRING_POINTS_SIZE corrected 16→8. Committed a1b7fa15.
+
+**Working set pinned** (PLAN.md Phase 2 header): branch mc/update-co-noir
+(pushurl disabled), diff range v5.0.0-nightly.20260324..20260708,
+oracles ~/.bb/bb (old) + ~/.bb-target/bb (rc.2 ≡ v5-next UH). Decision 6a
+recorded: implementation independence (no C++ structure copying; enables
+differential fuzzing; KAT boundary is the only coupling).
+
+**Step ① (beta.22 bump) DONE — commit 4e7abb95:** real breaking change was
+ark 0.5→0.6 (dep-graph split; predicted type errors were cascade noise);
+2 Taceo registry crates vendored with ark-0.6; MemOp → MemOpKind;
+EC (0,0)-sentinel with MPC infinity detection (2 eq + 1 mult shared);
+new upstream `predicate` field handled. Gates: check/fmt/clippy(-D,
+full tree, after fixing 2 pre-existing mpc-net lints — baseline was
+clippy-dirty under rustc 1.90, fmt-clean)/circom+mpc suites 509/509/
+4 e2e smokes incl. ram + embedded_curve_add. Per-commit gate standard set
+= Taceo CI bar (fmt + clippy -D + compile + targeted tests).
+
+**Step ② (vectors+KATs at target) DONE — commit e70252e1:** 32 vectors
+recompiled (nargo beta.22); 4 proof KATs regenerated with target bb.
+**Lengths at target pin: 410/458/115 — identical to old pin** (settles the
+ZK-length question; sync changes byte content/order only). Noir proof
+tests now red BY DESIGN until 2.2–2.6.
+
+**Ops lessons recorded** (ch. 14 §11): pgrep self-match; watcher timeout
+< slowest job → silent death (~6 min dead time, Mike caught it);
+dep-bump → suspect duplicated transitive deps (`cargo tree -d`) before
+believing error text.
+
+**Next steps:** work item 2.2 (perm 3rd subrelation, THREE mirrors:
+ultrahonk/co-ultrahonk/verifier_relations) in lockstep with 2.5+2.5a
+(relation-tuple + entity reorders — same bb commit c075fc182e; TS flavor
+specs at scripts/flavor-codegen/src/flavors/*.ts are the cleanest
+reference); then 2.4+2.6 (trace offset + ZK/SSIPA, entangled); then 2.3
+builder/DSL gates; green-up per ch. 11 §6 with plain poseidon KAT first.
+Shamir CRAND_PAIRS_FACTOR re-derivation needed if the new subrelation
+adds MPC mults (co_ultra_prover.rs:163-202).

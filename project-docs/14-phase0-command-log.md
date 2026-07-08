@@ -570,3 +570,39 @@ the gate-count parity re-check. Details: agent report, session 2.
   watchers a timeout comfortably above the slowest job's runtime, and
   prefer exit-sentinel lines in logs (`echo DONE >> log`) over process
   polling.
+
+Step ① committed: `4e7abb95` (40 files, +8070/−382, incl. vendor/).
+
+## 15. Phase 2 step ② — vector + KAT regeneration at target pin  ✅
+
+```bash
+# [OK] pins: both compile.sh NARGO_VERSION 1.0.0-beta.20 → 1.0.0-beta.22
+# (compare.sh / compare_mpc.sh / Readme pins intentionally NOT bumped —
+# they gate the old-pin regression path until green-up 2.7)
+sed -i 's/NARGO_VERSION=1.0.0-beta.20/NARGO_VERSION=1.0.0-beta.22/' \
+  test_vectors/noir/compile.sh co-noir/co-noir/examples/compile.sh
+
+# [OK] all 32 vectors recompiled+executed with nargo beta.22
+bash test_vectors/noir/compile.sh
+
+# [OK] 4 bb proof KATs regenerated with TARGET bb (~/.bb-target/bb):
+# add3u64+poseidon × {poseidon2,keccak}, non-ZK, via write_vk+prove
+# [FAIL→OK] ZK length probe: first attempt reused the non-ZK VK — ZK prove
+# needs a VK written WITHOUT --disable_zk. Retried correctly:
+~/.bb-target/bb write_vk --scheme ultra_honk --oracle_hash poseidon2 -b … -o …
+~/.bb-target/bb prove    --scheme ultra_honk --oracle_hash poseidon2 -b … -w … -k …
+```
+
+**Empirical result (settles §13.3's open question):** at the target pin,
+non-ZK proof = 13120 B = **410 fields**, ZK = 14656 B = **458 fields**,
+VK = 3680 B = **115 fields** — all IDENTICAL to the old pin; co-noir's
+existing length constants are already correct. The whole sync therefore
+changes byte *content/order* only, never lengths. (The §13.3 agent's
+hand-computed ZK length of ~421 was wrong; the KAT adjudicated, as the
+plan intended.) No VK KATs exist in-tree (nothing further to regen).
+
+State after step ②: noir proof tests **red by design** (target-format KATs
+vs old-format prover) until 2.2–2.6 land. Committed: `e70252e1`.
+Next: work item 2.2 (perm subrelation, 3 mirrors) in lockstep with
+2.5+2.5a (relation-tuple + entity reorders), then 2.4+2.6 (trace offset +
+ZK/SSIPA), per the amended green-up order.
