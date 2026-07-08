@@ -260,8 +260,8 @@ Tamper matrix — each case verified with BOTH verifiers
 
 **Finding 1 — proof-not-fully-consumed (parity divergence, predicted by
 ch. 13 §3.4):** co-noir's verifier accepts a valid proof with trailing junk
-appended; bb rejects it. Not a forgery vector by itself (the embedded proof is
-genuine), but it breaks byte-strictness parity with bb and could mask
+appended; bb rejects it. Not itself a way to make an invalid proof verify
+(the embedded proof is genuine), but it breaks byte-strictness parity with bb and could mask
 length-related bugs. → add a "transcript fully consumed" check during the
 Phase 2 work (we'll be in that code anyway).
 
@@ -271,13 +271,13 @@ tampering a G1 point (in proof KZG tail or VK) hits ark-ec's
 affine.rs:72) — the verifier *process crashes* (exit 101) where bb returns a
 clean "verification failed". Soundness is intact (off-curve points can't
 verify), but it's a DoS/robustness divergence: a verifier service fed
-malicious proofs would crash rather than reject. → co-noir should use
+malformed proofs would crash rather than reject. → co-noir should use
 fallible deserialization (`from_random_bytes`/checked decompress that returns
 `Err`) at the proof/VK parsing boundary. Record for Phase 2.
 
 Soundness conclusion: **no false accepts in any tamper case** — the pipeline
 at the pin is sound under these spot-checks; the two findings are
-strictness/robustness divergences, not soundness holes.
+strictness/robustness divergences, not soundness gaps.
 
 ## 8. Environment summary (what a fresh machine needs)
 
@@ -667,7 +667,7 @@ demo self-verify. KAT-vs-bb NOT expected green until 2.4+2.6.
 
 - **2.2**: 3rd subrelation = `L_first·z_perm = 0` (accumulator 2, partial
   length 3; bb comment: forces z_perm[0]=0 so `(z_perm+L_first)`=1 at row
-  0, else a cheating prover could seed z_perm arbitrarily). Implemented in
+  0, otherwise z_perm could be seeded arbitrarily at that row). Implemented in
   all THREE mirrors; in co-ultrahonk it's `mul_with_public_many`
   (public×shared, linear) → **CRAND_PAIRS_FACTOR stays 8, Shamir
   randomness accounting unchanged** (comment left at the constant).
@@ -815,8 +815,9 @@ the KAT suite doesn't cover.
 
 ### 19.1 What bb changed (read from source; commits + why)
 - `1f7ed2ea79` **ROM/RAM pinning (SOUNDNESS)**: index-delta subrelation
-  `Δ²+Δ=0` has roots {0,−1} → sorted chain could start at p−1 and forge
-  reads/writes at that index. Fix: first sorted index_witness = zero_idx
+  `Δ²+Δ=0` has roots {0,−1} → sorted chain could start at p−1 and allow
+  reads/writes at that index without a genuine constraint. Fix: first
+  sorted index_witness = zero_idx
   (ROM+RAM), last ROM index = put_constant_variable(N−1). bb ships negative
   tests (Rom/RamMaliciousFieldWrap) — mirror in our 2.7 security regressions.
 - `0a7d0af035` **lookup table_index starts at 1**: "so the relation batched
@@ -864,8 +865,9 @@ the KAT suite doesn't cover.
 
 ### 19.3 Phase 2 remaining = 2.7 green-up only
 Full examples-vector recompile (beta.22) → compare.sh/compare_mpc.sh with a
-~/.bb-target-src/bb slot → ch. 13 §3a security regressions (SSIPA forgery,
-ROM/RAM field-wrap — mirror bb's Rom/RamMaliciousFieldWrap —,
+~/.bb-target-src/bb slot → ch. 13 §3a security regressions (SSIPA
+kernel-perturbation case, ROM/RAM field-wrap — mirror bb's
+Rom/RamMaliciousFieldWrap —,
 trailing-bytes/non-canonical encodings + the Phase-0 panic-on-off-curve fix)
 → slow set (aes128, sha256_compression e2e, recursion, recursion_zk).
 

@@ -90,12 +90,13 @@ For a representative subset of vectors, assert the verifier **rejects**:
 ### 3a. MANDATORY security-regression tests (from the 2026-07-08 rationale
 ### mining — ch. 03 §6; these port bb's own embargoed-fix regression tests)
 
-These are not optional hardening — each corresponds to a real attack bb
-fixed via its private security repo. Port bb's regression tests, not just
-the happy path.
+These are not optional hardening — each corresponds to a fix bb shipped
+via its private security repo. Port bb's regression tests, not just the
+happy path.
 
-> **§3a status (2026-07-08, branch `mc/secreg-27`):** #8 SSIPA forgery =
-> ⏳ DEFERRED (specified below + inline in `security_regression.rs`; a naive
+> **§3a status (2026-07-08, branch `mc/secreg-27`):** #8 SSIPA
+> kernel-perturbation case = ⏳ DEFERRED (specified below + inline in
+> `security_regression.rs`; a naive
 > version gives false confidence, so not faked). #9 ROM/RAM field-wrap = ✅
 > DONE, commit `e713391d` (structural pin tests in co-builder, both ROM and
 > RAM). #10 = ✅ PARTLY DONE, commit `a7621aa4`: trailing-data + off-curve
@@ -103,32 +104,34 @@ the happy path.
 > (≥-modulus) field encodings still ⏳ OPEN (backlog ch.15 §1.3). ZK-path
 > tamper coverage added (commit `bac2fe03`).
 
-8. **SSIPA forgery (ports bb `shplemini.test.cpp` malicious-prover test;
-   bb PR #44).** ⏳ DEFERRED. Construct the homogeneous-kernel perturbation
-   (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1) for j≥1, δ_s=c) that satisfies the SSIPA
-   identity at r but forges the Libra inner-product, and assert the co-noir
-   ZK verifier **rejects** it. CRITICAL: the test must exercise the full
+8. **SSIPA kernel-perturbation case (ports bb `shplemini.test.cpp`'s
+   regression test for this case; bb PR #44).** ⏳ DEFERRED. Construct the
+   homogeneous-kernel perturbation (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1) for j≥1,
+   δ_s=c) that satisfies the SSIPA identity at r but produces an invalid
+   Libra inner-product claim, and assert the co-noir ZK verifier
+   **rejects** it. CRITICAL: the test must exercise the full
    Shplemini-batched path — bb's own README states the standalone
-   `check_consistency` identity check *accepts* the forgery, so a test that
-   bypasses Shplemini would pass while the real vulnerability remained. This
-   is the test that proves co-noir enforces the A(1)=0 boundary claim on the
-   VERIFIER side, not just that its prover emits 5 claims.
-9. **ROM/RAM field-wrap attack (ports bb `rom_ram.test.cpp`; bb PR #29).**
+   `check_consistency` identity check *accepts* this invalid case, so a
+   test that bypasses Shplemini would pass while the underlying gap
+   remained. This is the test that proves co-noir enforces the A(1)=0
+   boundary claim on the VERIFIER side, not just that its prover emits 5
+   claims.
+9. **ROM/RAM field-wrap case (ports bb `rom_ram.test.cpp`; bb PR #29).**
    Build a circuit whose sorted ROM/RAM index chain starts at the field
    value p−1 (≡ −1) and wraps to 0 — legal under the Δ²+Δ=0 delta relation
-   alone — attempting to read/write a forged value at phantom index p−1.
-   Assert co-noir **rejects** (the first sorted index must be copy-
-   constrained to a genuinely-constrained zero witness, not a free
-   `add_variable(0)`). Guards the phase-2 item 2.6 builder work; without the
-   pinning gate this test passes-as-vulnerable.
+   alone — attempting to read/write an unconstrained value at phantom
+   index p−1. Assert co-noir **rejects** (the first sorted index must be
+   copy-constrained to a genuinely-constrained zero witness, not a free
+   `add_variable(0)`). Guards the phase-2 item 2.6 builder work; without
+   the pinning gate this test would pass while the gap remains.
 10. **Trailing data + off-curve points (DONE); non-canonical encodings
     (DO NOT CHANGE — match bb).** ✅ Trailing proof bytes now rejected
     (`assert_fully_consumed`, matches bb's exact-size pinning) and off-curve
     points cleanly rejected instead of panicking (`g1_affine_from_xy_checked`)
     — commit `a7621aa4`, tests in `security_regression.rs`. ⚠ **Non-canonical
     (≥modulus) field encodings must be REDUCED, not rejected**, in the Ultra
-    path: `5f09c55a57`'s ≥modulus rejection (finding 2513) is **MsgPack-only**
-    (and 2501's trailing-data check is **ChonkProof MsgPack**) — neither
+    path: `5f09c55a57`'s ≥modulus rejection is **MsgPack-only** (and its
+    related trailing-data check is **ChonkProof MsgPack**-only) — neither
     touches the Ultra proof/transcript field deser co-noir reimplements. bb
     v5-next's Ultra path reduces; co-noir matches (ark `from_be_bytes_mod_order`).
     Rejecting would break parity; bb v5-next reduces non-canonical encodings in
@@ -206,41 +209,31 @@ Two of the ported bb changes are embargoed soundness fixes. Byte-parity
 alone does NOT prove we inherited the fix — these two tests must exist and
 pass before Phase 2 is called done (they join §8's priority list at rank 2):
 
-1. **SSIPA kernel-forgery regression** (from bb `shplemini.test.cpp`, PR
-   #44): simulate the malicious prover that perturbs A by the
-   one-dimensional kernel (δ at X=1, −δ/(g−1) on the rest of H, matching
-   δ_s) and ignores the prover-side fail-fast; co-noir's verifier MUST
-   reject. Specifically verifies the untransmitted A(1)=0 claim rides the
-   Shplemini/Shplonk batched opening — the local identity check alone
-   accepts the forgery (bb's README says so explicitly).
+1. **SSIPA kernel-perturbation regression** (from bb `shplemini.test.cpp`,
+   PR #44): construct the one-dimensional kernel perturbation of A (δ at
+   X=1, −δ/(g−1) on the rest of H, matching δ_s), bypassing the
+   prover-side fail-fast; co-noir's verifier MUST reject. Specifically
+   verifies the untransmitted A(1)=0 claim rides the Shplemini/Shplonk
+   batched opening — the local identity check alone accepts this invalid
+   case (bb's README says so explicitly).
 2. **ROM/RAM field-wrap regression** (from bb `rom_ram.test.cpp`, PR #29):
    build a circuit whose first sorted index witness is forced to p−1
    (start the chain at −1, wrap to 0); proving must fail or the proof must
    be rejected. Verifies the first sorted index is copy-constrained to a
    genuinely-fixed zero witness, not a fresh unconstrained variable.
 
-Plus (audit posture, from `5f09c55a57`): non-canonical field encodings
-(≥ modulus) and trailing proof bytes must be REJECTED by co-noir's
-deserialization — merges with Phase 0 
-## 9. Soundness-claim lens from bb-spec-audit (recorded 2026-07-08)
+Also (per `5f09c55a57`): non-canonical field encodings (≥ modulus) and
+trailing proof bytes must be REJECTED by co-noir's deserialization —
+merges with Phase 0
+## 9. Soundness-claim lens (recorded 2026-07-08)
 
-Source: the **bb-spec-audit** methodology in `~/claudebox`
-(`claudebox/claude-files/bb-spec-audit/SPEC.md` + `skills/spec-method`,
-`spec-architect`, `spec-attacker`, `spec-curator`, `spec-integrator`), plus
-the companion **barretenberg correctness-facts** KB
-(`claudebox/claude-files/bb-correctness/skills/bb-correctness/barretenberg-facts.md`).
-bb-spec-audit builds, per bb module, a **claim graph** decomposing "this
-module is sound" into atomic claims, hardened by perpetual *independent
-completeness attack* (confidence = structural ossification, no stop rule).
-Its live graph content sits on the `cb/bb-spec-audit` branch of the private
-`AztecProtocol/barretenberg-claude` repo (not checked out locally).
-
-### 9.1 The threat model — and why it reshapes WHERE co-noir must be tested
-bb-spec's soundness definition: *no prover-controlled witness makes the code
-accept a false result; the circuit + VK are fixed and trusted; the attack
-surface is witness values; named primitives (field arithmetic, curve params,
-gate relations) are floor assumptions.* Applying this to co-noir's Rust
-re-implementation gives a sharp split that should steer our test effort:
+### 9.1 Where soundness lives — and why it reshapes WHERE co-noir must be tested
+The soundness model for this kind of system: no prover-controlled witness
+makes the code accept a false result; the circuit + VK are fixed and
+trusted; the only thing that varies is witness values; named primitives
+(field arithmetic, curve params, gate relations) are floor assumptions.
+Applying this to co-noir's Rust re-implementation gives a sharp split that
+should steer our test effort:
 
 - **The MPC/plain PROVER carries NO soundness.** A buggy prover only fails
   to produce accepted proofs (a *completeness*/liveness problem) or leaks
@@ -255,39 +248,39 @@ the SSIPA fix is **verifier-side**, the ROM/RAM fix is **builder-side**.
 the MPC prover is covered by MPC-consistency + privacy tests, not soundness
 negatives.
 
-### 9.2 Corroborations of our own findings (correctness-facts KB)
-- **BB-ECC-001** (point-at-infinity is a `(0,0)` sentinel; equality checks
-  that compare only x,y and skip the infinity flag are incomplete — caller
-  must guarantee inputs aren't infinity) — directly validates the step-①
-  `(0,0)`-sentinel rework and flags a soundness obligation for co-noir's EC
-  add/MSM builder path (phase-2 item 2.6). The current bb-spec-audit SCOPE
-  is the `cycle_group ⇄ ultra_circuit_builder` boundary — i.e. this exact
-  code — so that graph, once populated, is a ready-made completeness
-  checklist for co-noir's co-builder EC constraints.
-- **BB-HONK-001 / BB-CIVC-002**: copy-constraint / wire-equality is enforced
-  ONLY by the full prover, never a `CircuitChecker`-style row check. Lesson
-  for us: co-noir soundness negatives that target wire-equality must run the
-  full prove→verify, not any partial gate-check shortcut (our plaindriver
+### 9.2 Corroborating technical facts
+- Point-at-infinity is a `(0,0)` sentinel; equality checks that compare
+  only x,y and skip the infinity flag are incomplete — the caller must
+  guarantee inputs aren't infinity. This directly validates the step-①
+  `(0,0)`-sentinel rework and flags a soundness obligation for co-noir's
+  EC add/MSM builder path (phase-2 item 2.6): the `cycle_group ⇄
+  ultra_circuit_builder` boundary is exactly this code, and is a
+  ready-made completeness checklist for co-noir's co-builder EC
+  constraints.
+- Copy-constraint / wire-equality is enforced ONLY by the full prover,
+  never a `CircuitChecker`-style row check. Lesson for us: co-noir
+  soundness negatives that target wire-equality must run the full
+  prove→verify, not any partial gate-check shortcut (our plaindriver
   self-verify already does; keep it that way).
-- **BB-HONK-003** (witnesses for known/constant values must still be
-  constrained) is the general form of the ROM/RAM field-wrap fix — the "free
+- Witnesses for known/constant values must still be constrained — this is
+  the general form of the ROM/RAM field-wrap fix — the "free
   `add_variable(0)`" was an unconstrained known-value witness.
-- **BB-RANGE-001** (range constraints must REJECT, not truncate) and
-  **BB-BIGFIELD-001/002** (limb range bounds; substitution preconditions
-  must be constrained) are the atomic soundness claims behind ch. 06's
-  implicit-range concerns and the §3.6 highest-value soundness test.
+- Range constraints must REJECT, not truncate, and limb range
+  bounds/substitution preconditions must be constrained — these are the
+  atomic soundness claims behind ch. 06's implicit-range concerns and the
+  §3.6 highest-value soundness test.
 
-### 9.3 How we reuse it (not rebuild it)
-1. **Adopt the claim-decomposition frame for co-noir's green-up gate**:
-   before declaring a synced module done, state its soundness as a short
-   claim list (the atomic invariants its verifier/builder must enforce) and
-   ensure a negative test pins each. The §3a mandatory tests are the first
-   entries; the bb-spec graph for a module is the source of the rest.
-2. **When bb-spec publishes a module's graph**, mirror its atomic
-   verifier/builder claims into co-noir negative tests — same protocol, same
-   invariants, so the claims transfer directly (this is the differential-
-   fuzz seed set for PLAN decision 6a).
-3. **Do NOT** stand up a parallel claim-graph lane for co-noir now — that is
-   a Phase 4+ activity. For Phase 2 the reuse is: (a) the prover-vs-
-   verifier/builder soundness split above to aim testing, and (b) the two
-   §3a regression tests already mandated.
+### 9.3 How this steers Phase 2 vs later work
+1. **Before declaring a synced module done, state its soundness as a
+   short claim list**: the atomic invariants its verifier/builder must
+   enforce, with a negative test pinning each. The §3a mandatory tests
+   are the first entries; new invariants found by code review or
+   differential testing extend the list over time.
+2. **As new invariants are identified**, mirror them into co-noir
+   negative tests using the same protocol and the same invariants — this
+   is the differential-fuzz seed set for PLAN decision 6a.
+3. For Phase 2 the priority is: (a) the prover-vs-verifier/builder
+   soundness split above, used to aim testing, and (b) the two §3a
+   regression tests already mandated. A broader, systematic claim-by-claim
+   soundness review across every bb module is Phase 4+ scope (the
+   differential-fuzz harness, §6.1 / backlog ch. 15 §4.9).

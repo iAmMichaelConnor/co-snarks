@@ -274,7 +274,7 @@ adds MPC mults (co_ultra_prover.rs:163-202).
 
 ### Committed state (branch mc/update-co-noir, all LOCAL, never pushed)
 ```
-5bc7b050 docs: bb-spec-audit soundness lens → ch.13/11/PLAN
+5bc7b050 docs: soundness-claim lens → ch.13/11/PLAN
 9244b8d1 docs: mine WHY behind UH changes + mandatory security-regression tests
 5bc7b05..e70252e1 e70252e1 test: regenerate vectors (beta.22) + bb KATs at target pin (step ②)
 4e7abb95 feat: Noir beta.22 bump / ark 0.6 / MemOp / (0,0) sentinel (step ①)
@@ -370,8 +370,9 @@ cross-verify; heavy compare_mpc.sh sweep deferred to 2.7.
 
 **2.6 builder residue DONE — commit 5ac55600** (full record ch. 14 §19):
 - ROM/RAM sorted-chain pinning (bb 1f7ed2ea79 soundness fix: index-delta
-  roots {0,−1} allowed a p−1 chain start → forged reads/writes; pinned
-  first index to zero_idx in ROM+RAM public+MPC-shared paths, last ROM
+  roots {0,−1} allowed a p−1 chain start → reads/writes at an index that
+  wasn't genuinely constrained; pinned first index to zero_idx in
+  ROM+RAM public+MPC-shared paths, last ROM
   index to constant N−1).
 - Two EXTRA proof-breaking changes found by parity-testing beyond the KAT
   circuits: lookup table_index now starts at 1 (logup beta³ guarantee) and
@@ -452,7 +453,7 @@ THE bb oracle = `~/.bb-target-src/bb` (source-built at v5.0.0-nightly.20260708;
 `--version` prints zeros — expected). NOT `~/.bb-target/bb` (rc.2, wrong).
 
 ### Open tasks (harness task list): #7 merge+reconcile, #8 recursion regen.
-### Deferred: SSIPA A(1)=0 forgery test (ch.13 §3a#8). Open: non-canonical
+### Deferred: SSIPA A(1)=0 kernel-perturbation test (ch.13 §3a#8). Open: non-canonical
 ### (≥-modulus) field-encoding rejection (ch.15 §1.3).
 
 ## Session 3 (continued) — 2026-07-08 — MERGED secreg-27 + docs-27 into mc/update-co-noir
@@ -483,6 +484,6 @@ compile && execute` (0.6s). Prevention → ch.12 §3 + new §4a (recursion-vecto
 regen: WHEN-only + bb command sequence) + ch.14 §20.
 
 **Phase 2 status: DONE except two tracked follow-ups** — deferred SSIPA A(1)=0
-forgery test (ch.13 §3a#8) and non-canonical (≥modulus) field-encoding
+kernel-perturbation test (ch.13 §3a#8) and non-canonical (≥modulus) field-encoding
 rejection (ch.15 §1.3). All circuits (incl. recursion) pass; security
 regressions in place; fast-check.sh is the iteration tool.

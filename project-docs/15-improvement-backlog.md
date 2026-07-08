@@ -38,9 +38,9 @@ are listed here so nothing rides on memory.
    `offcurve_proof_point_rejected` + `offcurve_vk_commitment_rejected`.
 3. **✅ RESOLVED as DO-NOT-CHANGE (2026-07-08): non-canonical (≥modulus)
    field encodings must be REDUCED, not rejected, in the Ultra path — matches
-   bb v5-next.** Investigated: `5f09c55a57` (finding 2513) added the ≥modulus
-   *rejection* only to **MsgPack** deserialization (and 2501's trailing-data
-   check only to **ChonkProof** MsgPack) — NEITHER touches the UltraHonk
+   bb v5-next.** Investigated: `5f09c55a57` added the ≥modulus *rejection*
+   only to **MsgPack** deserialization (and a related trailing-data check
+   only to **ChonkProof** MsgPack) — NEITHER touches the UltraHonk
    proof/VK/transcript field path co-noir reimplements. bb v5-next's Ultra
    field deser still reduces (montgomery/`self_reduce_once`); co-noir already
    matches via ark `from_be_bytes_mod_order`. Adding a rejection here would
@@ -105,8 +105,8 @@ are listed here so nothing rides on memory.
 10. **VERIFY: `(0,0)` infinity-sentinel edge case — confirm no valid BN254
     point collides with the sentinel.** [S / M — co-builder soundness]
     Step ① adopted bb's `(0,0)` encoding for the point at infinity with MPC
-    infinity detection (2 eq-tests + 1 mult). BB-ECC-001 (ch. 13 §9.2)
-    warns that infinity handling is where EC soundness bugs live. Record
+    infinity detection (2 eq-tests + 1 mult). Ch. 13 §9.2 notes that
+    infinity handling is where EC soundness bugs live. Record
     the one-line argument that x=0 has no on-curve preimage for BN254
     (y² = 3 must be a non-residue) — and, for the MPC path, that the
     eq-test-based detection can't be confused by a shared point with one
@@ -114,8 +114,9 @@ are listed here so nothing rides on memory.
 
 ## 2. Missing test ideas (beyond ch. 13's plan)
 
-Each tied to the surface it guards. The ch. 13 §3a trio (SSIPA forgery,
-ROM/RAM field-wrap, non-canonical/trailing) remains the mandatory floor —
+Each tied to the surface it guards. The ch. 13 §3a trio (SSIPA
+kernel-perturbation case, ROM/RAM field-wrap, non-canonical/trailing)
+remains the mandatory floor —
 these are additions, not replacements.
 
 1. **≥4-party Shamir proving test.** [M / H — completeness]
@@ -286,5 +287,6 @@ make drift fail loudly and locally. More of the same:
    Already planned (PLAN 4.1/4.3); recorded here because several §1 VERIFY
    items (recursion parity, gemini masking byte-neutrality) would be
    subsumed by a random-witness differential loop against nightly bb, and
-   the bb-spec-audit claim graphs (PLAN 4.3) supply the negative-test seed
-   set as they publish.
+   the negative-test seed set grows over time as new soundness invariants
+   are identified from code review, differential findings, and upstream bb
+   changes.

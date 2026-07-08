@@ -100,8 +100,8 @@ differential fuzzing of bb-vs-co-noir later (ch. 13 §6). The only mandatory
 coupling is at the KAT boundary — proof/VK bytes and mutual verifier
 acceptance.
 
-**Soundness-surface lens (from bb-spec-audit, ch. 13 §9 — use it to decide
-how much care each edit needs):** soundness of this system lives ONLY in the
+**Soundness-surface lens (ch. 13 §9 — use it to decide how much care each
+edit needs):** soundness of this system lives ONLY in the
 **verifiers** (plain + recursion) and the **co-builder** (circuit
 construction); the MPC/plain prover carries completeness + privacy, not
 soundness. So among the phase-2 items: the verifier-side changes (2.5a
@@ -358,13 +358,13 @@ a builder item done.**
 - **ROM/RAM sorted-index pinning** (`1f7ed2ea79`): first sorted index pinned
   to `zero_idx`, last to constant `N−1`. Update ROM/RAM handling in
   `co-builder/src/types/rom_ram.rs` + `ultra_builder.rs` block constraints.
-  ✅ **AS BUILT:** this is a **SOUNDNESS fix** (field-wrap attack: Δ²+Δ=0 has
-  roots {0,−1}, so an unpinned chain could start at p−1 and forge memory
-  ops — ch. 03 §6). Correct file is `ultra_builder.rs`'s
+  ✅ **AS BUILT:** this is a **SOUNDNESS fix** (a field-wrap gap: Δ²+Δ=0 has
+  roots {0,−1}, so an unpinned chain could start at p−1 and perform
+  unconstrained memory ops — ch. 03 §6). Correct file is `ultra_builder.rs`'s
   `process_{rom,ram}_array_*` (public + MPC-shared paths);
   `types/rom_ram.rs` is the recursion-verifier LUT, a different thing
   (ch. 14 §13.2). The pinning must copy-constrain to the genuinely
-  constrained `zero_idx` — a fresh `add_variable(0)` reopens the attack.
+  constrained `zero_idx` — a fresh `add_variable(0)` reopens the gap.
   The ch. 13 §3a field-wrap regression test is MANDATORY in 2.7.
 - **SHA-256 / secp256r1-ECDSA table changes**: only affect gate-count
   constants; since co-noir does **not** implement ECDSA and SHA-256 gate
@@ -418,8 +418,9 @@ a builder item done.**
    `~/.bb-target-src/bb`** and a full beta.22 recompile of
    `examples/test_vectors/*` (ch. 14 §19.2). ← remaining, = PLAN item 2.7.
 7. ⏳ Negative tests (ch. 13) still reject — **including the §3a mandatory
-   security regressions** (SSIPA kernel forgery through the Shplemini path;
-   ROM/RAM field-wrap; non-canonical encodings + trailing bytes) and the
+   security regressions** (SSIPA kernel-perturbation case through the
+   Shplemini path; ROM/RAM field-wrap; non-canonical encodings + trailing
+   bytes) and the
    slow circuit set (aes128, sha256 e2e, recursion, recursion_zk).
    ← remaining, = PLAN item 2.7.
 
