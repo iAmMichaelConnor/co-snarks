@@ -298,6 +298,35 @@ impl PlainCoSolver<ark_bn254::Fr> {
             println!("no output for circuit")
         }
     }
+
+    /// Test-only constructor building a minimal, empty solver so that individual
+    /// opcode-solving methods (e.g. memory ops) can be unit tested without needing a
+    /// full `ProgramArtifact`.
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        let mut driver = PlainAcvmSolver::default();
+        let brillig = CoBrilligVM::init(
+            driver
+                .init_brillig_driver()
+                .expect("plain brillig driver init never fails"),
+            vec![],
+        );
+        Self {
+            driver,
+            brillig,
+            abi: Abi {
+                parameters: vec![],
+                return_type: None,
+                error_types: BTreeMap::new(),
+            },
+            value_store: PssStore::new(),
+            functions: vec![],
+            witness_map: vec![WitnessMap::default()],
+            function_index: Self::DEFAULT_FUNCTION_INDEX,
+            memory_access: IntMap::new(),
+            pedantic_solving: true,
+        }
+    }
 }
 
 impl<T, F> CoSolver<T, F>
@@ -474,5 +503,65 @@ where
             witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
         }
         Ok(witness_stack)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use acir::FieldElement;
+    use acir::native_types::{Witness, WitnessMap};
+    use noirc_abi::{Abi, AbiParameter, AbiType, AbiVisibility, Sign};
+    use std::collections::BTreeMap;
+
+    fn abi_with_single_param(typ: AbiType) -> Abi {
+        Abi {
+            parameters: vec![AbiParameter {
+                name: "x".to_string(),
+                typ,
+                visibility: AbiVisibility::Private,
+            }],
+            return_type: None,
+            error_types: BTreeMap::new(),
+        }
+    }
+
+    fn witness_map_with_single_value(value: u128) -> WitnessMap<FieldElement> {
+        WitnessMap::from(BTreeMap::from([(Witness(0), FieldElement::from(value))]))
+    }
+
+    /// Regression test for noir-claude #932 ("ABI decode canonicality"): under beta.20,
+    /// `Abi::decode` skipped the range/canonicality checks that `encode` enforces, so a
+    /// `bool` witness value of `2` (or a `u8` witness of `256`) would decode without
+    /// error, silently corrupting the witness->input mapping. co-noir consumes
+    /// `noirc_abi::Abi` directly (`co-noir/noir-types/src/lib.rs`,
+    /// `co-noir/co-acvm/src/solver.rs::solve_and_print_output`) and is pinned to the
+    /// noir beta.22 tag, which fixed this in `noirc_abi/src/lib.rs` (`decode_value`
+    /// calling `find_type_mismatch`). This test proves the fix is actually inherited by
+    /// co-noir's dependency pin rather than merely assumed.
+    #[test]
+    fn abi_decode_rejects_out_of_range_boolean() {
+        let abi = abi_with_single_param(AbiType::Boolean);
+        assert!(abi.decode(&witness_map_with_single_value(2)).is_err());
+    }
+
+    #[test]
+    fn abi_decode_rejects_out_of_range_u8() {
+        let abi = abi_with_single_param(AbiType::Integer {
+            sign: Sign::Unsigned,
+            width: 8,
+        });
+        assert!(abi.decode(&witness_map_with_single_value(256)).is_err());
+    }
+
+    #[test]
+    fn abi_decode_accepts_in_range_values() {
+        let bool_abi = abi_with_single_param(AbiType::Boolean);
+        assert!(bool_abi.decode(&witness_map_with_single_value(1)).is_ok());
+
+        let u8_abi = abi_with_single_param(AbiType::Integer {
+            sign: Sign::Unsigned,
+            width: 8,
+        });
+        assert!(u8_abi.decode(&witness_map_with_single_value(255)).is_ok());
     }
 }
