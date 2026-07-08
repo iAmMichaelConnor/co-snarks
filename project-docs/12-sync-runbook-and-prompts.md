@@ -22,8 +22,12 @@ deliberately does not cover anything else.*
    don't "fix" it mid-sync.)
 3. **Plain `ultrahonk` first, then mirror into `co-ultrahonk`.** The plain
    KAT byte-equality test is the tightest oracle; get it green before MPC.
-4. **The reference `bb` binary is the source of truth**, not memory or docs.
-   Install it (`bbup -v <target>`) and diff against it.
+4. **The reference `bb` binary is the source of truth**, not memory or docs —
+   and it must be **provenance-verified** (§3 first gotcha): prefer a bb
+   **built from source at the exact target tag**; if using a prebuilt
+   (`bbup -v <target>` or a release tarball), first byte-compare its
+   `write_vk` output against a source build. A prebuilt rc binary burned us
+   once (ch. 14 §17.1).
 5. **No pushing anywhere** (project confidentiality rule, PLAN.md).
 6. **Nothing is done until the full test matrix (ch. 13) is green**, including
    negative tests and 4-way cross-verification against real `bb`.
@@ -144,8 +148,9 @@ gotchas so the agent can't wander. `<PIN>`/`<TARGET>` are version tags.
 > Do not regenerate KATs yet. Do not push.
 
 ### Prompt C — regenerate KATs & vectors (write, needs `bb`/`nargo`)
-> Reference binaries are installed (`bb` at `<TARGET>` via bbup, matching
-> nargo via noirup). Regenerate co-noir's test vectors and KATs for the new
+> Reference binaries are installed (`bb` at `<TARGET>` — provenance-verified
+> per §3's first gotcha, source-built if in any doubt; matching nargo via
+> noirup). Regenerate co-noir's test vectors and KATs for the new
 > pin: run `test_vectors/noir/compile.sh` and the examples `compile.sh`;
 > regenerate the committed bb proof KATs (`add3u64`, `poseidon`, both
 > `--oracle_hash poseidon2` and `keccak`, `--disable_zk`) and all committed

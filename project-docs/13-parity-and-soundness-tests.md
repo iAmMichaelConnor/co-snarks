@@ -94,8 +94,17 @@ These are not optional hardening — each corresponds to a real attack bb
 fixed via its private security repo. Port bb's regression tests, not just
 the happy path.
 
+> **§3a status (2026-07-08, branch `mc/secreg-27`):** #8 SSIPA forgery =
+> ⏳ DEFERRED (specified below + inline in `security_regression.rs`; a naive
+> version gives false confidence, so not faked). #9 ROM/RAM field-wrap = ✅
+> DONE, commit `e713391d` (structural pin tests in co-builder, both ROM and
+> RAM). #10 = ✅ PARTLY DONE, commit `a7621aa4`: trailing-data + off-curve
+> reject cleanly (tests in `security_regression.rs`); non-canonical
+> (≥-modulus) field encodings still ⏳ OPEN (backlog ch.15 §1.3). ZK-path
+> tamper coverage added (commit `bac2fe03`).
+
 8. **SSIPA forgery (ports bb `shplemini.test.cpp` malicious-prover test;
-   bb PR #44).** Construct the homogeneous-kernel perturbation
+   bb PR #44).** ⏳ DEFERRED. Construct the homogeneous-kernel perturbation
    (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1) for j≥1, δ_s=c) that satisfies the SSIPA
    identity at r but forges the Libra inner-product, and assert the co-noir
    ZK verifier **rejects** it. CRITICAL: the test must exercise the full

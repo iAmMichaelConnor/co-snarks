@@ -399,6 +399,13 @@ curl -sL …/releases/download/v5.0.0-rc.2/barretenberg-amd64-linux.tar.gz | tar
 # are needed during the sync (old = regression reference, new = target).
 ```
 
+> ⚠ **SUPERSEDED (see §17.1):** the "rc.2 is a valid UH parity oracle"
+> conclusion above later proved FALSE — the rc.2 *release binary* predates
+> the entity reorder even though its *source tree* matches. THE target
+> oracle is `~/.bb-target-src/bb` (source-built at the target tag). The
+> record above is kept as-is because the flawed reasoning (source-tree diff
+> ⇒ binary equivalence) is exactly the lesson.
+
 ## 13. Pre-flight plan validation (before any code change)
 
 Three parallel read-only verification passes launched over the actual code
@@ -602,7 +609,10 @@ sed -i 's/NARGO_VERSION=1.0.0-beta.20/NARGO_VERSION=1.0.0-beta.22/' \
 # [OK] all 32 vectors recompiled+executed with nargo beta.22
 bash test_vectors/noir/compile.sh
 
-# [OK] 4 bb proof KATs regenerated with TARGET bb (~/.bb-target/bb):
+# [OK at the time — but see §17.1: ~/.bb-target/bb was later found to be a
+# WRONG oracle (rc.2 binary predates the entity reorder); these 4 KATs were
+# regenerated with the source-built ~/.bb-target-src/bb during step ④]
+# 4 bb proof KATs regenerated with TARGET bb (~/.bb-target/bb):
 # add3u64+poseidon × {poseidon2,keccak}, non-ZK, via write_vk+prove
 # [FAIL→OK] ZK length probe: first attempt reused the non-ZK VK — ZK prove
 # needs a VK written WITHOUT --disable_zk. Retried correctly:

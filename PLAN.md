@@ -87,7 +87,10 @@ no pasting project code into external services. When in doubt, don't.
   02 co-snarks repo map + wrapper-tooling catalogue, 03 bb version-diff
   analysis, 04 monty-hall/Aztec integration, 05 approach assessment,
   06 blackbox support matrix, 07 UltraHonk primer, 08 data-flow diagrams,
-  09 PXE secret sharer, 10 PXE/wallet architecture.
+  09 PXE secret sharer, 10 PXE/wallet architecture, 11 Phase-2 sync workplan
+  (status lives HERE in PLAN.md; ch. 11 is the file-by-file HOW, annotated
+  AS BUILT), 12 sync runbook + agent prompts, 13 parity/soundness test plan,
+  14 Phase 0+2 command log, 15 improvement backlog.
 - **`project-docs/PROGRESS.md`** — append-only session log. Every session
   starts by reading PLAN.md + README.md + PROGRESS.md, and ends by appending.
 
