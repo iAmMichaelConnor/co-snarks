@@ -36,14 +36,19 @@ are listed here so nothing rides on memory.
    sites: `transcript.rs` `receive_point_from_prover` and both
    `verification_key.rs` `from_buffer{,_keccak}`. Regression tests
    `offcurve_proof_point_rejected` + `offcurve_vk_commitment_rejected`.
-3. **VERIFY: non-canonical field encodings (value ≥ modulus) — reject or
-   silently reduce?** [S / M — malleability, verifier surface]
-   bb `5f09c55a57` (audit findings #2493/#2501/#2513) now throws on
-   ≥-modulus encodings; ch. 13 §3a#10 mandates matching. Nobody has yet
-   checked what co-noir's field deserialization
-   (`co-noir-common/src/serialize.rs`, keccak transcript path) does with a
-   ≥ p limb — if ark's `from_*` reduces silently, co-noir accepts proof
-   encodings bb rejects (a parity break and a malleability vector).
+3. **✅ RESOLVED as DO-NOT-CHANGE (2026-07-08): non-canonical (≥modulus)
+   field encodings must be REDUCED, not rejected, in the Ultra path — matches
+   bb v5-next.** Investigated: `5f09c55a57` (finding 2513) added the ≥modulus
+   *rejection* only to **MsgPack** deserialization (and 2501's trailing-data
+   check only to **ChonkProof** MsgPack) — NEITHER touches the UltraHonk
+   proof/VK/transcript field path co-noir reimplements. bb v5-next's Ultra
+   field deser still reduces (montgomery/`self_reduce_once`); co-noir already
+   matches via ark `from_be_bytes_mod_order`. Adding a rejection here would
+   DIVERGE from bb → parity break. `ignore.md` (governing rule) confirms:
+   #1428/#1430/#787 non-canonical acceptance is *unchanged* in v5-next → match
+   bb, carry over nothing. (Honest proofs are canonical anyway; adversarial
+   ones reduce identically in both → same accept/reject.) No code change; this
+   is a parity-checklist invariant, not a fix.
 4. **VERIFY: the two verifier-hardening bb commits were never explicitly
    ported.** [S / M — verifier]
    Ch. 03 §2 flagged `1391c49546` (reject VKs with `log_circuit_size = 0` —

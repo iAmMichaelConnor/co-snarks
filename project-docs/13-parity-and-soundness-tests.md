@@ -121,13 +121,17 @@ the happy path.
    constrained to a genuinely-constrained zero witness, not a free
    `add_variable(0)`). Guards the phase-2 item 2.6 builder work; without the
    pinning gate this test passes-as-vulnerable.
-10. **Non-canonical field encodings + trailing data (bb `5f09c55a57`,
-    audit findings #2493/#2501/#2513).** A proof/VK field element with value
-    ≥ modulus must be **rejected**, not silently reduced (malleability);
-    trailing proof bytes must be rejected (subsumes §3.4 and directly
-    addresses the Phase 0 finding that co-noir accepts trailing bytes).
-    Off-curve points must yield a clean reject, not the ark-ec panic Phase 0
-    observed.
+10. **Trailing data + off-curve points (DONE); non-canonical encodings
+    (DO NOT CHANGE — match bb).** ✅ Trailing proof bytes now rejected
+    (`assert_fully_consumed`, matches bb's exact-size pinning) and off-curve
+    points cleanly rejected instead of panicking (`g1_affine_from_xy_checked`)
+    — commit `a7621aa4`, tests in `security_regression.rs`. ⚠ **Non-canonical
+    (≥modulus) field encodings must be REDUCED, not rejected**, in the Ultra
+    path: `5f09c55a57`'s ≥modulus rejection (finding 2513) is **MsgPack-only**
+    (and 2501's trailing-data check is **ChonkProof MsgPack**) — neither
+    touches the Ultra proof/transcript field deser co-noir reimplements. bb
+    v5-next's Ultra path reduces; co-noir matches (ark `from_be_bytes_mod_order`).
+    Rejecting would break parity — see ch.15 §1.3 / `ignore.md` #1428/#1430/#787.
 
 ## 4. Completeness tests to add
 1. **Input diversity per circuit**: today each vector proves one fixed
