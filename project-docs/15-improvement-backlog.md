@@ -18,27 +18,24 @@ privacy only.
 Ordered roughly by risk. Several are already implied by PLAN item 2.7; they
 are listed here so nothing rides on memory.
 
-1. **VERIFY: trailing-proof-bytes check is still absent.** [S / M —
-   verifier robustness + bb parity]
-   Phase 0 finding 1 (ch. 14 §7) and ch. 13 §3a#10 mandate rejecting proofs
-   with trailing data. Verified in this worktree 2026-07-08:
-   `co-noir-common/src/transcript.rs` tracks `num_frs_read` (line ~125) and
-   errors on *over*-read (line ~280), but no verifier asserts
-   `num_frs_read == proof_data.len()` at the end, and no "fully consumed"
-   check exists anywhere under `co-noir/ultrahonk/src` or
-   `co-noir-common/src`. bb rejects trailing bytes (audit-driven
-   `5f09c55a57`). One assertion at the end of plain + MPC + recursion
-   verify paths closes it.
-2. **VERIFY: off-curve points in proof/VK still PANIC instead of cleanly
-   rejecting.** [S–M / M — verifier DoS robustness]
-   Phase 0 finding 2. Verified still present:
-   `co-noir-common/src/honk_curve.rs` `g1_affine_from_xy` calls
-   `ark_bn254::G1Affine::new(x, y)`, which asserts `is_on_curve()` and
-   panics; it is fed raw proof/VK bytes via
-   `transcript.rs` `receive_point_from_prover` (~line 300–320). Fix shape:
-   `new_unchecked` + explicit `is_on_curve()` / subgroup check returning
-   `HonkProofError`, at the parse boundary only (prover-side internal
-   points are trusted).
+1. **✅ DONE (was: trailing-proof-bytes check absent).** [S / M —
+   verifier robustness + bb parity] — **fixed on `mc/secreg-27`, commit
+   `a7621aa4`.** `Transcript::assert_fully_consumed` now asserts
+   `num_frs_read == proof_data.len()` after the final (KZG:W) read in the
+   plain/MPC decider verify path; new error `HonkProofError::
+   ProofNotFullyConsumed`. Regression test `trailing_proof_data_rejected`
+   in `tests/tests/noir/proof_tests/security_regression.rs`.
+   *(NOTE: the recursion verify path is in-circuit and does not use this
+   runtime transcript — its proof-size is instead pinned by the
+   `assert_eq!` added in item 2.6's honk_recursion_constraint size check.)*
+2. **✅ DONE (was: off-curve points PANIC).** [S–M / M — verifier DoS
+   robustness] — **fixed on `mc/secreg-27`, commit `a7621aa4`.** New
+   fallible `HonkCurve::g1_affine_from_xy_checked` (`new_unchecked` +
+   `is_on_curve()` + `is_in_correct_subgroup_assuming_on_curve()` →
+   `HonkProofError::PointNotOnCurve`) used at the three untrusted parse
+   sites: `transcript.rs` `receive_point_from_prover` and both
+   `verification_key.rs` `from_buffer{,_keccak}`. Regression tests
+   `offcurve_proof_point_rejected` + `offcurve_vk_commitment_rejected`.
 3. **VERIFY: non-canonical field encodings (value ≥ modulus) — reject or
    silently reduce?** [S / M — malleability, verifier surface]
    bb `5f09c55a57` (audit findings #2493/#2501/#2513) now throws on
