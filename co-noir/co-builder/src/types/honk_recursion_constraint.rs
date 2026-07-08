@@ -123,6 +123,21 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
             ZeroKnowledge::Yes
         };
 
+        // The ACIR-side proof excludes the inner circuit's public inputs but includes the
+        // pairing-point object (PUBLIC_INPUTS_SIZE frs). Error out early on a mis-specified
+        // proof size in the noir program, like bb does.
+        let expected_proof_size = PUBLIC_INPUTS_SIZE
+            + if has_zk == ZeroKnowledge::Yes {
+                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK
+            } else {
+                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS
+            };
+        assert_eq!(
+            input.proof.len(),
+            expected_proof_size,
+            "create_honk_recursion_constraints: ACIR proof size mismatch."
+        );
+
         // Currently no IPA support
 
         // Step 1.

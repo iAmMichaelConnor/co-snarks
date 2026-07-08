@@ -1948,11 +1948,27 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             })
             .collect();
         records.sort();
-        for record in records {
+        // The index-delta sub-relation has roots {0,-1} in the field, so a sorted chain starting
+        // at p-1 satisfies the delta=1 check when transitioning to 0. Pin the chain at both ends
+        // (first sorted index to the constant zero, last to the constant N-1) so every sorted
+        // index is symbolically bounded in [0, N-1]. put_constant_variable caches by value, so in
+        // the typical case no extra gate is emitted; the pin is enforced through the copy
+        // constraint to the cached fix_witness gate.
+        let num_records = records.len();
+        let last_index_value = self.rom_arrays[rom_id].state.len() as u64 - 1;
+        for (i, record) in records.into_iter().enumerate() {
             let index = record.index;
             let value1 = self.get_variable(record.value_column1_witness.try_into().unwrap());
             let value2 = self.get_variable(record.value_column2_witness.try_into().unwrap());
-            let index_witness = self.add_variable(T::AcvmType::from(index));
+            let index_witness = if i == 0 {
+                // Start-of-chain pin: bound to the circuit's constant zero.
+                self.zero_idx
+            } else if i == num_records - 1 {
+                // End-of-chain pin: bound to the circuit constant N-1 via copy constraint.
+                self.put_constant_variable(P::ScalarField::from(last_index_value))
+            } else {
+                self.add_variable(T::AcvmType::from(index))
+            };
             let value1_witness = self.add_variable(value1);
             let value2_witness = self.add_variable(value2);
             let mut sorted_record = RomRecord::<T::AcvmType> {
@@ -2013,8 +2029,24 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
 
         let sorted = T::sort_vec_by(driver, &key, inputs, 32)?;
         let records = self.rom_arrays[rom_id].records.clone();
-        for (record, index, col1, col2) in izip!(records, &sorted[0], &sorted[1], &sorted[2]) {
-            let index_witness = self.add_variable(index.clone().into());
+        // Pin the sorted chain at both ends (see process_rom_array_public_inner). Every ROM cell
+        // is force-initialized before processing, so the first sorted index is structurally 0 and
+        // the last is N-1 even when the indices are shared — the pins are public constants and
+        // leak nothing.
+        let num_records = records.len();
+        let last_index_value = self.rom_arrays[rom_id].state.len() as u64 - 1;
+        for (i, (record, index, col1, col2)) in
+            izip!(records, &sorted[0], &sorted[1], &sorted[2]).enumerate()
+        {
+            let index_witness = if i == 0 {
+                // Start-of-chain pin: bound to the circuit's constant zero.
+                self.zero_idx
+            } else if i == num_records - 1 {
+                // End-of-chain pin: bound to the circuit constant N-1 via copy constraint.
+                self.put_constant_variable(P::ScalarField::from(last_index_value))
+            } else {
+                self.add_variable(index.clone().into())
+            };
             let value1_witness = self.add_variable(col1.clone().into());
             let value2_witness = self.add_variable(col2.clone().into());
             let mut sorted_record = RomRecord::<T::AcvmType> {
@@ -2124,7 +2156,15 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         for (i, record) in records.into_iter().enumerate() {
             let index = record.index;
             let value = self.get_variable(record.value_witness.try_into().unwrap());
-            let index_witness = self.add_variable(T::AcvmType::from(index));
+            // The index-delta sub-relation has roots {0,-1} in the field, so a sorted chain
+            // starting at p-1 satisfies the delta=1 check when transitioning to 0. Pin the first
+            // sorted gate's index witness to the constant zero (copy-constrained through its
+            // fix_witness gate) so a malicious prover cannot start the chain at p-1.
+            let index_witness = if i == 0 {
+                self.zero_idx
+            } else {
+                self.add_variable(T::AcvmType::from(index))
+            };
 
             let timestamp_witness =
                 self.add_variable(T::AcvmType::from(P::ScalarField::from(record.timestamp)));
@@ -2271,7 +2311,14 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         for (i, (record, index, value, stamp, access_type)) in
             izip!(records, &sorted[0], &sorted[1], &sorted[2], &sorted[3]).enumerate()
         {
-            let index_witness = self.add_variable(index.clone().into());
+            // Pin the first sorted gate's index witness to the constant zero (see
+            // process_ram_array_public_inner); RAM cell 0 is always initialized, so the first
+            // sorted index is structurally 0 even when shared — the pin leaks nothing.
+            let index_witness = if i == 0 {
+                self.zero_idx
+            } else {
+                self.add_variable(index.clone().into())
+            };
             let timestamp_witness = self.add_variable(stamp.clone().into());
             let value_witness = self.add_variable(value.clone().into());
             let mut sorted_record = RamRecord::<T::AcvmType> {
@@ -4306,9 +4353,10 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
         let len = self.lookup_tables.len();
         if index == len {
-            // Table doesn't exist! So try to create it.
+            // Table doesn't exist! So try to create it. Indices start at 1 so that the relation
+            // batched term always contains at least beta cubed.
             self.lookup_tables
-                .push(PlookupBasicTable::create_basic_table(id, len));
+                .push(PlookupBasicTable::create_basic_table(id, len + 1));
             self.lookup_tables.last_mut().unwrap()
         } else {
             &mut self.lookup_tables[index]

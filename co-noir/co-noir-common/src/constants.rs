@@ -80,6 +80,13 @@ pub const DECIDER_PROOF_LENGTH_ZK: usize =
 
 pub const OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS: usize = WITNESS_ENTITIES_SIZE * 4;
 
+// Target invariants at bb v5-next (mirrors bb's static_asserts): the proof-with-pairing-points
+// sizes accepted in-contract are 410 (non-ZK) / 458 (ZK) frs, and the VK is 115 frs. A change in
+// any component constant above must fail here loudly rather than silently drift the proof format.
+const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS + PUBLIC_INPUTS_SIZE == 410);
+const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK + PUBLIC_INPUTS_SIZE == 458);
+const _: () = assert!(ULTRA_VERIFICATION_KEY_LENGTH == 115);
+
 pub const MOCK_PROOF_DYADIC_SIZE: usize = 1 << 6;
 
 pub const NUM_WIRES: usize = 4;
