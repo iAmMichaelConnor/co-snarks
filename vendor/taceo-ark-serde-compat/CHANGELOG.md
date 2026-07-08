@@ -1,0 +1,100 @@
+# Changelog
+
+## [Unreleased]
+
+## [0.5.0](https://github.com/TaceoLabs/circom-helpers/compare/taceo-ark-serde-compat-v0.4.2...taceo-ark-serde-compat-v0.5.0)
+
+### ⛰️ Features
+
+
+- *(ark-serde-compat)* Add serde with "mod" pattern ([#51](https://github.com/TaceoLabs/circom-helpers/pull/51)) - ([cb7d968](https://github.com/TaceoLabs/circom-helpers/commit/cb7d96898959f53dae35cab8ed69e9e3ea7ec693))
+
+### 🚜 Refactor
+
+
+- *(ark-serde-compat)* [**breaking**] Remove redundant serialize_fr/fq in babyjubjub ([#52](https://github.com/TaceoLabs/circom-helpers/pull/52)) - ([9d66236](https://github.com/TaceoLabs/circom-helpers/commit/9d66236b61f36a202512a8e3ee43290da950557f))
+
+
+## [0.4.2](https://github.com/TaceoLabs/circom-helpers/compare/taceo-ark-serde-compat-v0.4.1...taceo-ark-serde-compat-v0.4.2)
+
+### ⛰️ Features
+
+
+- Add deserialize_f_array and deserialize_f_array_signed - ([3ea30eb](https://github.com/TaceoLabs/circom-helpers/commit/3ea30eb3555f4ff0c2bb9f5c7397892f5f747683))
+
+### 🚜 Refactor
+
+
+- Move length check for array to calling function - ([278f57f](https://github.com/TaceoLabs/circom-helpers/commit/278f57f1bddd4ccf3bb8d7c6f14ee0ee47ff343d))
+- Extract deser_seq_or_bytes and deser_array helpers - ([45248bf](https://github.com/TaceoLabs/circom-helpers/commit/45248bf48e73056ad5f85e8a7ddcb82bdf55f9c2))
+
+### 🧪 Testing
+
+
+- Restructure and add more negative tests - ([6a02a5f](https://github.com/TaceoLabs/circom-helpers/commit/6a02a5f5a0c0667ae4c2527f1e10e9a01d881ad1))
+- Add deserialize_f_array and deserialize_f_array_signed to roundtrip tests - ([0623d0a](https://github.com/TaceoLabs/circom-helpers/commit/0623d0a9fe3c030476cdc6a6384ba9a7f1f5e6ed))
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Add prod clippy lints - ([e90e7a2](https://github.com/TaceoLabs/circom-helpers/commit/e90e7a2f12296cb248e6384fe5e561ecf143343e))
+
+
+## [0.4.1](https://github.com/TaceoLabs/circom-helpers/compare/taceo-ark-serde-compat-v0.4.0...taceo-ark-serde-compat-v0.4.1)
+
+### 🐛 Bug Fixes
+
+
+- Make string number parsing even stricter ([#36](https://github.com/TaceoLabs/circom-helpers/pull/36)) - ([633574e](https://github.com/TaceoLabs/circom-helpers/commit/633574e4aedb04e0092071523f7db8d92c961a6b))
+
+
+## [0.4.0](https://github.com/TaceoLabs/circom-helpers/compare/taceo-ark-serde-compat-v0.3.0...taceo-ark-serde-compat-v0.4.0)
+
+### ⛰️ Features
+
+
+- [**breaking**] Add unsigned variants of parsing. ([#31](https://github.com/TaceoLabs/circom-helpers/pull/31)) - ([f4703a3](https://github.com/TaceoLabs/circom-helpers/commit/f4703a383eb00cca6e702024b07c86082ec23fd0))
+
+### 🧪 Testing
+
+
+- Remove bincode serialization test, as this functionality is - ([515b224](https://github.com/TaceoLabs/circom-helpers/commit/515b22424f4301ff70123ca84899fd7985cf8cdb))
+
+
+## [0.3.0](https://github.com/TaceoLabs/circom-helpers/compare/taceo-ark-serde-compat-v0.2.1...taceo-ark-serde-compat-v0.3.0)
+
+### ⛰️ Features
+
+
+- [**breaking**] Added non-human readable serde support - ([76290b2](https://github.com/TaceoLabs/circom-helpers/commit/76290b2f8648b06ad3f3dbcf7375ca843c652b63))
+
+### 🐛 Bug Fixes
+
+
+- *(docs)* Fixes docs tests - ([61e702b](https://github.com/TaceoLabs/circom-helpers/commit/61e702b1bfd098fb8d7806afeb74d1fc2dfdde3b))
+- [**breaking**] Fixes an unnecessary trait bound - ([bbd9c94](https://github.com/TaceoLabs/circom-helpers/commit/bbd9c94529e109c6f465ea2701c97863c2637974))
+
+### 📚 Documentation
+
+
+- Fix documentation for binary support ([#17](https://github.com/TaceoLabs/circom-helpers/pull/17)) - ([798b151](https://github.com/TaceoLabs/circom-helpers/commit/798b1518382ddb1175bc1f01f20d006bc2bcf044))
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Renamed some tests - ([2abbea4](https://github.com/TaceoLabs/circom-helpers/commit/2abbea41723a05f69f962624ea545b92e3a2dcad))
+
+
+## [0.1.0]
+
+### 🚜 Refactor
+
+
+- Rename functions in taceo-ark-serde-compat ([#2](https://github.com/taceolabs/eddsa-babyjubjub/pull/2)) - ([d158752](https://github.com/taceolabs/eddsa-babyjubjub/commit/d158752b663eb29801f5ea23c8ff5efd3a1b4d0b))
+
+### ⚙️ Miscellaneous Tasks
+
+
+- Fix readme - ([0309257](https://github.com/taceolabs/eddsa-babyjubjub/commit/0309257aa748e3fbc5e0c7fa44f6e48a39d454fd))
+- Add workspace structure, add `taceo-` prefix and fix imports - ([3375507](https://github.com/taceolabs/eddsa-babyjubjub/commit/337550723435f4815cb9e1e0d011b93d06f1574a))
+

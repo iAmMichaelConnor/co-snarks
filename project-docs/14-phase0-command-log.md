@@ -498,3 +498,75 @@ without pubs = 402 fields (matches co-noir's existing constant).
 Open item: agent's computed ZK length (421+masking commitment) vs
 co-noir's `..._ZK = 450` — settle empirically from target-bb KAT bytes
 during 2.1 (the KATs adjudicate, not the arithmetic).
+
+## 14. Phase 2 step ① — Noir pin bump beta.20→beta.22
+
+```bash
+# [OK] the 5 dep lines (root Cargo.toml:35-39) + fetch
+sed -i 's/1\.0\.0-beta\.20/1.0.0-beta.22/g; s/v1\.0\.0-beta\.20/v1.0.0-beta.22/g' Cargo.toml
+cargo fetch
+
+# [OK, informative] error surface: 51 compile errors
+cargo check --workspace 2>&1 | grep -cE "^error"   # 51
+```
+
+**Per-commit gate for all Phase 2 code commits** (= Taceo's CI bar from
+`.github/workflows/rust_lint.yml`, per the follow-their-conventions
+decision): `cargo fmt --all -- --check` && `cargo clippy --workspace
+--all-targets -- -D warnings` && compiles && targeted fast tests green
+(full suite at milestones only). NB rust-analyzer needs a restart after a
+dependency-tag bump (stale crate graph) and is expectedly red while a
+refactor is mid-flight.
+
+Error surface (2026-07-08): `noir-types` (2), `co-brillig` (47), downstream
+crates (co-acvm/co-builder) not yet reached.
+
+**Root cause turned out different from ALL predictions** (mine and the
+pre-analysis): Noir beta.22 bumped **arkworks 0.5→0.6**, splitting the
+dependency graph into two incompatible ark universes — the E0614 "cannot be
+dereferenced" errors were duplicate-crate cascade noise, not field-shape
+changes. Once the workspace unified on ark 0.6, noir-types and co-brillig
+compiled with ZERO source changes. Lesson (add to ch. 12 gotchas): when a
+dep bump yields dozens of nonsensical type errors, suspect a duplicated
+transitive dependency (`cargo tree -d`) before believing the error text.
+
+Fix (agent-executed, reviewed): workspace ark 0.5→0.6; two registry crates
+that hard-pin ark 0.5 (`taceo-circom-types` 0.2.5,
+`taceo-ark-serde-compat` 0.5.0 — no ark-0.6 releases exist) **vendored
+into `vendor/` with ark bumped**, wired via `[patch.crates-io]` (drop when
+upstream ships ark-0.6 builds); `ark-relations` 0.6 removed
+`r1cs::{Matrix, ConstraintMatrices}` → defined verbatim in vendored
+circom-types, co-groth16 re-exports from there. Plus the predicted
+semantic work: MemOp (MemOpKind match replaces q_c inspection;
+index/value read as Witness), EC add/MSM (0,0)-sentinel — MPC driver
+trait kept its explicit infinity flags (rep3/plain already emit (0,0) at
+infinity, so the encodings coincide); shared-point infinity detection =
+2 eq-tests + 1 mult per input point; NEW upstream `predicate` field
+handled (shared predicate → mask outputs with 2 MPC mults; public →
+skip/passthrough). Builder EC gates re-mirrored to current bb
+(`ec_operations.cpp`/`multi_scalar_mul.cpp`) — `TODO(phase2-2.6)` marks
+the gate-count parity re-check. Details: agent report, session 2.
+
+**Step ① gate results:**
+- `cargo check/build --workspace --all-targets`: clean, zero warnings.
+- `cargo fmt --all -- --check`: clean (baseline main@36da0ea8 also clean —
+  the repo was well-formatted before we started; RA redness during the
+  refactor was mid-flight state + stale post-bump crate graph).
+- beta.22 end-to-end smokes (nargo execute → plaindriver prove+verify):
+  poseidon ✓, **ram ✓ (MemOp path), embedded_curve_add ✓ ((0,0) path),
+  rom_shared ✓** — all "Proof verified successfully".
+- circom + mpc test binaries (ark-0.6 regression gate): **PASSED** —
+  346 + 163 tests, 0 failed, exit 0. The ark-0.6 unification + vendored
+  crates are behaviorally clean on the entire circom/MPC stack.
+- clippy ours-vs-baseline (`-D warnings`, rustc 1.90): **identical
+  findings in both** — 2 pre-existing `collapsible_else_if` lints in
+  mpc-net (`tcp.rs:99`, `tls.rs:203`); zero new findings from our
+  changes. Answer to "was the repo dirty before?": fmt no (clean),
+  clippy yes-under-1.90 (Taceo CI pins an older toolchain that predates
+  the lint). ✏️ Fixed both lints locally (trivial collapses) so the
+  full-tree clippy gate can run to completion; final run recorded below.
+- Watcher post-mortem (add to §11 list): the 3-gate watcher silently hit
+  its 10-min background timeout before the slowest gate finished — give
+  watchers a timeout comfortably above the slowest job's runtime, and
+  prefer exit-sentinel lines in logs (`echo DONE >> log`) over process
+  polling.

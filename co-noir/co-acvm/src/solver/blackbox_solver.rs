@@ -249,19 +249,76 @@ where
         Ok(())
     }
 
+    /// Derives the is_infinity flag expected by the drivers from a point's
+    /// coordinates, where (0, 0) encodes the point at infinity (since Noir
+    /// v1.0.0-beta.22). For shared coordinates this requires two MPC equality
+    /// checks and one multiplication.
+    fn derive_infinity_flag(
+        driver: &mut T,
+        x: &T::AcvmType,
+        y: &T::AcvmType,
+    ) -> CoAcvmResult<T::AcvmType> {
+        if let (Some(x), Some(y)) = (T::get_public(x), T::get_public(y)) {
+            let is_infinite = x.is_zero() && y.is_zero();
+            Ok(T::AcvmType::from(F::from(is_infinite)))
+        } else {
+            let zero = T::public_zero();
+            let x_is_zero = driver.equal(x, &zero)?;
+            let y_is_zero = driver.equal(y, &zero)?;
+            Ok(driver.mul(x_is_zero, y_is_zero)?)
+        }
+    }
+
+    /// Masks the resulting point with the predicate: if the predicate is 0 the
+    /// result is set to (0, 0), mirroring the upstream ACVM semantics. Shared
+    /// predicates cost two MPC multiplications.
+    fn mask_point_with_predicate(
+        driver: &mut T,
+        predicate: T::AcvmType,
+        res_x: T::AcvmType,
+        res_y: T::AcvmType,
+    ) -> CoAcvmResult<(T::AcvmType, T::AcvmType)> {
+        if T::is_public_one(&predicate) {
+            Ok((res_x, res_y))
+        } else {
+            let res_x = driver.mul(predicate.clone(), res_x)?;
+            let res_y = driver.mul(predicate, res_y)?;
+            Ok((res_x, res_y))
+        }
+    }
+
     pub(super) fn multi_scalar_mul(
         driver: &mut T,
         initial_witness: &mut WitnessMap<T::AcvmType>,
         points: &[FunctionInput<GenericFieldElement<F>>],
         scalars: &[FunctionInput<GenericFieldElement<F>>],
-        outputs: &(Witness, Witness, Witness),
+        predicate: &FunctionInput<GenericFieldElement<F>>,
+        outputs: &(Witness, Witness),
         pedantic_solving: bool,
     ) -> CoAcvmResult<()> {
-        let points: Result<Vec<_>, _> = points
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+        if T::is_public_zero(&predicate) {
+            // The opcode is disabled, the result is set to (0, 0)
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        }
+
+        let points_xy: Result<Vec<_>, _> = points
             .iter()
             .map(|input| Self::input_to_value(initial_witness, *input))
             .collect();
-        let points: Vec<_> = points?.into_iter().collect();
+        let points_xy = points_xy?;
+
+        // The drivers expect (x, y, is_infinity) triples, so we derive the
+        // flag from the (0, 0) encoding of the point at infinity
+        let mut points = Vec::with_capacity(points_xy.len() / 2 * 3);
+        for pair in points_xy.chunks_exact(2) {
+            let is_infinite = Self::derive_infinity_flag(driver, &pair[0], &pair[1])?;
+            points.push(pair[0].clone());
+            points.push(pair[1].clone());
+            points.push(is_infinite);
+        }
 
         let scalars: Result<Vec<_>, _> = scalars
             .iter()
@@ -278,30 +335,42 @@ where
             }
         }
         // Call the backend's multi-scalar multiplication function
-        let (res_x, res_y, is_infinity) =
+        let (res_x, res_y, _is_infinity) =
             driver.multi_scalar_mul(&points, &scalars_lo, &scalars_hi, pedantic_solving)?;
+
+        // The drivers already set x = y = 0 for the point at infinity,
+        // matching the (0, 0) encoding
+        let (res_x, res_y) = Self::mask_point_with_predicate(driver, predicate, res_x, res_y)?;
 
         // Insert the resulting point into the witness map
         Self::insert_value(&outputs.0, res_x, initial_witness)?;
         Self::insert_value(&outputs.1, res_y, initial_witness)?;
-        Self::insert_value(&outputs.2, is_infinity, initial_witness)?;
         Ok(())
     }
 
     pub(super) fn embedded_curve_add(
         driver: &mut T,
         initial_witness: &mut WitnessMap<T::AcvmType>,
-        input1: &[FunctionInput<GenericFieldElement<F>>; 3],
-        input2: &[FunctionInput<GenericFieldElement<F>>; 3],
-        outputs: &(Witness, Witness, Witness),
+        input1: &[FunctionInput<GenericFieldElement<F>>; 2],
+        input2: &[FunctionInput<GenericFieldElement<F>>; 2],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
+        outputs: &(Witness, Witness),
     ) -> CoAcvmResult<()> {
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+        if T::is_public_zero(&predicate) {
+            // The opcode is disabled, the result is set to (0, 0)
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        }
+
         let input1_x = Self::input_to_value(initial_witness, input1[0])?;
         let input1_y = Self::input_to_value(initial_witness, input1[1])?;
-        let input1_infinite = Self::input_to_value(initial_witness, input1[2])?;
+        let input1_infinite = Self::derive_infinity_flag(driver, &input1_x, &input1_y)?;
         let input2_x = Self::input_to_value(initial_witness, input2[0])?;
         let input2_y = Self::input_to_value(initial_witness, input2[1])?;
-        let input2_infinite = Self::input_to_value(initial_witness, input2[2])?;
-        let (res_x, res_y, res_infinite) = driver.embedded_curve_add(
+        let input2_infinite = Self::derive_infinity_flag(driver, &input2_x, &input2_y)?;
+        let (res_x, res_y, _res_infinite) = driver.embedded_curve_add(
             input1_x,
             input1_y,
             input1_infinite,
@@ -310,9 +379,12 @@ where
             input2_infinite,
         )?;
 
+        // The drivers already set x = y = 0 for the point at infinity,
+        // matching the (0, 0) encoding
+        let (res_x, res_y) = Self::mask_point_with_predicate(driver, predicate, res_x, res_y)?;
+
         Self::insert_value(&outputs.0, res_x, initial_witness)?;
         Self::insert_value(&outputs.1, res_y, initial_witness)?;
-        Self::insert_value(&outputs.2, res_infinite, initial_witness)?;
         Ok(())
     }
 
@@ -470,24 +542,30 @@ where
             BlackBoxFuncCall::MultiScalarMul {
                 points,
                 scalars,
+                predicate,
                 outputs,
-                ..
             } => Self::multi_scalar_mul(
                 &mut self.driver,
                 initial_witness,
                 points,
                 scalars,
+                predicate,
                 outputs,
                 pedantic_solving,
             )?,
             BlackBoxFuncCall::EmbeddedCurveAdd {
                 input1,
                 input2,
+                predicate,
                 outputs,
-                ..
-            } => {
-                Self::embedded_curve_add(&mut self.driver, initial_witness, input1, input2, outputs)
-            }?,
+            } => Self::embedded_curve_add(
+                &mut self.driver,
+                initial_witness,
+                input1,
+                input2,
+                predicate,
+                outputs,
+            )?,
             BlackBoxFuncCall::Sha256Compression {
                 inputs,
                 hash_values,

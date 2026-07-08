@@ -21,8 +21,8 @@ ark-ec = { workspace = true }
 ark-ff = { workspace = true }
 ark-groth16 = { workspace = true }
 ark-poly = { workspace = true }
-ark-relations = { workspace = true }
 ark-serialize = { workspace = true }
+circom-types = { workspace = true }
 co-circom-types = { version = "0.6.0", path = "../co-circom-types" }
 eyre = { workspace = true }
 mpc-core = { version = "0.10.0", path = "../../mpc-core" }

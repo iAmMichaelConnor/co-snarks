@@ -1,7 +1,7 @@
 use ark_ec::pairing::Pairing;
 use ark_ff::{FftField, Field, One};
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
-use ark_relations::r1cs::{ConstraintMatrices, Matrix};
+use circom_types::constraint_matrices::{ConstraintMatrices, Matrix};
 use eyre::Result;
 use mpc_core::MpcState;
 use rayon::iter::{

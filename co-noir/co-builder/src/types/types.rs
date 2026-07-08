@@ -397,10 +397,8 @@ pub(crate) struct MultiScalarMul<F: PrimeField> {
 pub(crate) struct EcAdd<F: PrimeField> {
     pub(crate) input1_x: WitnessOrConstant<F>,
     pub(crate) input1_y: WitnessOrConstant<F>,
-    pub(crate) input1_infinite: WitnessOrConstant<F>,
     pub(crate) input2_x: WitnessOrConstant<F>,
     pub(crate) input2_y: WitnessOrConstant<F>,
-    pub(crate) input2_infinite: WitnessOrConstant<F>,
     // Predicate indicating whether the constraint should be disabled:
     // - true: the constraint is valid
     // - false: the constraint is disabled, i.e it must not fail and can return whatever.
@@ -817,7 +815,6 @@ impl<F: PrimeField> WitnessOrConstant<F> {
     >(
         input_x: &Self,
         input_y: &Self,
-        input_infinity: &Self,
         predicate: &BoolCT<P::ScalarField, T>,
         builder: &mut GenericUltraCircuitBuilder<P, T>,
         driver: &mut T,
@@ -825,22 +822,16 @@ impl<F: PrimeField> WitnessOrConstant<F> {
         let constant_coordinates = input_x.is_constant && input_y.is_constant;
         let mut point_x = input_x.to_field_ct();
         let mut point_y = input_y.to_field_ct();
-        let infinity = input_infinity.to_field_ct().to_bool_ct(builder, driver);
 
         // If a witness is not provided (we are in a write_vk scenario) we ensure the coordinates correspond to a valid
         // point to avoid erroneous failures during circuit construction. We only do this if the coordinates are
-        // non-constant since otherwise no variable indices exist. Note that there is no need to assign the infinite flag
-        // because native on-curve checks will always pass as long x and y coordinates correspond to a valid point on
-        // Grumpkin.
+        // non-constant since otherwise no variable indices exist.
         let g1_y = F::from(BigUint::new(vec![
             2185176876, 2201994381, 4044886676, 757534021, 111435107, 3474153077, 2,
         ]));
         if builder.is_write_vk_mode && !constant_coordinates {
             builder.set_variable(input_x.index, F::one().into());
             builder.set_variable(input_y.index, g1_y.into());
-            if !input_infinity.is_constant {
-                builder.set_variable(input_infinity.index, F::zero().into());
-            }
         }
 
         if !predicate.is_constant() {
@@ -858,15 +849,10 @@ impl<F: PrimeField> WitnessOrConstant<F> {
                 builder,
                 driver,
             )?;
-            let _ = BoolCT::conditional_assign(
-                predicate,
-                &infinity,
-                &BoolCT::from(false),
-                builder,
-                driver,
-            )?;
         }
 
+        // Use the public constructor which auto-detects infinity from (0, 0) coordinates
+        // (the point at infinity is encoded as (0, 0) since Noir v1.0.0-beta.22).
         CycleGroupCT::new(point_x, point_y, true, builder, driver)
     }
 

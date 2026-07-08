@@ -4532,27 +4532,27 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         let input_result = CycleGroupCT::new(input_result_x, input_result_y, false, self, driver)?;
 
         // Reconstruct points and scalars
+        // Ensure that the number of points and scalars are consistent (2 field elements per point, 2 per scalar)
         assert!(
-            input.points.len() * 2 == input.scalars.len() * 3,
+            input.points.len() == input.scalars.len(),
             "MultiScalarMul input size mismatch"
         );
 
-        let mut points = Vec::with_capacity(input.points.len() / 3);
-        let mut scalars = Vec::with_capacity(input.points.len() / 3);
+        let mut points = Vec::with_capacity(input.points.len() / 2);
+        let mut scalars = Vec::with_capacity(input.points.len() / 2);
 
-        for i in (0..input.points.len()).step_by(3) {
+        for i in (0..input.points.len()).step_by(2) {
             let input_point = WitnessOrConstant::to_grumpkin_point(
                 &input.points[i],
                 &input.points[i + 1],
-                &input.points[i + 2],
                 &predicate,
                 self,
                 driver,
             )?;
 
             let scalar = WitnessOrConstant::to_grumpkin_scalar(
-                &input.scalars[2 * (i / 3)],
-                &input.scalars[2 * (i / 3) + 1],
+                &input.scalars[i],
+                &input.scalars[i + 1],
                 &predicate,
                 self,
                 driver,
@@ -4592,6 +4592,9 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         Ok(())
     }
 
+    // TODO(phase2-2.6): The is_infinite inputs were removed with Noir v1.0.0-beta.22 (the point at
+    // infinity is now encoded as (0, 0)); re-verify gate-count parity of the EcAdd/MSM constraints
+    // against bb (ec_operations.cpp, multi_scalar_mul.cpp, witness_constant.cpp).
     fn create_ec_add_constraint(
         &mut self,
         constraint: &EcAdd<P::ScalarField>,
@@ -4616,7 +4619,6 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         let input1_point = WitnessOrConstant::to_grumpkin_point(
             &constraint.input1_x,
             &constraint.input1_y,
-            &constraint.input1_infinite,
             &predicate,
             self,
             driver,
@@ -4625,7 +4627,6 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         let input2_point = WitnessOrConstant::to_grumpkin_point(
             &constraint.input2_x,
             &constraint.input2_y,
-            &constraint.input2_infinite,
             &predicate,
             self,
             driver,
