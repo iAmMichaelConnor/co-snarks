@@ -175,11 +175,15 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 - [x] 2.5 Relation tuple reorder (alpha assignment) — step ③, 1a13fcdc.
 - [x] 2.5a **Entity/get_all reorder:** sumcheck-evaluation transmit order +
       VK commitment serialization + recursion mirror — step ③, 1a13fcdc.
-- [ ] 2.6 Builder/gate-level residue: ROM/RAM sorted-index pinning
-      (`1f7ed2ea79`, soundness fix); EC gate-count parity check (EC_ADD
-      80→76, MSM 3559→3557 — serde done in step ①, counts unverified);
-      recursion-constraint size assert; ECDSA-r1/SHA table changes (only
-      gate-count constants matter where blackboxes are unimplemented).
+- [x] 2.6 Builder/gate-level residue — DONE 2026-07-08, commit 5ac55600
+      (ch. 14 §19). ROM/RAM sorted-index pinning (soundness); lookup
+      table_index from 1; SHA 10-bit CH-L2 tables + w[0] range constraint;
+      uint multitable slot count; recursion size assert + compile-time
+      410/458/115 invariants. EC gate parity confirmed empirically.
+      Byte-identical vs source-built target bb: ram, rom_shared,
+      embedded_curve_add, bb_sha256_compression, blackbox_and/xor,
+      get_bytes. NOT ported: secp256k1/r1 table changes (ECDSA
+      unimplemented).
 - [ ] 2.7 Green-up: full example suite + compare_mpc.sh vs BOTH oracles
       (needs a slot for ~/.bb-target-src/bb) + ch. 13 §3a security
       regressions. Partial 2026-07-08: noir suite 94/0; ZK bidirectional

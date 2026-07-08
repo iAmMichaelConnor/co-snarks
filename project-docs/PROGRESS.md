@@ -365,3 +365,29 @@ assert) and 2.7 green-up (example suite; compare_mpc.sh needs a
 **Mike's steer this session: don't overdo testing — prioritize feature
 progress.** Testing footprint kept to the 39 s suite + seconds-fast ZK
 cross-verify; heavy compare_mpc.sh sweep deferred to 2.7.
+
+## Session 3 (continued) — 2026-07-08 night: item 2.6 landed → Phase 2 code-complete
+
+**2.6 builder residue DONE — commit 5ac55600** (full record ch. 14 §19):
+- ROM/RAM sorted-chain pinning (bb 1f7ed2ea79 soundness fix: index-delta
+  roots {0,−1} allowed a p−1 chain start → forged reads/writes; pinned
+  first index to zero_idx in ROM+RAM public+MPC-shared paths, last ROM
+  index to constant N−1).
+- Two EXTRA proof-breaking changes found by parity-testing beyond the KAT
+  circuits: lookup table_index now starts at 1 (logup beta³ guarantee) and
+  SHA-256 CH-L2 tables are 10-bit + w[0] range constraint (both bb
+  soundness/audit fixes). uint multitable slot count mirrored
+  (byte-neutral). Recursion proof-size assert + compile-time 410/458/115
+  invariants added. secp256k1/r1 tables not ported (ECDSA unimplemented).
+- Parity vs source-built target bb, all VK+proof byte-identical: ram,
+  rom_shared, embedded_curve_add, bb_sha256_compression, blackbox_and,
+  blackbox_xor, get_bytes. Suite 94/0, clippy 0 warnings.
+- Ops: repeated the §11 pipe-masking gotcha (silent /dev/null failures
+  looked like parity diffs); examples vectors are largely still
+  beta.20-compiled — 2.7 must recompile the whole set (serde error
+  "invalid type: integer 11" = beta.20 artifact).
+
+**Phase 2 status: 2.1–2.6 ALL DONE. Remaining: 2.7 green-up only**
+(examples recompile + compare*.sh with ~/.bb-target-src/bb slot + ch. 13
+§3a security regressions incl. mirroring bb's Rom/RamMaliciousFieldWrap +
+slow circuit set).

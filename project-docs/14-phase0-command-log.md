@@ -796,3 +796,65 @@ VERIFIER-side enforcement is the critical half — a bytes-only port could
 reintroduce the hole) and `1f7ed2ea79` (ROM/RAM boundary pinning smells
 like a sorted-list soundness fix). Results → ch. 03 per-change "why"
 sections + extra negative tests in the 2.7 green-up if warranted.
+
+## 19. Phase 2 item 2.6 — builder/DSL residue ✅ (2026-07-08 night, commit 5ac55600)
+
+Scope: ROM/RAM sorted-index pinning, EC gate parity, recursion size assert —
+plus TWO extra proof-breaking table changes found by parity-testing circuits
+the KAT suite doesn't cover.
+
+### 19.1 What bb changed (read from source; commits + why)
+- `1f7ed2ea79` **ROM/RAM pinning (SOUNDNESS)**: index-delta subrelation
+  `Δ²+Δ=0` has roots {0,−1} → sorted chain could start at p−1 and forge
+  reads/writes at that index. Fix: first sorted index_witness = zero_idx
+  (ROM+RAM), last ROM index = put_constant_variable(N−1). bb ships negative
+  tests (Rom/RamMaliciousFieldWrap) — mirror in our 2.7 security regressions.
+- `0a7d0af035` **lookup table_index starts at 1**: "so the relation batched
+  term always contains at least beta cubed" (logup). All lookup circuits'
+  bytes change.
+- `bbbde54094` **SHA 10-bit basic tables (SOUNDNESS)**: SHA256_BASE28_ROTATE3
+  and SHA256_BASE16 generated 2^11 rows for a 10-bit declared slice — a
+  prover could witness an out-of-range slice. Now `<28,10,3>` / `<16,10,0>`.
+- `5d43e115a2` (audit bucket A): `w_sparse[0].create_range_constraint(32)`
+  in sha extend_witness — "the only vk change" of that commit.
+- uint.hpp/types.hpp MultiTable ctor rework: ctor coefficient loop 0..n →
+  1..n paired with uint callers passing n+1. NET byte-neutral for
+  repeated-coefficient tables (all step sizes = the constant base; extra
+  trailing coefficient unused). Mirrored the callers, left co-noir's ctor
+  (old n+1 style) alone — verified byte-neutral empirically.
+- `54a8d2d1df`/`70d6b831ed` secp256k1 clamp + r1 fixed-base tables: NOT
+  ported — ECDSA blackbox unimplemented in co-noir (ch. 06).
+- `669e92b896` recursion-constraint proof-size assert: mirrored as
+  `assert_eq!(input.proof.len(), PUBLIC_INPUTS_SIZE + ULTRA_PROOF_LENGTH_
+  WITHOUT_PUB_INPUTS(_ZK))`; recursion vectors declare 410/458+115 ✓.
+  Also added ch. 11 §3's compile-time invariants in constants.rs:
+  `const _: () = assert!(… == 410 / 458 / 115)`.
+
+### 19.2 Command record (failures included)
+1. ram/rom_shared parity, first attempt: **all bb+plaindriver invocations
+   silently failed behind `>/dev/null`** and `cmp` on missing files printed
+   "VK DIFF; PROOF DIFF" — the EXACT §11 pipe-masking gotcha, repeated.
+   Lesson reinforced: log to files, check artifacts exist before cmp.
+2. Root cause of the failures: examples/test_vectors/{ram,rom_shared,…}
+   are still **beta.20-compiled** (step ② only regenerated
+   test_vectors/noir + examples poseidon) → beta.22 serde error
+   `invalid type: integer 11, expected a sequence` (MemOp overhaul).
+   Fixed per circuit: `nargo compile && nargo execute` (beta.22).
+   ⚠ 2.7 must recompile the WHOLE examples vector set.
+3. Parity harness per circuit (plaindriver + ~/.bb-target-src/bb
+   write_vk/prove, poseidon2, --disable_zk, cmp vk+proof):
+   ram ✓, rom_shared ✓ (after pinning), embedded_curve_add ✓ (EC gate
+   counts settled — no extra work needed beyond step ①'s serde),
+   blackbox_and ✓, blackbox_xor ✓, get_bytes ✓ (after table_index+uint),
+   bb_sha256_compression ✓ (after 10-bit tables + table_index + w[0] range).
+   sha VK "lagrange_first diff" red herring during triage: with table
+   content differing, EVERY row shifts → nearly all precomputed
+   commitments differ; don't over-read per-commitment diff lists.
+4. Gates: fmt ✓, clippy 0 warnings ✓, noir suite 94/0 ✓ (37.7 s).
+
+### 19.3 Phase 2 remaining = 2.7 green-up only
+Full examples-vector recompile (beta.22) → compare.sh/compare_mpc.sh with a
+~/.bb-target-src/bb slot → ch. 13 §3a security regressions (SSIPA forgery,
+ROM/RAM field-wrap — mirror bb's Rom/RamMaliciousFieldWrap —,
+trailing-bytes/non-canonical encodings + the Phase-0 panic-on-off-curve fix)
+→ slow set (aes128, sha256_compression e2e, recursion, recursion_zk).
