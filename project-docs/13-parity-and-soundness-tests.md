@@ -208,3 +208,72 @@ pass before Phase 2 is called done (they join §8's priority list at rank 2):
 Plus (audit posture, from `5f09c55a57`): non-canonical field encodings
 (≥ modulus) and trailing proof bytes must be REJECTED by co-noir's
 deserialization — merges with Phase 0 
+## 9. Soundness-claim lens from bb-spec-audit (recorded 2026-07-08)
+
+Source: the **bb-spec-audit** methodology in `~/claudebox`
+(`claudebox/claude-files/bb-spec-audit/SPEC.md` + `skills/spec-method`,
+`spec-architect`, `spec-attacker`, `spec-curator`, `spec-integrator`), plus
+the companion **barretenberg correctness-facts** KB
+(`claudebox/claude-files/bb-correctness/skills/bb-correctness/barretenberg-facts.md`).
+bb-spec-audit builds, per bb module, a **claim graph** decomposing "this
+module is sound" into atomic claims, hardened by perpetual *independent
+completeness attack* (confidence = structural ossification, no stop rule).
+Its live graph content sits on the `cb/bb-spec-audit` branch of the private
+`AztecProtocol/barretenberg-claude` repo (not checked out locally).
+
+### 9.1 The threat model — and why it reshapes WHERE co-noir must be tested
+bb-spec's soundness definition: *no prover-controlled witness makes the code
+accept a false result; the circuit + VK are fixed and trusted; the attack
+surface is witness values; named primitives (field arithmetic, curve params,
+gate relations) are floor assumptions.* Applying this to co-noir's Rust
+re-implementation gives a sharp split that should steer our test effort:
+
+- **The MPC/plain PROVER carries NO soundness.** A buggy prover only fails
+  to produce accepted proofs (a *completeness*/liveness problem) or leaks
+  shares (a *privacy* problem) — it cannot make a false statement verify.
+- **Soundness lives entirely in two places**: (a) the **co-builder**
+  (circuit construction — the constraints must match bb's, or co-noir
+  under-constrains), and (b) the **verifiers** (co-noir/ultrahonk `verify`
+  and the in-circuit recursion verifier). 
+This is exactly what the 2026-07-08 rationale mining independently found:
+the SSIPA fix is **verifier-side**, the ROM/RAM fix is **builder-side**.
+⇒ concentrate negative/differential testing on co-builder + the verifiers;
+the MPC prover is covered by MPC-consistency + privacy tests, not soundness
+negatives.
+
+### 9.2 Corroborations of our own findings (correctness-facts KB)
+- **BB-ECC-001** (point-at-infinity is a `(0,0)` sentinel; equality checks
+  that compare only x,y and skip the infinity flag are incomplete — caller
+  must guarantee inputs aren't infinity) — directly validates the step-①
+  `(0,0)`-sentinel rework and flags a soundness obligation for co-noir's EC
+  add/MSM builder path (phase-2 item 2.6). The current bb-spec-audit SCOPE
+  is the `cycle_group ⇄ ultra_circuit_builder` boundary — i.e. this exact
+  code — so that graph, once populated, is a ready-made completeness
+  checklist for co-noir's co-builder EC constraints.
+- **BB-HONK-001 / BB-CIVC-002**: copy-constraint / wire-equality is enforced
+  ONLY by the full prover, never a `CircuitChecker`-style row check. Lesson
+  for us: co-noir soundness negatives that target wire-equality must run the
+  full prove→verify, not any partial gate-check shortcut (our plaindriver
+  self-verify already does; keep it that way).
+- **BB-HONK-003** (witnesses for known/constant values must still be
+  constrained) is the general form of the ROM/RAM field-wrap fix — the "free
+  `add_variable(0)`" was an unconstrained known-value witness.
+- **BB-RANGE-001** (range constraints must REJECT, not truncate) and
+  **BB-BIGFIELD-001/002** (limb range bounds; substitution preconditions
+  must be constrained) are the atomic soundness claims behind ch. 06's
+  implicit-range concerns and the §3.6 highest-value soundness test.
+
+### 9.3 How we reuse it (not rebuild it)
+1. **Adopt the claim-decomposition frame for co-noir's green-up gate**:
+   before declaring a synced module done, state its soundness as a short
+   claim list (the atomic invariants its verifier/builder must enforce) and
+   ensure a negative test pins each. The §3a mandatory tests are the first
+   entries; the bb-spec graph for a module is the source of the rest.
+2. **When bb-spec publishes a module's graph**, mirror its atomic
+   verifier/builder claims into co-noir negative tests — same protocol, same
+   invariants, so the claims transfer directly (this is the differential-
+   fuzz seed set for PLAN decision 6a).
+3. **Do NOT** stand up a parallel claim-graph lane for co-noir now — that is
+   a Phase 4+ activity. For Phase 2 the reuse is: (a) the prover-vs-
+   verifier/builder soundness split above to aim testing, and (b) the two
+   §3a regression tests already mandated.

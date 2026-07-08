@@ -48,6 +48,18 @@ differential fuzzing of bb-vs-co-noir later (ch. 13 §6). The only mandatory
 coupling is at the KAT boundary — proof/VK bytes and mutual verifier
 acceptance.
 
+**Soundness-surface lens (from bb-spec-audit, ch. 13 §9 — use it to decide
+how much care each edit needs):** soundness of this system lives ONLY in the
+**verifiers** (plain + recursion) and the **co-builder** (circuit
+construction); the MPC/plain prover carries completeness + privacy, not
+soundness. So among the phase-2 items: the verifier-side changes (2.5a
+entity/eval order in the verifier; 2.6's SSIPA A(1)=0 which MUST be enforced
+through Shplemini on the verify side) and the builder-side changes (2.6
+ROM/RAM index pinning; EC add/MSM constraints) are **soundness-critical** and
+get negative tests (ch. 13 §3a); a bug there can make false proofs verify. A
+bug confined to the prover only breaks the KAT/self-verify (loud, not
+dangerous). Grade review effort accordingly.
+
 ## 1. Pre-flight (before any code change)
 
 1. **Bump the Noir tooling pin** in root `Cargo.toml` (`acir/acvm/brillig/
