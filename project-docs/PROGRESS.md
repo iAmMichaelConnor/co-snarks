@@ -454,3 +454,19 @@ THE bb oracle = `~/.bb-target-src/bb` (source-built at v5.0.0-nightly.20260708;
 ### Open tasks (harness task list): #7 merge+reconcile, #8 recursion regen.
 ### Deferred: SSIPA A(1)=0 forgery test (ch.13 §3a#8). Open: non-canonical
 ### (≥-modulus) field-encoding rejection (ch.15 §1.3).
+
+## Session 3 (continued) — 2026-07-08 — MERGED secreg-27 + docs-27 into mc/update-co-noir
+The RECOVERY STATE block above is now partly superseded: `mc/secreg-27`
+(verifier hardening + ch.13 §3a security tests + `fast-check.sh`) and
+`mc/docs-27` (ch.15 backlog + reconciliation + recovery notes) are MERGED into
+`mc/update-co-noir` (merge commits `b8552d38`, `eb2790a3`; script pins
+`39d202b6`). Merged tree green: `./fast-check.sh --sec` PASS. Backup tag
+`backup/phase2-code-complete-6c528309` still valid. STILL OUTSTANDING:
+`mc/recgen-27` (recursion regen/diagnosis) — do NOT merge until its report is
+reviewed; the recursion bug is CONFIRMED real (sweep + recgen agree), so
+recgen's value is the pinpointed locus, not a vector fix.
+
+**⛔ TESTING DISCIPLINE (Mike, 2026-07-08, firm):** NEVER run circom tests or
+bare `cargo test -p tests`. Use `./fast-check.sh` (inner loop ~1.5s) — tiers
+`--sec/--mpc/--bb/--all-fast`; `--full` (~60min) is a milestone-only gate.
+Memory: [[cosnark-testing-discipline]].
