@@ -187,10 +187,17 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       embedded_curve_add, bb_sha256_compression, blackbox_and/xor,
       get_bytes. NOT ported: secp256k1/r1 table changes (ECDSA
       unimplemented).
-- [ ] 2.7 Green-up: full example suite + compare_mpc.sh vs BOTH oracles
-      (needs a slot for ~/.bb-target-src/bb) + ch. 13 §3a security
-      regressions. Partial 2026-07-08: noir suite 94/0; ZK bidirectional
-      bb cross-verify PASS; VK byte-identical; 410/458-field invariants hold.
+- [x] 2.7 Green-up — DONE 2026-07-08 (session 3). Full sweep vs source-built
+      oracle ~/.bb-target-src/bb: **all 31 non-recursion circuits PASS** plain
+      + REP3 + cargo (603/603); recursion/recursion_zk fixed (stale vectors +
+      K count, ch.14 §20) and now self-verify + bb-cross-verify; ≥4-party
+      Shamir PASS (validates randomness accounting); ZK bidirectional
+      cross-verify PASS; VK byte-identical; 410/458/115 invariants (now
+      compile-time asserts). ch.13 §3a security regressions: #9 ROM/RAM +
+      #10 trailing/off-curve DONE; verifier hardening landed. Iteration tool =
+      `fast-check.sh` (NEVER circom). **Remaining follow-ups (not blocking):**
+      SSIPA A(1)=0 forgery test (§3a#8, deferred); non-canonical (≥modulus)
+      encoding rejection (§3a#10 residue, ch.15 §1.3).
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
