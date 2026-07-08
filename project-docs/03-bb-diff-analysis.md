@@ -196,7 +196,7 @@ security classification and what a re-implementation MUST preserve:*
    order (2.2 before/with 2.4) accidentally-correctly mirrors this;
    any future re-derivation must keep that dependency.
 
-Also relevant to us: audit-driven `5f09c55a57` rejects **non-canonical
+Also relevant to us: bb's `5f09c55a57` rejects **non-canonical
 field encodings** (value ≥ modulus now throws instead of silently
 reducing) and **trailing proof data** — the exact robustness class our
 Phase 0 spot-checks flagged in co-noir (trailing-bytes acceptance;
