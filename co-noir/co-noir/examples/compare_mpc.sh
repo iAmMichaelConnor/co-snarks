@@ -1,5 +1,12 @@
 export CARGO_TERM_QUIET=true
-export RAYON_NUM_THREADS=$(($(nproc --all)/3)) # Limit the number of threads to prevent parties stealing from each other
+# Limit threads so the 3 concurrent parties don't steal from each other,
+# AND leave ~20% of the box for other users (shared-mainframe policy, Mike
+# 2026-07-08): budget = 80% of cores split 3 ways. Oversubscribing is
+# strictly slower anyway — measured (poseidon, REP3, 186-core box),
+# threads/party 16→~420ms, 32→~465ms, 62→~530ms, 93 (1.5x)→~640ms,
+# 186 (3x)→~950ms; small circuits even prefer fewer threads. Override via
+# env if experimenting: RAYON_NUM_THREADS=16 bash compare_mpc.sh
+export RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-$(($(nproc --all)*8/30))}
 BARRETENBERG_BINARY=~/.bb/bb  ##specify the $BARRETENBERG_BINARY path here
 
 NARGO_VERSION=1.0.0-beta.20 ##specify the desired nargo version here

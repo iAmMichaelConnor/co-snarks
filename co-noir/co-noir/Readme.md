@@ -17,6 +17,19 @@ cmake --preset default
 cmake --build --preset default --parallel --target bb
 ```
 
+Alternatively, prebuilt `bb` binaries for v5-era nightlies are published as GitHub release assets under the *unprefixed* tag name (note: older `bbup` versions construct an `aztec-packages-v*` URL and silently download garbage — "not in gzip format"):
+
+```bash
+curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.0-nightly.20260324/barretenberg-amd64-linux.tar.gz | tar xz -C ~/.bb
+~/.bb/bb --version   # 5.0.0-nightly.20260324
+```
+
+## Building this workspace
+
+- Requires **Rust ≥ 1.90** (the workspace `Cargo.toml` sets `rust-version = "1.90"`, but there is no `rust-toolchain.toml`, so an older default toolchain fails with per-crate version errors). Fix: `rustup install 1.90 && rustup override set 1.90` inside the repo.
+- The scripts in `examples/` (`run_full_poseidon.sh`, `compare.sh`, `compare_mpc.sh`, …) must be run **from the `examples/` directory** — all their relative paths (`test_vectors/`, `configs/`, `../../co-noir-common/…`) assume it.
+- Warning: `compare.sh`/`compare_mpc.sh` run `cleanup.sh` after every test case, which deletes proof/witness artifacts in `examples/` and `test_vectors/` — don't keep hand-made artifacts there while they run.
+
 The prover in this repository, ``UltraHonk::prove`` in `src/prover.rs`, is compatible with `UltraProver_<UltraFlavor>/UltraProver_<UltraZKFlavor>/UltraProver_<UltraKeccakFlavor>/UltraProver_<UltraKeccakZKFlavor>` (depending on the used transcript hasher) in Barretenberg. Similar, the ``Ultrahonk::verify`` verifier in `src/verifier.rs` is compatible with `UltraVerifier_<UltraFlavor>/UltraVerifier_<UltraZKFlavor>/UltraVerifier_<UltraKeccakFlavor>/UltraVerifier_<UltraKeccakZKFlavor>` in Barretenberg.
 
 ## Usage
