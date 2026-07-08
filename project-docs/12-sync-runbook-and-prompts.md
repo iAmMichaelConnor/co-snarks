@@ -99,7 +99,7 @@ Tick every one on every sync:
       format change makes that inner proof no longer verify in-circuit, which
       surfaces as a builder `assert_equal` **panic at circuit-build time**
       (`ultra_builder.rs:223`), NOT a clean diff — easy to misread as a
-      verifier-code bug. It is almost always a stale vector. Regen procedure =
+      verifier-code issue. It is almost always a stale vector. Regen procedure =
       §7 below. Also re-check `recursion*/src/main.nr`'s
       `public_inputs: pub [Field; K]`: K must equal the INNER circuit's real
       public-input count — the pairing-point object (`PUBLIC_INPUTS_SIZE`)
@@ -227,7 +227,7 @@ gotchas so the agent can't wander. `<PIN>`/`<TARGET>` are version tags.
 > byte/field divergence — do not paper over it. Do not push.
 
 ### Prompt E — completeness critic (read)
-> Audit the sync just performed against project-docs ch. 12 §3 (gotchas) and
+> Review the sync just performed against project-docs ch. 12 §3 (gotchas) and
 > §4 (unsupported-feature guardrails). For each gotcha, state whether it was
 > handled and cite the file/line. Flag anything in the Prompt-A change list
 > that was not ported and confirm it is genuinely out of scope (internal-only
@@ -238,7 +238,7 @@ gotchas so the agent can't wander. `<PIN>`/`<TARGET>` are version tags.
 The diff-scoping (Prompt A) and the port (Prompt B) are the parts that need
 judgment — deciding format-breaking vs internal, and translating C++ template
 machinery into the Rust structure. Everything downstream (pin bump, KAT
-regen, the parity matrix, the gotcha audit) is mechanical and scriptable, and
+regen, the parity matrix, the gotcha review) is mechanical and scriptable, and
 the parity matrix is a hard, byte-level gate that makes a wrong port
 impossible to miss. Run the judgment steps with a capable agent + human
 review; let the mechanical steps run to completion and trust the gate.

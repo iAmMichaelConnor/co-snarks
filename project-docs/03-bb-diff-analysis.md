@@ -86,7 +86,7 @@ entity/commitment COUNTS (41 non-ZK / 42 ZK entities; 28 VK commitments +
 structure (count/shape) held, but the commitment ORDER changed with the
 EntityId reorder above.
 
-Secondary findings from the 2026-07-08 re-verification (agent-audited, all
+Secondary findings from the 2026-07-08 re-verification (agent-verified, all
 416 bb commits in range triaged):
 - **TS flavor-codegen refactor** `c0366aaa5c`: flavors now generated from
   TypeScript specs (`scripts/flavor-codegen/src/flavors/*.ts` →

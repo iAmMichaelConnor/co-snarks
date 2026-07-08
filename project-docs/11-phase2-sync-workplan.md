@@ -108,8 +108,8 @@ soundness. So among the phase-2 items: the verifier-side changes (2.5a
 entity/eval order in the verifier; 2.6's SSIPA A(1)=0 which MUST be enforced
 through Shplemini on the verify side) and the builder-side changes (2.6
 ROM/RAM index pinning; EC add/MSM constraints) are **soundness-critical** and
-get negative tests (ch. 13 §3a); a bug there can make false proofs verify. A
-bug confined to the prover only breaks the KAT/self-verify (loud, not
+get negative tests (ch. 13 §3a); an error there can make false proofs verify. An
+error confined to the prover only breaks the KAT/self-verify (loud, not
 dangerous). Grade review effort accordingly.
 
 ## 1. Pre-flight (before any code change)
@@ -333,7 +333,7 @@ changes** not in the list below:
    relation batched term always contains at least beta cubed" in logup).
    Changes the bytes of **every lookup-using circuit**.
 2. **SHA-256 CH-L2 basic tables are 10-bit** + `w_sparse[0]` gets a 32-bit
-   range constraint (bb `bbbde54094`, `5d43e115a2` — soundness/audit fixes:
+   range constraint (bb `bbbde54094`, `5d43e115a2` — soundness fixes:
    the old 2^11-row tables let a prover witness an out-of-range 10-bit
    slice).
 Also as built: the uint MultiTable ctor rework was mirrored on the *caller*

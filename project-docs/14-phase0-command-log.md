@@ -262,7 +262,7 @@ Tamper matrix — each case verified with BOTH verifiers
 ch. 13 §3.4):** co-noir's verifier accepts a valid proof with trailing junk
 appended; bb rejects it. Not itself a way to make an invalid proof verify
 (the embedded proof is genuine), but it breaks byte-strictness parity with bb and could mask
-length-related bugs. → add a "transcript fully consumed" check during the
+length-related mistakes. → add a "transcript fully consumed" check during the
 Phase 2 work (we'll be in that code anyway).
 
 **Finding 2 — panic instead of clean reject on malformed curve points:**
@@ -485,7 +485,7 @@ work plan's file list:
 
 ### 13.3 Result (a) — bb diff completeness [COMPLETE; 1 critical miss found]
 
-Audited all 416 bb commits in `v5.0.0-nightly.20260324..v5.0.0-nightly.
+Reviewed all 416 bb commits in `v5.0.0-nightly.20260324..v5.0.0-nightly.
 20260708`. All 5 documented consensus changes CONFIRMED (hashes, substance,
 key hunks). **One material miss (now ch. 03 §2 row 6): the EntityId/
 `get_all()` reorder** riding on `c075fc182e` — proof sumcheck-evaluation
@@ -826,7 +826,7 @@ the KAT suite doesn't cover.
 - `bbbde54094` **SHA 10-bit basic tables (SOUNDNESS)**: SHA256_BASE28_ROTATE3
   and SHA256_BASE16 generated 2^11 rows for a 10-bit declared slice — a
   prover could witness an out-of-range slice. Now `<28,10,3>` / `<16,10,0>`.
-- `5d43e115a2` (audit bucket A): `w_sparse[0].create_range_constraint(32)`
+- `5d43e115a2` (a bb defense-in-depth pass): `w_sparse[0].create_range_constraint(32)`
   in sha extend_witness — "the only vk change" of that commit.
 - uint.hpp/types.hpp MultiTable ctor rework: ctor coefficient loop 0..n →
   1..n paired with uint callers passing n+1. NET byte-neutral for
@@ -871,7 +871,7 @@ Rom/RamMaliciousFieldWrap —,
 trailing-bytes/non-canonical encodings + the Phase-0 panic-on-off-curve fix)
 → slow set (aes128, sha256_compression e2e, recursion, recursion_zk).
 
-## 20. Recursion resolved (2026-07-08, session 3) — stale vectors + wrong K, NOT a verifier-code bug
+## 20. Recursion resolved (2026-07-08, session 3) — stale vectors + wrong K, NOT a verifier-code issue
 
 The 2.7 sweep found `recursion`/`recursion_zk` panicking at circuit-build
 (`assert_equal`, `ultra_builder.rs:223`). Root cause (two independent test-

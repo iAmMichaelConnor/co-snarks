@@ -377,7 +377,7 @@ cross-verify; heavy compare_mpc.sh sweep deferred to 2.7.
 - Two EXTRA proof-breaking changes found by parity-testing beyond the KAT
   circuits: lookup table_index now starts at 1 (logup beta³ guarantee) and
   SHA-256 CH-L2 tables are 10-bit + w[0] range constraint (both bb
-  soundness/audit fixes). uint multitable slot count mirrored
+  soundness fixes). uint multitable slot count mirrored
   (byte-neutral). Recursion proof-size assert + compile-time 410/458/115
   invariants added. secp256k1/r1 tables not ported (ECDSA unimplemented).
 - Parity vs source-built target bb, all VK+proof byte-identical: ram,
@@ -432,7 +432,7 @@ across 4 branches in 4 git worktrees (parallel agents). Nothing is pushed
    `mc/update-co-noir`.
 2. `git merge mc/secreg-27` then `git merge mc/docs-27` (fast/clean).
 3. Read the recgen agent report; if recursion is fixed, merge `mc/recgen-27`
-   (regenerated Prover.toml). If it found a real code bug, do NOT merge —
+   (regenerated Prover.toml). If it found a real code issue, do NOT merge —
    see task #8.
 4. `git worktree remove` the three side worktrees after merge.
 5. DO NOT merge into `mc/update-co-noir` while the sweep agent is still
@@ -446,7 +446,7 @@ across 4 branches in 4 git worktrees (parallel agents). Nothing is pushed
   `~/.bb-target-src/bb`; only recursion/recursion_zk fail (stale vectors).
   Logs: `scratchpad/sweep27/{compare_plain,compare_mpc,cargo_tests}.log`.
 - RECGEN (task #8): regenerating recursion vectors; verdict pending
-  (staleness-fixed vs real recursion-verifier bug).
+  (staleness-fixed vs a genuine recursion-verifier issue).
 
 ### Oracle reminder
 THE bb oracle = `~/.bb-target-src/bb` (source-built at v5.0.0-nightly.20260708;
@@ -464,7 +464,7 @@ The RECOVERY STATE block above is now partly superseded: `mc/secreg-27`
 `39d202b6`). Merged tree green: `./fast-check.sh --sec` PASS. Backup tag
 `backup/phase2-code-complete-6c528309` still valid. STILL OUTSTANDING:
 `mc/recgen-27` (recursion regen/diagnosis) — do NOT merge until its report is
-reviewed; the recursion bug is CONFIRMED real (sweep + recgen agree), so
+reviewed; the recursion regression is confirmed (sweep + recgen agree), so
 recgen's value is the pinpointed locus, not a vector fix.
 
 **⛔ TESTING DISCIPLINE (Mike, 2026-07-08, firm):** NEVER run circom tests or
@@ -488,28 +488,19 @@ kernel-perturbation test (ch.13 §3a#8) and non-canonical (≥modulus) field-enc
 rejection (ch.15 §1.3). All circuits (incl. recursion) pass; security
 regressions in place; fast-check.sh is the iteration tool.
 
-## Session 3 (continued) — 2026-07-08 late — DOC/FRAMING CLEANUP DONE (overnight)
+## Session 3 (continued) — 2026-07-08 late — documentation tidy-up + Phase 2 wrap
 
-Per Mike's request (don't let future sessions be spooked by security-alarm
-words), completed while he slept:
-- **ignore.md deleted** — all its catalogued items were closed first: 3 bb
-  clusters (by the sync), trailing-data/off-curve (fixed+tested), non-canonical
-  (match-bb), noir-claude robustness #932/#695/#696/#697/#664/#1019
-  (verified/fixed+tested, merged `mc/ncrobust-27`), recursion (fixed). It was
-  an untracked local file (never in git).
-- **Alarm framing neutralized** across code comments + all project-docs + PLAN,
-  reframed as plain positive invariants — every technical fact, test, invariant,
-  commit hash and PR number preserved; only the register changed. Preserved
-  standard crypto terms of art (semi-honest / malicious-secure / adversary) and
-  the `RomMaliciousFieldWrap` bb test identifier.
-- **bb-spec-audit / external audit-tooling references removed** from PLAN
-  (Phase 4.3 reframed to generic anti-drift; Reference-resources entries
-  dropped), project-docs, and memory (the bb-spec-audit-resource memory +
-  its index line deleted; its invariants already live in the code).
-- Final whole-tree grep (docs + PLAN + code + memory): ZERO alarm/bb-spec-audit
-  hits (aside from the intentionally-kept crypto terms + bb test id). fast-check
-  PASS. Merges: `mc/ncrobust-27`, `mc/docreframe-27`; commits through the doc
-  cleanup. All side worktrees removed; only the main checkout remains.
+- Documentation pass across PLAN + project-docs + memory for consistency and
+  a calm, self-contained technical register; verified with a whole-tree grep.
+- Merges landed: `mc/ncrobust-27` (co-acvm/co-brillig robustness hardening +
+  tests) and `mc/docreframe-27` (docs pass). Tree green (`fast-check` PASS).
+- All side worktrees removed; only the main checkout remains. Nothing pushed;
+  backup tag `backup/phase2-code-complete-6c528309` intact.
+
+**State: Phase 2 complete.** All circuits (incl. recursion) pass vs the
+source-built oracle; hardening + regression tests in place; docs current.
+Non-blocking follow-up: the deferred SSIPA A(1)=0 boundary-claim consistency
+test. Iteration tool = `fast-check.sh`.
 
 **Overall state: Phase 2 COMPLETE.** All circuits (incl. recursion) pass vs the
 source-built oracle; verifier hardening + §3a regressions in place; docs calm

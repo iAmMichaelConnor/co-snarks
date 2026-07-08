@@ -90,7 +90,7 @@ are listed here so nothing rides on memory.
    circuits and MPC will fail". If any iteration order in co-noir's builder
    is genuinely nondeterministic (HashMap iteration), parties could derive
    different circuits/VKs from identical inputs — an MPC liveness landmine
-   and a parity flake source. Audit that site (and any `HashMap` iteration
+   and a parity flake source. Review that site (and any `HashMap` iteration
    feeding gate emission); Rust makes determinism cheap (`BTreeMap` /
    sorted iteration).
 9. **VERIFY: recursion verifier parity has no byte-level oracle.** [M / M —
@@ -106,7 +106,7 @@ are listed here so nothing rides on memory.
     point collides with the sentinel.** [S / M — co-builder soundness]
     Step ① adopted bb's `(0,0)` encoding for the point at infinity with MPC
     infinity detection (2 eq-tests + 1 mult). Ch. 13 §9.2 notes that
-    infinity handling is where EC soundness bugs live. Record
+    infinity handling is where EC soundness issues live. Record
     the one-line argument that x=0 has no on-curve preimage for BN254
     (y² = 3 must be a non-residue) — and, for the MPC path, that the
     eq-test-based detection can't be confused by a shared point with one
@@ -243,7 +243,7 @@ make drift fail loudly and locally. More of the same:
    `NUM_ALL_ENTITIES == 41` (+42 ZK), `TRACE_OFFSET == 4`,
    `CONST_PROOF_SIZE_LOG_N == 25`, and the SSIPA claim counts
    (5 opening claims / 4 transcript evals / 3 commitments). Every one of
-   these moved (or was audited) this sync; each is one line.
+   these moved (or was reviewed) this sync; each is one line.
 2. **Entity/relation-order manifest generated from bb's flavor-codegen.**
    [M–L / H]
    bb's source of truth is now TypeScript specs
