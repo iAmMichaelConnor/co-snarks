@@ -868,3 +868,33 @@ Full examples-vector recompile (beta.22) → compare.sh/compare_mpc.sh with a
 ROM/RAM field-wrap — mirror bb's Rom/RamMaliciousFieldWrap —,
 trailing-bytes/non-canonical encodings + the Phase-0 panic-on-off-curve fix)
 → slow set (aes128, sha256_compression e2e, recursion, recursion_zk).
+
+## 20. Recursion resolved (2026-07-08, session 3) — stale vectors + wrong K, NOT a verifier-code bug
+
+The 2.7 sweep found `recursion`/`recursion_zk` panicking at circuit-build
+(`assert_equal`, `ultra_builder.rs:223`). Root cause (two independent test-
+vector issues; **no `.rs` verifier code was wrong** — the step-④ recursion
+port is correct):
+1. **Stale inner proof.** `recursion*/Prover.toml` embedded a beta.20-era bb
+   inner proof whose bytes no longer round-trip through the synced relation
+   logic. Regenerated with target bb (commands in ch. 12 §4a).
+2. **Wrong public-input count.** `recursion*/src/main.nr` declared
+   `public_inputs: pub [Field; 3]`; the inner circuit has 1 public input, and
+   the pairing-point object (PUBLIC_INPUTS_SIZE=8) lives inside `proof`, not
+   `public_inputs`. K=3 shifted the transcript read cursor by 2 → all
+   downstream reads corrupted → first sumcheck `check_sum` mismatch. Fixed to
+   `[Field; 1]`. (K=3 worked at the OLD pin only because pairing-points were
+   16 and accounted differently pre-sync.)
+
+**Confirmations:**
+- Pre-project pin `36da0ea8` (old code + old vectors): recursion self-verifies
+  ✅ — so recursion worked before Phase 2; the break was ours (via vectors).
+- After both fixes: `recursion` + `recursion_zk` build/prove/self-verify on
+  main ✅ and cross-verify vs `~/.bb-target-src/bb` ✅ (410/458/115 counts).
+- Merge gotcha hit + recorded: gitignored `target/*.json`+`*.gz` don't travel
+  with git; after the merge, main still had the K=3 build → same panic until
+  `nargo compile && execute` (≈0.6 s). See ch. 12 §3 + §4a.
+
+Prevention pointers added: ch. 12 §3 (two new gotchas: stale recursion
+vectors + gitignored artifacts) and ch. 12 §4a (regen procedure, WHEN-only).
+Committed: recgen fix `61100009`, merged to mc/update-co-noir `4b4a8f51`.

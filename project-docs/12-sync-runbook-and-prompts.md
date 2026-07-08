@@ -93,6 +93,27 @@ Tick every one on every sync:
       the plain and MPC provers must produce identical bytes for one witness.
 - [ ] **Recursion path** (`co-builder/src/honk_verifier/`): in-circuit
       verifier + any hard-coded expected proof size.
+- [ ] **Recursion TEST VECTORS go stale on a proof-format change** (bit us
+      2026-07-08, ch. 14 §20 — cost hours). The `recursion`/`recursion_zk`
+      examples embed a bb-generated INNER proof/VK in their `Prover.toml`; a
+      format change makes that inner proof no longer verify in-circuit, which
+      surfaces as a builder `assert_equal` **panic at circuit-build time**
+      (`ultra_builder.rs:223`), NOT a clean diff — easy to misread as a
+      verifier-code bug. It is almost always a stale vector. Regen procedure =
+      §7 below. Also re-check `recursion*/src/main.nr`'s
+      `public_inputs: pub [Field; K]`: K must equal the INNER circuit's real
+      public-input count — the pairing-point object (`PUBLIC_INPUTS_SIZE`)
+      lives inside the `proof` array, NOT in `public_inputs`, so K must not
+      include it (a wrong K silently shifts the transcript read cursor). K can
+      change across a sync if the pairing-point accounting changes (it went
+      16→8 in the v5-next sync).
+- [ ] **Gitignored compiled artifacts don't travel with git.** After editing
+      any `*/src/main.nr` or `Prover.toml` (or merging/checkout that changes
+      them), the derived `target/<name>.json` (compiled circuit) and
+      `target/<name>.gz` (executed witness) are **gitignored** and go stale —
+      rerun `nargo compile && nargo execute` in that circuit dir (≈0.6 s).
+      A merge that brings a `main.nr`/`Prover.toml` change but leaves an old
+      `target/` build produces the same misleading build-time panic.
 - [ ] **The 5 version-pin locations** (ch. 02 §6): Readme, compare.sh,
       compare_mpc.sh, two compile.sh.
 
@@ -107,6 +128,43 @@ flavors. During a sync:
   hit a `todo!`/panic — that's expected; keep such circuits out of the KAT set
   until the feature is implemented (a separate workstream), and `log` the
   exclusion so coverage isn't silently overstated.
+
+## 4a. Updating the recursion test vectors (ONLY when needed — keep it off the inner loop)
+
+**When to do this (not more often):**
+- After a **proof-format-affecting sync** (the inner proof in `Prover.toml`
+  becomes stale — it's a real bb proof of the inner circuit, and its bytes
+  must round-trip through the *current* relation/transcript logic).
+- When the **inner circuit** (`inner_for_recursion/src/main.nr`) changes.
+- When `PUBLIC_INPUTS_SIZE` / pairing-point accounting changes (re-check the
+  `public_inputs: pub [Field; K]` count in `recursion*/src/main.nr`).
+- **NOT per iteration.** Recursion is deliberately OUT of the fast inner loop
+  (`fast-check.sh` never touches it; the recursion cargo tests are
+  `#[ignore]`d; recursion only runs in `compare.sh`'s `TEST_SLOWER_CIRCUITS`
+  set / the `--full` gate). Regenerating on every edit would wreck iteration
+  speed for no benefit — the non-recursion `plain::poseidon` KAT already
+  guards the shared proof format.
+
+**How to regenerate (verified 2026-07-08, ch. 14 §20)** — from the
+`inner_for_recursion` dir, with the TARGET bb (`~/.bb-target-src/bb`):
+```
+# non-ZK inner proof (for `recursion`); ZK: swap -t noir-recursive-no-zk -> noir-recursive
+bb write_vk -b target/inner_for_recursion.json -o OUT -t noir-recursive-no-zk
+bb prove    -b target/inner_for_recursion.json -w target/inner_for_recursion.gz \
+            -k OUT/vk -t noir-recursive-no-zk --output_format json -o OUT
+bb write_vk -b target/inner_for_recursion.json -o OUT_JSON -t noir-recursive-no-zk --output_format json
+# OUT/proof.json = 410 (non-ZK) / 458 (ZK) hex fields; OUT_JSON/vk.json = 115 hex fields + "hash"
+```
+Then convert hex→decimal and write into `recursion*/Prover.toml` as `proof`,
+`verification_key`, `vk_hash` (all decimal strings, matching the file's
+existing convention) and `public_inputs = ["<inner pub input>"]` (K = the
+inner circuit's real public-input count, e.g. `["3"]` for `x*2+y==9`, y=3 —
+K=1, NOT including pairing points). Finally recompile+execute the OUTER
+circuits (`nargo compile && nargo execute` in each `recursion*` dir) and
+confirm with `plaindriver … --circuit target/recursion.json …` (self-verify)
++ a `~/.bb-target-src/bb` cross-verify. Diagnostic tip: if it panics at
+`ultra_builder.rs:223` (`assert_equal`), suspect stale vector / wrong K
+FIRST — not the `.rs` verifier port.
 
 ## 5. Drift detection (so a sync is never a surprise)
 Stand up a local job (phase 4) that, on a schedule or on bb-nightly, runs the

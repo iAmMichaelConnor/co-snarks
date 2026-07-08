@@ -470,3 +470,19 @@ recgen's value is the pinpointed locus, not a vector fix.
 bare `cargo test -p tests`. Use `./fast-check.sh` (inner loop ~1.5s) — tiers
 `--sec/--mpc/--bb/--all-fast`; `--full` (~60min) is a milestone-only gate.
 Memory: [[cosnark-testing-discipline]].
+
+## Session 3 (continued) — 2026-07-08 — RECURSION RESOLVED; Phase 2 code+vectors complete
+recgen agent verdict (task #8): recursion/recursion_zk failures were TEST-
+VECTOR issues, not a verifier-code regression — (1) stale beta.20 inner proof
+in Prover.toml, (2) main.nr `public_inputs` K=3 should be K=1 (pairing points
+live inside `proof`, not public_inputs). Fixed, merged (`61100009` →
+`4b4a8f51`). Verified: old pin 36da0ea8 recursion worked (so it was ours);
+both circuits now self-verify + bb-cross-verify on main. Merge-time gotcha:
+gitignored target/*.json+*.gz went stale → build-panic until `nargo
+compile && execute` (0.6s). Prevention → ch.12 §3 + new §4a (recursion-vector
+regen: WHEN-only + bb command sequence) + ch.14 §20.
+
+**Phase 2 status: DONE except two tracked follow-ups** — deferred SSIPA A(1)=0
+forgery test (ch.13 §3a#8) and non-canonical (≥modulus) field-encoding
+rejection (ch.15 §1.3). All circuits (incl. recursion) pass; security
+regressions in place; fast-check.sh is the iteration tool.
