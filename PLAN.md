@@ -196,7 +196,7 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       compile-time asserts). ch.13 §3a security regressions: #9 ROM/RAM +
       #10 trailing/off-curve DONE; verifier hardening landed. Iteration tool =
       `fast-check.sh` (NEVER circom). **Remaining follow-ups (not blocking):**
-      SSIPA A(1)=0 forgery test (§3a#8, deferred); non-canonical (≥modulus)
+      SSIPA A(1)=0 boundary-claim consistency test (§3a#8, deferred); non-canonical (≥modulus)
       encoding rejection (§3a#10 residue, ch.15 §1.3).
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
 
@@ -253,8 +253,8 @@ ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
 4. Definition of done for any sync work = byte-equality KATs + two-way
    cross-verification with bb + negative tests. Negatives must cover the
    **soundness surface** (verifiers + co-builder — ch. 13 §9), including the
-   mandatory security regressions (ch. 13 §3a: SSIPA forgery, ROM/RAM
-   field-wrap, non-canonical-encoding/trailing-data).
+   mandatory security regressions (ch. 13 §3a: SSIPA A(1)=0 boundary claim,
+   ROM/RAM index-chain pinning, trailing-data/off-curve handling).
 
 ## Reference resources (read-only; verify before relying)
 

@@ -44,11 +44,10 @@ are listed here so nothing rides on memory.
    proof/VK/transcript field path co-noir reimplements. bb v5-next's Ultra
    field deser still reduces (montgomery/`self_reduce_once`); co-noir already
    matches via ark `from_be_bytes_mod_order`. Adding a rejection here would
-   DIVERGE from bb → parity break. `ignore.md` (governing rule) confirms:
-   #1428/#1430/#787 non-canonical acceptance is *unchanged* in v5-next → match
-   bb, carry over nothing. (Honest proofs are canonical anyway; adversarial
-   ones reduce identically in both → same accept/reject.) No code change; this
-   is a parity-checklist invariant, not a fix.
+   DIVERGE from bb → parity break. bb v5-next leaves non-canonical acceptance
+   unchanged in the Ultra path → match bb, change nothing. (Honest proofs are
+   canonical anyway; out-of-range encodings reduce identically in both → same
+   accept/reject.) No code change; this is a parity-match invariant, not a fix.
 4. **VERIFY: the two verifier-hardening bb commits were never explicitly
    ported.** [S / M — verifier]
    Ch. 03 §2 flagged `1391c49546` (reject VKs with `log_circuit_size = 0` —

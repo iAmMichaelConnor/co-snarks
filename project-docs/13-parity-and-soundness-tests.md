@@ -131,7 +131,8 @@ the happy path.
     (and 2501's trailing-data check is **ChonkProof MsgPack**) — neither
     touches the Ultra proof/transcript field deser co-noir reimplements. bb
     v5-next's Ultra path reduces; co-noir matches (ark `from_be_bytes_mod_order`).
-    Rejecting would break parity — see ch.15 §1.3 / `ignore.md` #1428/#1430/#787.
+    Rejecting would break parity; bb v5-next reduces non-canonical encodings in
+    the Ultra path (its ≥modulus rejection is MsgPack-only). See ch.15 §1.3.
 
 ## 4. Completeness tests to add
 1. **Input diversity per circuit**: today each vector proves one fixed
