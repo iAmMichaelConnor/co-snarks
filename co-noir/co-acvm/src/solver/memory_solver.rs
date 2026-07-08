@@ -80,3 +80,74 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::solver::PlainCoSolver;
+    use acir::{
+        circuit::opcodes::{BlockId, MemOp, MemOpKind},
+        native_types::Witness,
+    };
+
+    /// Regression test for noir-claude #696 ("MemoryOp on uninitialized block"): a
+    /// `MemoryOp` referencing a `block_id` that was never `MemoryInit`'d must return a
+    /// structured error, not panic/read out-of-bounds. co-noir already guards this (see
+    /// the `.ok_or(eyre::eyre!(...))` on `self.memory_access.get(...)` below) - this test
+    /// pins that behaviour down as a regression guard.
+    #[test]
+    fn memory_read_on_uninitialized_block_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(0u64));
+        let op = MemOp {
+            operation: MemOpKind::Read,
+            index: Witness(0),
+            value: Witness(1),
+        };
+        // Block 5 was never initialized via `MemoryInit`.
+        let result = solver.solve_memory_op(BlockId(5), &op);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    #[test]
+    fn memory_write_on_uninitialized_block_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(0u64));
+        solver
+            .witness()
+            .insert(Witness(1), ark_bn254::Fr::from(7u64));
+        let op = MemOp {
+            operation: MemOpKind::Write,
+            index: Witness(0),
+            value: Witness(1),
+        };
+        let result = solver.solve_memory_op(BlockId(5), &op);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Regression test for noir-claude #697 ("duplicate MemoryInit block_id"):
+    /// initializing the same `block_id` twice must return a structured error instead of
+    /// silently overwriting the block (or panicking). co-noir already guards this (see
+    /// the `self.memory_access.get(...).is_some()` check below) - this test pins that
+    /// behaviour down as a regression guard.
+    #[test]
+    fn duplicate_memory_init_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(1u64));
+
+        solver
+            .solve_memory_init_block(BlockId(3), &[Witness(0)])
+            .expect("first init of block 3 must succeed");
+
+        let result = solver.solve_memory_init_block(BlockId(3), &[Witness(0)]);
+        assert!(
+            result.is_err(),
+            "expected a structured error on duplicate MemoryInit, got Ok"
+        );
+    }
+}

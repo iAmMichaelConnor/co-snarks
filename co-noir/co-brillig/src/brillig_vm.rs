@@ -83,7 +83,17 @@ where
     }
 
     fn run_inner(&mut self, id: &BrilligFunctionId) -> eyre::Result<CoBrilligResult<T, F>> {
-        let opcodes = self.unconstrained_functions[id.as_usize()].bytecode.clone();
+        let function_index = id.as_usize();
+        if function_index >= self.unconstrained_functions.len() {
+            eyre::bail!(
+                "BrilligCall references unconstrained function id {} but only {} unconstrained function(s) are present",
+                function_index,
+                self.unconstrained_functions.len()
+            );
+        }
+        let opcodes = self.unconstrained_functions[function_index]
+            .bytecode
+            .clone();
 
         loop {
             let opcode = &opcodes[self.ip];
@@ -184,9 +194,9 @@ where
 
     /// Creates a new instance of the coBrillig-VM from the provided
     /// driver and a vec of unconstrained functions. This instance of
-    /// the VM can only run those unconstrained functions and panics
-    /// if a caller tries to call an index larger then provided
-    /// by this array.
+    /// the VM can only run those unconstrained functions; calling with
+    /// an id larger than the number of provided functions returns a
+    /// structured `eyre::Result` error instead of panicking.
     pub fn init(
         driver: T,
         unconstrained_functions: Vec<BrilligBytecode<GenericFieldElement<F>>>,
@@ -426,7 +436,7 @@ where
         };
         let persistent_shared_state = std::mem::take(&mut self.persistent_shared_state);
         Ok(CoBrilligResult::Success(BrilligSuccess {
-            unconstrained_witnesses: self.take_result(offset, size),
+            unconstrained_witnesses: self.take_result(offset, size)?,
             generated_pss: persistent_shared_state,
         }))
     }
@@ -501,9 +511,79 @@ where
         Ok((truthy_universe, falsy_universe))
     }
 
-    fn take_result(&mut self, offset: usize, size: usize) -> Vec<T::BrilligType> {
+    fn take_result(&mut self, offset: usize, size: usize) -> eyre::Result<Vec<T::BrilligType>> {
         // take memory - this also resets it for next run
         let memory = std::mem::take(&mut self.memory).into_inner();
-        memory[offset..offset + size].to_vec()
+        // `offset`/`size` come from the (untrusted) HeapVector encoding of the Brillig
+        // `Stop` opcode's return data - bounds-check instead of indexing/allocating blindly.
+        let end = offset.checked_add(size).ok_or_else(|| {
+            eyre::eyre!(
+                "brillig return data out of bounds: offset {offset} + size {size} overflows"
+            )
+        })?;
+        memory.get(offset..end).map(<[_]>::to_vec).ok_or_else(|| {
+            eyre::eyre!(
+                "brillig return data out of bounds: offset {offset} + size {size} exceeds memory length {}",
+                memory.len()
+            )
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mpc::{PlainBrilligDriver, PlainBrilligType};
+
+    fn empty_vm() -> CoBrilligVM<PlainBrilligDriver<ark_bn254::Fr>, ark_bn254::Fr> {
+        CoBrilligVM::init(PlainBrilligDriver::default(), vec![])
+    }
+
+    /// Regression test for noir-claude #695: calling a `BrilligCall` whose function id
+    /// indexes past the provided unconstrained-functions vec must return a structured
+    /// error instead of panicking on the `Vec` index.
+    #[test]
+    fn brillig_call_with_out_of_bounds_function_id_returns_err_not_panic() {
+        let mut vm = empty_vm();
+        // No unconstrained functions were provided, so id 0 is already out of bounds.
+        let result = vm.run(&BrilligFunctionId(0), vec![]);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Regression test for noir-claude #664: the `size`/`offset` describing a Brillig
+    /// `Stop` opcode's `HeapVector` return data are untrusted (read out of VM memory) and
+    /// must be bounds-checked before being used to slice memory, instead of panicking.
+    #[test]
+    fn take_result_out_of_bounds_returns_err_not_panic() {
+        let mut vm = empty_vm();
+        // Memory is empty, so any non-zero-sized read is out of bounds.
+        let result = vm.take_result(0, 5);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Overflowing `offset + size` must also be rejected cleanly rather than panicking or
+    /// wrapping.
+    #[test]
+    fn take_result_overflowing_bounds_returns_err_not_panic() {
+        let mut vm = empty_vm();
+        let result = vm.take_result(usize::MAX, 1);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Sanity check that in-bounds reads still work after the bounds check was added.
+    #[test]
+    fn take_result_in_bounds_still_succeeds() {
+        let mut vm = empty_vm();
+        vm.memory
+            .write(
+                MemoryAddress::direct(0),
+                PlainBrilligType::Field(ark_bn254::Fr::from(7u64)),
+            )
+            .unwrap();
+        let result = vm.take_result(0, 1).expect("in-bounds read must succeed");
+        assert_eq!(
+            result,
+            vec![PlainBrilligType::Field(ark_bn254::Fr::from(7u64))]
+        );
     }
 }
