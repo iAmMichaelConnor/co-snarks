@@ -61,6 +61,12 @@ gotchas); update ch. 03 to the new baseline; update `co-noir/co-noir/Readme.md`.
 
 ## 3. Gotchas checklist (the "often forgotten" list)
 Tick every one on every sync:
+- [ ] **Oracle provenance** (bit us 2026-07-08, ch. 14 §17.1): before trusting
+      ANY prebuilt bb binary as the parity oracle, byte-compare its
+      `write_vk` output for one circuit against a bb **built from source at
+      the exact target tag** (`git archive <tag> barretenberg/cpp`; cmake
+      preset default, `-DAVM=OFF`, target `bb`, ~90 s). rc/nightly release
+      binaries can predate proof-breaking commits that are already in the tag.
 - [ ] **Alpha count**: any subrelation add/remove changes the alpha vector
       length and sumcheck batching — grep all `NUM_SUBRELATIONS`/alpha sites.
 - [ ] **Relation order**: reordering relations silently changes alpha→

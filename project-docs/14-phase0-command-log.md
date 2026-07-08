@@ -718,6 +718,70 @@ gemini masking eval over the full 25-challenge vector) — a ZK proof-byte
 change neither ch. 11 nor the pre-analysis had called out explicitly.
 Being implemented faithfully.
 
+### 17.1 ⚠ ORACLE CORRECTION (implementer, 2026-07-08 ~18:43–18:57): rc.2 is NOT the target
+
+While chasing a VK divergence at the *first commitment*, the implementer
+found the prebuilt `~/.bb-target/bb` (5.0.0-rc.2) serializes the VK in the
+**OLD q_m-first entity order** — rc.2 was cut *before* the entity reorder
+(`c075fc182e`) and is therefore NOT UltraHonk-identical to v5-next,
+contradicting the step-② assumption (the earlier "rc.2 ≡ v5-next" check
+compared bb *source trees*, but the rc.2 *release binary* predates the tag).
+Consequences:
+- The step-② KATs (commit `e70252e1`) were generated from a wrong oracle.
+- Fix: bb was **built from source** at the true target tag —
+  `git archive v5.0.0-nightly.20260708 barretenberg/cpp` out of
+  `~/aztec-packages-private`, `CC=clang-20 CXX=clang++-20 cmake --preset
+  default -DAVM=OFF`, `cmake --build build --target bb -j 90` (~90 s).
+  Preserved at **`~/.bb-target-src/bb`** (+PROVENANCE.txt) — this is now
+  THE target oracle; do not use `~/.bb-target/bb` for anything.
+- All 4 proof KATs regenerated with it (`bb prove … -o`, then `cp` over
+  `test_vectors/noir/*/kat/*_proof_with_*`).
+**Lesson (also in ch. 12 gotchas): never trust a prebuilt bb release binary
+as oracle without first byte-comparing its VK output against the target
+tag's source; rc/nightly binaries can lag the tag by proof-breaking days.**
+
+### 17.2 Result ✅ (landed 2026-07-08 evening→night, across a token pause)
+
+The step-④ agent died at its session limit at 19:15 with ONE edit unfired
+(the Shamir randomness accounting in `co_ultra_prover.rs`; its last two
+attempts also hit "claude-opus-4-8 temporarily unavailable" API errors).
+Everything else was in the tree and the workspace compiled. Recovery
+session (this one) then:
+1. **Re-verified the KAT provenance independently**: regenerated all 4
+   proofs fresh with `~/.bb-target-src/bb` → `cmp` byte-identical to the
+   working-tree KATs (MATCH ×4). (First attempt at the compare loop failed
+   silently-wrong: zsh does NOT word-split `set -- $pair` — printed empty
+   paths. Re-ran with explicit per-file `cmp`.)
+2. **Completed the randomness accounting** — applied the agent's intended
+   edit (recovered verbatim from its transcript) after verifying every term
+   against the consumers, and fixed one real omission in it: the 8
+   `mask_polynomial` call sites (w_l/w_r/w_o, read_counts/read_tags/w_4,
+   lookup_inverses/z_perm) each draw NUM_MASKED_ROWS=3 Shamir pairs in ZK —
+   24 pairs the agent's version undercounted. Full derivation now in the
+   function comments. Note: in-tree Shamir tests run 3-party which takes
+   the `num_pairs=0` on-the-fly path — the accounting is only exercised at
+   ≥4 parties, so a wrong count would NOT show in the suite.
+3. Removed 2 now-unfulfilled `#[expect(clippy::too_many_arguments)]`;
+   `cargo fmt`; clippy → **0 warnings workspace-wide**.
+4. **Gates**: full noir suite `cargo test -p tests --release --test noir`
+   → **94 passed / 0 failed** in 39 s (incl. THE MILESTONE: plain KAT
+   byte-equality vs true-target-bb KATs, both circuits × both hashers;
+   REP3 + Shamir 3-party × {ZK, non-ZK}).
+5. **ZK bidirectional cross-verify vs `~/.bb-target-src/bb`** (poseidon,
+   poseidon2 hasher): our ZK proof verified by bb with our VK ✓ and with
+   bb's VK ✓; bb's ZK proof verified by `co-noir verify --has-zk` ✓
+   (flag is `--has-zk`, not `--zk` — prover and verifier CLIs differ);
+   **VK byte-identical**; ZK proof exactly 458 fields (14656 B), non-ZK
+   410 (13120 B) — the ch. 04 §5 invariants hold at the target.
+6. Committed as `571c1305` (36 files, +628/−1095).
+
+Remaining for Phase 2 after step ④: PLAN 2.6 builder/DSL residue (ROM/RAM
+sorted-index pinning `1f7ed2ea79` — soundness fix; EC gate-count parity
+check EC_ADD 80→76 / MSM 3559→3557; recursion size-assert), then 2.7
+green-up (full example suite, compare_mpc.sh — note: needs a THIRD oracle
+slot pointing at `~/.bb-target-src/bb` — and the ch. 13 §3a mandatory
+security regressions).
+
 ## 18. Rationale-mining pass (launched 2026-07-08, per Mike's challenge)
 
 Gap acknowledged: our analysis nailed WHAT changed, but the WHY (PR

@@ -150,33 +150,40 @@ Goal: a co-snark generated and verified end-to-end this week; baseline metrics.
   github.com/noir-lang/noir, vendoring fallback =
   aztec-packages-private/noir/noir-repo).
 - **Oracle binaries**: `~/.bb/bb` = 5.0.0-nightly.20260324 (old pin);
-  `~/.bb-target/bb` = 5.0.0-rc.2 (UH-identical to v5-next — rc.2's bb diff
-  vs v5-next is vm2/AVM only); nargo via noirup (beta.20 now; beta.22 for
-  vector regen).
+  `~/.bb-target-src/bb` = **source-built at v5.0.0-nightly.20260708** — THE
+  target oracle (see PROVENANCE.txt next to it; ch. 14 §17.1).
+  ⚠ `~/.bb-target/bb` (prebuilt 5.0.0-rc.2) is DEPRECATED as oracle: the
+  rc.2 *binary* predates the entity reorder and emits OLD-order VKs (found
+  2026-07-08; the earlier "rc.2 ≡ v5-next UH" claim compared source trees,
+  not the shipped binary). nargo = beta.22.
 - Public mirror for tags/releases: `~/ap-next` (public repo, v5-next).
 Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.md` §2:
-- [ ] 2.1 Regenerate/collect fresh bb KATs at the new pin (proofs + VKs for the
-      test-vector circuits, both hashers, ZK on/off). Reuse Taceo's own
-      harness: `test_vectors/noir/compile.sh` (nargo KATs) and
-      `co-noir/co-noir/examples/compare{,_mpc}.sh` (byte-diff + 4-way
-      cross-verify vs a `bbup`-installed bb). Our target ≡ public
-      `v5.0.0-nightly.20260708`, so the reference bb binary is publicly
-      installable — no private material needed for the oracle.
-- [ ] 2.2 Permutation relation 2→3 subrelations (+alpha bookkeeping).
-- [ ] 2.3 Trace-offset rework: masking rows at top, content offset 5,
-      lagrange_first at row 4 (touches co-builder trace layout + all VKs).
-- [ ] 2.4 ZK rework: masking randomness in witness rows, new row-disabling
-      factor, drop padding_indicator_array, SSIPA 5th opening claim.
-- [ ] 2.5 Relation tuple reorder (alpha assignment).
-- [ ] 2.5a **Entity/get_all reorder (found 2026-07-08, ch. 03 §2 row 6):**
-      sumcheck-evaluation transmit order + VK commitment serialization
-      order — co-noir entities.rs get_all/precomputed order + transcript
-      send/receive sites + recursion verifier mirror. Do with 2.5 (same bb
-      commit).
-- [ ] 2.6 Builder/gate-level: ROM/RAM sorted-index pinning; EC add/MSM ACIR
-      serde change (`is_infinite` removed); ECDSA-r1/SHA table changes (only
+- [x] 2.1 Regenerate/collect fresh bb KATs at the new pin — DONE 2026-07-08
+      (4 proof KATs, both circuits × both hashers, non-ZK), but with the
+      **source-built** `~/.bb-target-src/bb`, NOT a prebuilt binary: the
+      rc.2 prebuilt predates the entity reorder (ch. 14 §17.1). Byte-identity
+      independently re-verified. ZK has no byte-KAT (randomized) — covered by
+      live bb cross-verify instead.
+- [x] 2.2 Permutation relation 2→3 subrelations (+alpha bookkeeping) —
+      step ③, commit 1a13fcdc (ch. 14 §16.1).
+- [x] 2.3 Trace-offset rework: masking rows at top, content offset 5,
+      lagrange_first at row 4 — step ④, commit 571c1305 (ch. 14 §17.2).
+- [x] 2.4 ZK rework: masking randomness in witness rows {1,2,3}, new
+      row-disabling factor, padding_indicator_array dropped, honest
+      virtual-round univariates, SSIPA 5th opening claim A(1)=0, Shamir
+      randomness accounting re-derived — step ④, commit 571c1305.
+- [x] 2.5 Relation tuple reorder (alpha assignment) — step ③, 1a13fcdc.
+- [x] 2.5a **Entity/get_all reorder:** sumcheck-evaluation transmit order +
+      VK commitment serialization + recursion mirror — step ③, 1a13fcdc.
+- [ ] 2.6 Builder/gate-level residue: ROM/RAM sorted-index pinning
+      (`1f7ed2ea79`, soundness fix); EC gate-count parity check (EC_ADD
+      80→76, MSM 3559→3557 — serde done in step ①, counts unverified);
+      recursion-constraint size assert; ECDSA-r1/SHA table changes (only
       gate-count constants matter where blackboxes are unimplemented).
-- [ ] 2.7 Green KATs + cross-verification vs bb at new pin; run full example suite.
+- [ ] 2.7 Green-up: full example suite + compare_mpc.sh vs BOTH oracles
+      (needs a slot for ~/.bb-target-src/bb) + ch. 13 §3a security
+      regressions. Partial 2026-07-08: noir suite 94/0; ZK bidirectional
+      bb cross-verify PASS; VK byte-identical; 410/458-field invariants hold.
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits

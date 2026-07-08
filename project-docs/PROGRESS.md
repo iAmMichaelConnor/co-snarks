@@ -328,3 +328,40 @@ plus 4 modified `test_vectors/noir/*/kat/*` files.
 ### index-pinning security fix ch.13 §3a#9, EC gate-count parity TODO from
 ### step ①), then 2.7 green-up (full suite + compare_mpc.sh both oracles +
 ### the 3 mandatory security-regression tests, ch. 13 §3a).
+
+## Session 3 — 2026-07-08 night (recovery + step ④ landed)
+
+**Recovery from the token pause** (per the handoff checklist): the step-④
+agent had died at its session limit at 19:15 with the tree compiling and
+ONE edit unfired. Full forensics from its transcript, then completed and
+gated the step. Committed `571c1305` (36 files, +628/−1095).
+
+**⚠ Key discovery (agent's, verified independently): rc.2 is NOT a valid
+oracle.** `~/.bb-target/bb` (prebuilt 5.0.0-rc.2) emits OLD entity-order
+VKs — the release binary predates the entity reorder even though the rc.2
+source tree doesn't. The agent built bb FROM SOURCE at the true target tag
+v5.0.0-nightly.20260708; preserved at `~/.bb-target-src/bb` (+PROVENANCE).
+Step-② KATs were regenerated with it (this session re-verified all 4
+byte-identical against fresh proofs). PLAN pinned-set corrected; ch. 12
+gotcha added; ch. 14 §17.1 records the full story.
+
+**Step ④ completion (this session):**
+- Applied the agent's unfired Shamir randomness-accounting edit after
+  verifying every term against the actual consumers, and fixed a real
+  omission: 8 mask_polynomial sites × NUM_MASKED_ROWS(3) = 24 ZK draws it
+  undercounted. Caveat noted: 3-party Shamir tests bypass the accounting
+  (on-the-fly path) — only ≥4-party runs exercise it.
+- Gates: check/fmt/clippy(-D) 0 warnings; noir suite **94/0** (incl. THE
+  MILESTONE — plain KAT byte-equality vs true-target bb, both circuits ×
+  both hashers); **ZK bidirectional cross-verify vs source-built bb PASS**
+  (our proof → bb verifier w/ both VKs; bb proof → our verifier); VK
+  byte-identical; proof sizes 410 non-ZK / 458 ZK ✓.
+
+**Phase 2 status: 2.1–2.5a DONE.** Remaining: 2.6 builder residue (ROM/RAM
+sorted-index pinning soundness fix; EC gate-count parity; recursion size
+assert) and 2.7 green-up (example suite; compare_mpc.sh needs a
+~/.bb-target-src/bb slot; ch. 13 §3a security regressions).
+
+**Mike's steer this session: don't overdo testing — prioritize feature
+progress.** Testing footprint kept to the 39 s suite + seconds-fast ZK
+cross-verify; heavy compare_mpc.sh sweep deferred to 2.7.
