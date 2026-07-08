@@ -33,31 +33,62 @@ future working sessions (human or AI).
 | `08-data-flow-diagrams.md` | Diagrams: participants/channels, share splitting & distribution, MPC witness extension, Fiat–Shamir round pattern, REP3 mult, Aztec PSS end-to-end, who-learns-what. | complete (2026-07-08) |
 | `09-pxe-secret-sharer.md` | Getting all secret types (notes, privacy keys, signing keys, authwits, nonces, tagging secrets) out of the client into co-noir REP3 shares: candidate paths ranked, layered recommendation, consent model, open questions. | evolving; Q2–Q3 open (2026-07-08) |
 | `10-pxe-wallet-architecture.md` | Teach-from-scratch mental model of the v5-next client stack (node / PXE / wallet / account / entrypoint); the two databases; where every secret lives; layer/store/tx-flow diagrams. | complete (2026-07-08) |
-| `11-phase2-sync-workplan.md` | Deep, file-by-file plan to update co-noir to v5-next: the four proof-format changes, builder/DSL gate changes, KAT regen, green-up order, effort/risk. | complete (2026-07-08) |
-| `12-sync-runbook-and-prompts.md` | Repeatable procedure + copy-paste agent prompts for any future version sync; safety invariants; gotcha checklist; unsupported-feature guardrails; drift detection. | complete (2026-07-08) |
-| `13-parity-and-soundness-tests.md` | Test plan for byte/verifier parity with bb + soundness (negative tests) + completeness + MPC-consistency + differential fuzz; what to build in each phase. | complete (2026-07-08) |
-| `14-phase0-command-log.md` | Chronological Phase 0 command record: every command (incl. failures + root causes), what it achieved, environment requirements, doc-improvement notes for co-noir/bb READMEs. | live (2026-07-08) |
+| `11-phase2-sync-workplan.md` | Deep, file-by-file plan to update co-noir to v5-next — now annotated **AS BUILT** per work item (commits, divergences from plan, retrospective). Starts with the PLAN.md-vs-ch.11 division of labor + work-item numbering map. | complete + AS BUILT (2026-07-08); items 2.1–2.6 done, 2.7 pending |
+| `12-sync-runbook-and-prompts.md` | Repeatable procedure + copy-paste agent prompts for any future version sync; safety invariants; gotcha checklist (incl. oracle provenance); unsupported-feature guardrails; drift detection. | complete (2026-07-08) |
+| `13-parity-and-soundness-tests.md` | Test plan for byte/verifier parity with bb + soundness (negative tests incl. §3a mandatory security regressions) + completeness + MPC-consistency + differential fuzz; what to build in each phase. | complete (2026-07-08) |
+| `14-phase0-command-log.md` | Chronological Phase 0 **and Phase 2** command record (§§12–19): every command (incl. failures + root causes), what it achieved, environment requirements, doc-improvement notes. | live (2026-07-08; through item 2.6) |
+| `15-improvement-backlog.md` | Post-Phase-2 backlog: VERIFY items possibly not fully handled by the sync, extra test ideas beyond ch. 13, Rust refactor/perf ideas (MPC mul batching, allocation hot spots), anti-drift machinery. Proposals only — nothing implemented. | new (2026-07-08) |
 
-## Key facts established so far (2026-07-08)
+## Key facts established so far (updated 2026-07-08, after Phase 2 code-complete)
 
+**Project state:**
+- **Phase 0 DONE** (pipeline validated at the old pin: 603/603 tests, 29/29
+  bb-cross-verified circuits, sound under tampering — ch. 14 §§1–11).
+  **Phase 1 DONE** (decisions). **Phase 2 CODE-COMPLETE**: items 2.1–2.6 all
+  landed on branch `mc/update-co-noir` (commits `4e7abb95` pin bump,
+  `e70252e1` KATs, `1a13fcdc` relations/entity reorders, `571c1305`
+  trace-offset + ZK, `5ac55600` builder residue). **Only 2.7 (green-up)
+  remains**: full examples recompile + compare_mpc.sh vs both oracles +
+  ch. 13 §3a security regressions. Status tracker: PLAN.md; AS-BUILT
+  detail: ch. 11; chronology: ch. 14 §§12–19.
+- Milestone already achieved: **plain KAT byte-equality vs true-target bb**
+  (both circuits × both hashers), ZK bidirectional bb cross-verify, VK
+  byte-identical, proof sizes 410 (non-ZK) / 458 (ZK) / VK 115 fields —
+  lengths identical to the old pin (the sync changed byte content/order
+  only).
+- ⚠ **Oracle correction (ch. 14 §17.1)**: THE target parity oracle is
+  **`~/.bb-target-src/bb`** (built from source at `v5.0.0-nightly.20260708`,
+  PROVENANCE.txt alongside). The prebuilt `~/.bb-target/bb` (5.0.0-rc.2) is
+  **deprecated** — its release binary predates the entity reorder and emits
+  old-order VKs; any doc text saying "rc.2 ≡ v5-next" is stale. Old-pin
+  regression oracle stays `~/.bb/bb`.
+- Item 2.6 found **two extra proof-breaking bb changes** the diff analysis
+  had not flagged as such: lookup `table_index` now starts at 1
+  (`0a7d0af035`) and SHA-256 CH-L2 tables became 10-bit + a w[0] range
+  constraint (`bbbde54094`/`5d43e115a2` — soundness fixes). Lesson: KAT
+  circuits under-cover builder changes; per-feature parity circuits needed
+  (ch. 11 §4 AS BUILT, ch. 15).
+
+**Background facts (from session 1, still true):**
 - `~/co-snarks` is a checkout of TaceoLabs/co-snarks upstream `main`,
   last commit 2026-07-06 — the repo is **actively maintained**, not abandoned.
-- The Rust UltraHonk rewrite (`co-noir/ultrahonk`, `co-noir/co-ultrahonk`) claims
-  proof/vk compatibility with **barretenberg `v5.0.0-nightly.20260324`**
-  (per `co-noir/co-noir/Readme.md`) and nargo `v1.0.0-beta.20`.
-  So the staleness gap is ~3.5 months, **not** the >1 year initially feared.
-- `~/aztec-packages-private` HEAD (2026-07-07) is in the `v6.0.0-nightly` series —
-  a major version bump happened after the pin. UH-relevant dirs changed by
-  ~265 files / ~36k insertions since the pin (raw churn incl. tests; see ch. 03
-  for what actually breaks proof compatibility).
-- The `v5.0.0-nightly.20260324` tag exists in `aztec-packages-private` itself,
-  so precise `git diff` archaeology is possible locally.
+- The Rust UltraHonk rewrite (`co-noir/ultrahonk`, `co-noir/co-ultrahonk`)
+  was pinned to **barretenberg `v5.0.0-nightly.20260324`** / nargo beta.20
+  (~3.5 months behind, **not** the >1 year initially feared); our branch has
+  now moved it to the target (`v5.0.0-nightly.20260708` ≡ `origin/v5-next`,
+  nargo beta.22).
+- `~/aztec-packages-private` HEAD is in the `v6.0.0-nightly` series; the two
+  v6-only UH-breaking commits are NOT in v5-next, so Phase 3 (v6 port)
+  stays a contingency (ch. 03).
 - Taceo's version syncs (per their public history) happen in periodic bursts,
   roughly every 1–2 months.
 - Decisions (Mike, 2026-07-08; full list in PLAN.md): target `origin/v5-next`
   (≡ public v5 tip — verified); **no-push confidentiality rule**; no Taceo
   contact for now; ZK flavor default (HONK_ZK=6); 3-party semi-honest REP3 OK;
+  implementation independence from bb's C++ structure (decision 6a);
   key output = co-snarks generated from ALL client secret types (ch. 09–10).
 - Repo pointers: `~/aztec-packages-private` (reference, incl. v5-next +
   private v6 line), `~/ap-next` = public aztec-packages `v5-next` where PXE
   development actively continues, `~/monty-hall-aztec` (stale demo).
+- Env: rustc 1.90 (repo override), nargo 1.0.0-beta.22, oracles
+  `~/.bb/bb` (old pin) + `~/.bb-target-src/bb` (target, source-built).
