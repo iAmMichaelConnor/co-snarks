@@ -685,3 +685,50 @@ demo self-verify. KAT-vs-bb NOT expected green until 2.4+2.6.
   algebra read directly ✓; entity indices ✓.
 - Note: examples/test_vectors/poseidon artifact was still beta.20 →
   regenerated with nargo beta.22 (pre-existing issue, unrelated).
+
+Committed: `1a13fcdc`.
+
+## 17. Phase 2 step ④ — trace-offset + ZK/SSIPA rework (2.4 + 2.6)
+
+*(In progress — launched 2026-07-08 evening, delegated; results appended
+on landing.)* The biggest/riskiest pair, entangled through the ZK path:
+- 2.4: masking/disabled rows END→TOP (TRACE_OFFSET=4; masking rows 1–3;
+  lagrange_first row 0→4; content from row 5); every VK changes;
+  padding_indicator_array deleted everywhere incl. the dedicated
+  recursion-verifier file; new sumcheck row-disabling factor; MPC nuance —
+  non-ZK: structural rows only; ZK: masking randomness as shares
+  (relocated from tail).
+- 2.6: SSIPA 5th UNTRANSMITTED Shplonk claim A(1)=0 (claims 4→5,
+  transmitted evals stay 4, commitments 3); Shplonk nu-power shift;
+  MaskingTailData deletion; gemini masking dyadic sizing check; Shamir ZK
+  randomness re-derive if mechanics changed.
+**Gate adds THE MILESTONE**: plain KAT byte-equality vs regenerated
+target-bb KATs (add3u64+poseidon × pos/kec, non-ZK) SHOULD go green —
+first end-to-end byte-parity point with the target. Plus: ZK
+bidirectional cross-verify with ~/.bb-target/bb, VK byte-identity check,
+REP3 proof verified by target bb. Divergence protocol: if KAT red, agent
+reports first divergent field index + proof section, ONE fix attempt,
+then stop with analysis (no thrashing).
+
+Mid-step discovery (implementer, 2026-07-08 ~18:35): co-noir pads ZK
+sumcheck to 25 rounds with ZERO univariates, but bb NEW computes **honest
+virtual-round univariates** (single-edge contribution × row-disabling
+factor + that round's Libra univariate; book-keeping folded by (1−u_k);
+gemini masking eval over the full 25-challenge vector) — a ZK proof-byte
+change neither ch. 11 nor the pre-analysis had called out explicitly.
+Being implemented faithfully.
+
+## 18. Rationale-mining pass (launched 2026-07-08, per Mike's challenge)
+
+Gap acknowledged: our analysis nailed WHAT changed, but the WHY (PR
+descriptions, commit bodies, soundness motivations) was only
+fragmentarily captured. A read-only agent is mining full commit bodies /
+added code comments / linked issues for all 6 consensus changes + ROM/RAM
+pinning + recursion size-assert + verifier hardenings, classifying each
+as SOUNDNESS FIX / ZK-PRIVACY FIX / HARDENING / ENGINEERING, and
+identifying which side (prover/verifier) carries the security burden.
+Highest stakes: `58bf73a289` (if A(1)=0 fixed an SSIPA soundness gap, the
+VERIFIER-side enforcement is the critical half — a bytes-only port could
+reintroduce the hole) and `1f7ed2ea79` (ROM/RAM boundary pinning smells
+like a sorted-list soundness fix). Results → ch. 03 per-change "why"
+sections + extra negative tests in the 2.7 green-up if warranted.

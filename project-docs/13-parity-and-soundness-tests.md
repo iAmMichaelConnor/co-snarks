@@ -87,6 +87,39 @@ For a representative subset of vectors, assert the verifier **rejects**:
    error, never a panic and never silent acceptance of an out-of-domain value.
    (These map to concrete co-acvm/co-brillig entry points; see also §6.)
 
+### 3a. MANDATORY security-regression tests (from the 2026-07-08 rationale
+### mining — ch. 03 §6; these port bb's own embargoed-fix regression tests)
+
+These are not optional hardening — each corresponds to a real attack bb
+fixed via its private security repo. Port bb's regression tests, not just
+the happy path.
+
+8. **SSIPA forgery (ports bb `shplemini.test.cpp` malicious-prover test;
+   bb PR #44).** Construct the homogeneous-kernel perturbation
+   (δ_A(1)=δ, δ_A(g^j)=−δ/(g−1) for j≥1, δ_s=c) that satisfies the SSIPA
+   identity at r but forges the Libra inner-product, and assert the co-noir
+   ZK verifier **rejects** it. CRITICAL: the test must exercise the full
+   Shplemini-batched path — bb's own README states the standalone
+   `check_consistency` identity check *accepts* the forgery, so a test that
+   bypasses Shplemini would pass while the real vulnerability remained. This
+   is the test that proves co-noir enforces the A(1)=0 boundary claim on the
+   VERIFIER side, not just that its prover emits 5 claims.
+9. **ROM/RAM field-wrap attack (ports bb `rom_ram.test.cpp`; bb PR #29).**
+   Build a circuit whose sorted ROM/RAM index chain starts at the field
+   value p−1 (≡ −1) and wraps to 0 — legal under the Δ²+Δ=0 delta relation
+   alone — attempting to read/write a forged value at phantom index p−1.
+   Assert co-noir **rejects** (the first sorted index must be copy-
+   constrained to a genuinely-constrained zero witness, not a free
+   `add_variable(0)`). Guards the phase-2 item 2.6 builder work; without the
+   pinning gate this test passes-as-vulnerable.
+10. **Non-canonical field encodings + trailing data (bb `5f09c55a57`,
+    audit findings #2493/#2501/#2513).** A proof/VK field element with value
+    ≥ modulus must be **rejected**, not silently reduced (malleability);
+    trailing proof bytes must be rejected (subsumes §3.4 and directly
+    addresses the Phase 0 finding that co-noir accepts trailing bytes).
+    Off-curve points must yield a clean reject, not the ark-ec panic Phase 0
+    observed.
+
 ## 4. Completeness tests to add
 1. **Input diversity per circuit**: today each vector proves one fixed
    witness. Add multiple valid witnesses per circuit (boundary values: 0, max
@@ -152,3 +185,26 @@ For a representative subset of vectors, assert the verifier **rejects**:
 4. Differential-vs-bb harness (§6.1) — automates parity forever.
 5. Input-diversity/completeness (§4) and MPC-consistency (§5).
 6. Witness-extension differential + opcode edge cases (§6.2, §3.7).
+
+## 9. MANDATORY security regressions (added 2026-07-08 from ch. 03 §6 rationale mining)
+
+Two of the ported bb changes are embargoed soundness fixes. Byte-parity
+alone does NOT prove we inherited the fix — these two tests must exist and
+pass before Phase 2 is called done (they join §8's priority list at rank 2):
+
+1. **SSIPA kernel-forgery regression** (from bb `shplemini.test.cpp`, PR
+   #44): simulate the malicious prover that perturbs A by the
+   one-dimensional kernel (δ at X=1, −δ/(g−1) on the rest of H, matching
+   δ_s) and ignores the prover-side fail-fast; co-noir's verifier MUST
+   reject. Specifically verifies the untransmitted A(1)=0 claim rides the
+   Shplemini/Shplonk batched opening — the local identity check alone
+   accepts the forgery (bb's README says so explicitly).
+2. **ROM/RAM field-wrap regression** (from bb `rom_ram.test.cpp`, PR #29):
+   build a circuit whose first sorted index witness is forced to p−1
+   (start the chain at −1, wrap to 0); proving must fail or the proof must
+   be rejected. Verifies the first sorted index is copy-constrained to a
+   genuinely-fixed zero witness, not a fresh unconstrained variable.
+
+Plus (audit posture, from `5f09c55a57`): non-canonical field encodings
+(≥ modulus) and trailing proof bytes must be REJECTED by co-noir's
+deserialization — merges with Phase 0 
