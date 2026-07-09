@@ -77,13 +77,12 @@ are listed here so nothing rides on memory.
    since the poly is per-prover randomness and never byte-compared; the
    bidirectional ZK bb cross-verify covers it. No code change. Closure note
    recorded in ch. 14 §17.
-6. **VERIFY: Shamir randomness accounting has zero test coverage at the
-   party count that uses it.** [M / H — Shamir completeness]
-   Ch. 14 §17.2: 3-party Shamir takes the `num_pairs = 0` on-the-fly path;
-   `ultrahonk_num_randomness` (`co-ultrahonk/src/co_ultra_prover.rs`,
-   ~line 169+) is only exercised at ≥4 parties. The hand-fixed 24-draw
-   undercount would NOT have been caught by any in-tree test. See test idea
-   §2.1 below.
+6. **✅ RESOLVED (2026-07-08, commit `930efd48`): Shamir randomness
+   accounting now covered at a party count that uses it.** [M / H — Shamir
+   completeness] Permanent 5-party/threshold-2 Shamir test (poseidon,
+   ZK+non-ZK) — the only coverage of `ultrahonk_num_randomness`; 3-party
+   takes the `num_pairs = 0` on-the-fly path and never exercises the
+   accounting. See test idea §2.1.
 7. **VERIFY: examples vector set + the 5 version-pin locations are still at
    beta.20 / old-bb.** [S / M — deliberate 2.7 residue, easy to forget]
    Confirmed in-tree 2026-07-08: `examples/compare.sh`, `compare_mpc.sh`,
@@ -164,11 +163,11 @@ kernel-perturbation case, ROM/RAM field-wrap, non-canonical/trailing)
 remains the mandatory floor —
 these are additions, not replacements.
 
-1. **≥4-party Shamir proving test.** [M / H — completeness]
-   One slow-marked 4-party (or 5-party) Shamir e2e prove+verify for a small
-   circuit. This is the only way to exercise `ultrahonk_num_randomness`
-   (backlog §1.6); today an under-count ships silently and fails at
-   customer runtime. Guards: Shamir randomness accounting.
+1. **✅ DONE (2026-07-08, commit `930efd48`): ≥4-party Shamir proving
+   test.** [M / H — completeness] 5-party/threshold-2 Shamir e2e
+   prove+verify (poseidon, ZK+non-ZK) — exercises
+   `ultrahonk_num_randomness` (backlog §1.6), which no 3-party test can.
+   Guards: Shamir randomness accounting.
 2. **Transcript-consumption property test.** [S / M — verifier]
    For a valid proof of length L: every truncation rejects, every extension
    rejects, exact length verifies. Generalizes the Phase-0 trailing-bytes
@@ -205,14 +204,15 @@ these are additions, not replacements.
    proof is rejected). The recursion verifier is a soundness surface with
    currently zero negative coverage — all ch. 13 §3 negatives run the
    native verifier only.
-7. **Lookup `table_index ≥ 1` + SHA slice-range regression tests.** [S / M —
-   builder soundness, guards the two extra 2.6 findings]
-   (a) assert the first assigned lookup table_index is 1 (the logup "at
-   least beta cubed" guarantee, bb `0a7d0af035`); (b) a witness with an
-   out-of-range (>10-bit) CH-L2 slice must fail to prove/verify (the
-   bb `bbbde54094` soundness rationale). These two were *discovered late*
-   precisely because nothing tested them; don't let a refactor regress
-   them invisibly.
+7. **✅ DONE (2026-07-08, commit `930efd48`): lookup `table_index ≥ 1` +
+   SHA slice-range regression tests.** [S / M — builder soundness, guards
+   the two extra 2.6 findings] `plookup_table_regression_tests` in
+   `ultra_builder.rs`: (a) first assigned lookup table_index is 1 (logup
+   "at least beta cubed" guarantee, bb `0a7d0af035`), incl. second-table
+   and cache-path asserts; (b) SHA-256 CH-L2 basic tables are 10-bit /
+   1024 rows (structural assert; bb `bbbde54094` rationale).
+   Revert-detection re-validated 2026-07-09: flipping either fix back
+   turns the exact test red.
 8a. **Multi-block ROM/RAM vector (added 2026-07-09 from §1.8's sweep).**
    [S / M — builder determinism + coverage]
    No in-tree circuit touches ≥2 distinct memory blocks, so the

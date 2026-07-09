@@ -562,3 +562,13 @@ farm small backlog items to cheaper agents.
   transcript-consumption property test; backlog §2.7 lookup
   `table_index≥1` + SHA CH-L2 10-bit regression tests. Reports pending;
   merge after review.
+- §2.7 agent outcome: **already done** — yesterday-evening commit
+  `930efd48` had landed both §2.7 tests AND the 5-party Shamir test
+  (closing §1.6/§2.1 too); the overnight backlog pass missed marking
+  them. Agent re-validated revert-detection for both (flip fix → red);
+  ch.15 §1.6/§2.1/§2.7 now marked done. Lesson: grep the tree before
+  farming out backlog items — stale backlog entries cost a redundant
+  agent. Worktree gotcha (recorded for future parallel-agent sessions):
+  agent worktrees fork from the STALE branch base (36da0ea8), not the
+  current tip — agents must `git merge --ff-only mc/update-co-noir`
+  before working; §2.2 agent warned mid-flight.
