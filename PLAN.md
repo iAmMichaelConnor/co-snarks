@@ -214,10 +214,11 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       `stdlib/honk_verifier/*`), fix, then add the recursion VK byte-KAT
       as the anti-regression. NO diagnosis yet (the localization agent died
       with the overnight session).
-- [ ] 2.10 Finish VK byte-KATs for the two KAT circuits × both hashers
-      (backlog §2.3/§4.3; in flight at the overnight cutoff — bb VKs
-      generated, not yet committed; plain_test VK-parity assertion not yet
-      written; resume point ch. 14 §21).
+- [x] 2.10 VK byte-KATs — DONE 2026-07-09 (backlog §2.3/§4.3). bb VK bytes
+      (source-built oracle) committed for add3u64+poseidon × both hashers
+      with per-dir PROVENANCE.txt; plain_test asserts VK byte-parity in
+      both zk modes; flipped-byte tripwire validated. Recursion VK KAT
+      deferred to 2.9 (would be red today).
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
 *Out of scope while the target is v5-next (verified: neither commit is in

@@ -964,9 +964,23 @@ the next step (prompt preserved in the 2026-07-08 session transcript;
 suspects: recursion-verifier gate emission in `co-builder/src/
 honk_verifier/*` vs bb `stdlib/honk_verifier/*`).
 
-**In flight at cutoff (NOT finished):** §2.3/§4.3 VK byte-KATs — bb VKs for
-the two KAT circuits × both hashers were generated (session scratchpad
-`vkkat/`) but NOT yet committed under `test_vectors/.../kat/`, and
-`plain_test` was NOT yet extended to assert VK byte-parity. Resume point:
-generate VKs with `~/.bb-target-src/bb write_vk` per hasher, commit with
-provenance note, extend `tests/tests/noir/proof_tests/plain.rs`.
+**In flight at cutoff:** §2.3/§4.3 VK byte-KATs — bb VKs generated but not
+committed. Completed next morning as PLAN 2.10; see §22.
+
+## 22. PLAN 2.10 — VK byte-KATs ✅ (2026-07-09 morning)
+
+Regenerated the four bb VKs fresh (`~/.bb-target-src/bb write_vk --scheme
+ultra_honk --oracle_hash {poseidon2|keccak} [--disable_zk] -b <kat json>`)
+for add3u64 + poseidon; byte-identical to the overnight generation, and
+zk == nozk for all four (so one VK KAT per circuit×hasher covers both
+modes). Committed as `test_vectors/noir/<c>/kat/<c>_vk_with_{pos,kec}`
+(poseidon2 field format 3680 B; keccak U256 format 1888 B) plus a
+`PROVENANCE.txt` per kat/ dir (bb tag, source-built provenance, commands,
+do-not-regenerate-with-co-noir rule). `plain_test`
+(tests/tests/noir/proof_tests/plain.rs) now takes the VK KAT path + the
+matching serializer (`to_buffer` / `to_buffer_keccak`) and asserts
+byte-equality right after `create_keys`, in BOTH zk modes. Gates: 4/4
+plain tests pass; tripwire validated (flipping KAT byte 112 → clean
+assertion failure, restored, green). Recursion VK KAT deliberately NOT
+added — blocked on the 2.9 parity break (it would be red today) and is
+the natural anti-regression to add with the 2.9 fix.

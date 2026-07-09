@@ -1,0 +1,26 @@
+KAT provenance — poseidon
+
+Circuit + witness (poseidon.json / poseidon.gz): compiled with nargo
+v1.0.0-beta.22 from ../src (see ../../compile.sh; pins in /versions.env).
+
+Proof KATs (pos_proof_with_pos / _with_kec): generated 2026-07-08 with
+SOURCE-BUILT barretenberg at tag v5.0.0-nightly.20260708 (the parity
+oracle, built by /scripts/build-bb-oracle.sh; a source-built bb prints a
+placeholder --version — see the PROVENANCE.txt beside the binary).
+Command: bb prove --scheme ultra_honk --oracle_hash {poseidon2|keccak}
+--disable_zk -b poseidon.json -w poseidon.gz
+Non-ZK only: ZK proofs are randomized, so there is no ZK byte-KAT; ZK
+parity is covered by live bidirectional bb cross-verification instead.
+
+VK KATs (pos_vk_with_pos / _with_kec): generated 2026-07-09 with the SAME
+source-built bb.
+Command: bb write_vk --scheme ultra_honk --oracle_hash {poseidon2|keccak}
+[--disable_zk] -b poseidon.json
+VK bytes are identical with and without --disable_zk (verified 2026-07-09),
+so one VK KAT per hasher covers both modes. Formats: poseidon2 = field
+elements (3680 B), keccak = U256 (1888 B).
+
+Do NOT regenerate these files with co-noir output — they are the bb-side
+oracle bytes; regenerating them from co-noir would make the parity tests
+vacuous. Regenerate only with a source-built bb at the pinned tag, and
+update this file when you do.

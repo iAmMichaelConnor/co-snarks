@@ -173,13 +173,18 @@ these are additions, not replacements.
    For a valid proof of length L: every truncation rejects, every extension
    rejects, exact length verifies. Generalizes the Phase-0 trailing-bytes
    finding into a cheap loop; subsumes ch. 13 §3.4 once §1.1 lands.
-3. **Commit VK KATs + per-KAT provenance.** [S / H — anti-drift + parity]
-   There are NO VK byte KATs in-tree (ch. 14 §15); VK parity currently
-   exists only as a live-bb check that 2.7 runs manually. Commit
-   bb-generated VK bytes for each vector (both hashers) plus a
-   `PROVENANCE` file recording the bb version and that it was
-   source-built — this also operationalizes the §17.1 oracle lesson.
-   Guards: entity order, trace layout, all builder gate changes.
+3. **✅ DONE (2026-07-09, PLAN 2.10): VK byte-KATs committed for the two
+   KAT circuits.** [S / H — anti-drift + parity]
+   `test_vectors/noir/{add3u64,poseidon}/kat/` now hold bb-generated
+   `*_vk_with_{pos,kec}` bytes (source-built oracle at
+   v5.0.0-nightly.20260708) plus a `PROVENANCE.txt` per kat/ dir recording
+   commands, bb build provenance, and the do-not-regenerate-with-co-noir
+   rule. `plain_test` asserts `inner_vk` byte-parity (field format for
+   poseidon2, U256 for keccak) in BOTH zk modes (bb VK bytes verified
+   zk-independent). Tripwire validated: a single flipped KAT byte turns
+   the suite red. Guards: entity order, trace layout, all builder gate
+   changes. (Recursion VK KAT deliberately deferred to PLAN 2.9 — it
+   would be red today.)
 4. **✅ DONE (2026-07-09): entity-order lock test.** [S / M —
    verifier+builder consistency] `entity_order_lock` module in
    `co-noir-common/src/polynomials/entities.rs` (3 tests) asserts every
@@ -313,8 +318,8 @@ make drift fail loudly and locally. More of the same:
    future sync becomes: regenerate manifest from the new tag → the test
    diff *is* the reorder work list. (Test-idea §2.4 is the manual v0 of
    this.)
-3. **Commit VK KATs + provenance files** — see §2.3; listed here too
-   because it is the cheapest drift tripwire per byte. [S / H]
+3. **✅ DONE (2026-07-09): VK KATs + provenance files** — see §2.3 for the
+   record; it was the cheapest drift tripwire per byte. [S / H]
 4. **✅ DONE (2026-07-09): checked in `rust-toolchain.toml` (pin
    1.90.0).** [S / M] One file at the repo root; rustup now auto-selects the
    right toolchain. Readme "Building this workspace" note updated (no more

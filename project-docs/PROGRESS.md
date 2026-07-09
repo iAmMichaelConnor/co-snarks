@@ -545,8 +545,20 @@ transcript on 2026-07-09 morning. All work UNCOMMITTED on
 State recovered from the overnight transcript; this PROGRESS entry, ch. 14
 §21, and PLAN 2.7/2.9 written (the overnight session died before logging).
 Tree re-verified: `fast-check.sh` PASS + `--sec` 8/8 PASS (new tests
-included). recvk2 repro artifacts copied into today's scratchpad. Overnight
-work still uncommitted per the commit-only-when-Mike-asks rule. Next up (in
-discussion with Mike): (a) localize + fix the recursion gate-emission
-divergence (ch. 15 §1.9), (b) finish the VK byte-KAT item, (c) commit the
-overnight batch.
+included). recvk2 repro artifacts copied into today's scratchpad.
+
+Mike then directed: commit the overnight batch, do 2.10, start 2.9, and
+farm small backlog items to cheaper agents.
+- Overnight batch committed: `cee1ffb1` (code) + `6c8c2eff` (reconstruction
+  docs).
+- **PLAN 2.10 DONE** (ch. 14 §22): VK byte-KATs for add3u64+poseidon ×
+  both hashers committed with PROVENANCE.txt; `plain_test` asserts VK
+  byte-parity in both zk modes; flipped-byte tripwire validated; 4/4 plain
+  tests green. Recursion VK KAT deferred to 2.9 (would be red today).
+- **PLAN 2.9 started**: read-only localization agent running (default
+  model) on the recursion gate-emission divergence, re-using the preserved
+  overnight prompt + recvk2 artifacts.
+- Parallel cheap-agent work (Sonnet, isolated worktrees): backlog §2.2
+  transcript-consumption property test; backlog §2.7 lookup
+  `table_index≥1` + SHA CH-L2 10-bit regression tests. Reports pending;
+  merge after review.
