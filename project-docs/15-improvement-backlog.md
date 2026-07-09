@@ -168,10 +168,16 @@ these are additions, not replacements.
    prove+verify (poseidon, ZK+non-ZK) — exercises
    `ultrahonk_num_randomness` (backlog §1.6), which no 3-party test can.
    Guards: Shamir randomness accounting.
-2. **Transcript-consumption property test.** [S / M — verifier]
-   For a valid proof of length L: every truncation rejects, every extension
-   rejects, exact length verifies. Generalizes the Phase-0 trailing-bytes
-   finding into a cheap loop; subsumes ch. 13 §3.4 once §1.1 lands.
+2. **✅ DONE (2026-07-09, commit `9224ad0b`): transcript-consumption
+   property test.** [S / M — verifier] For a valid proof of byte-length L:
+   every byte-level truncation `0..L` rejects (non-32-aligned lengths fail
+   deserialization; aligned ones get a full verify), extensions reject
+   (dense 1..=64 trailing bytes + sparse field-multiples), exact length
+   verifies — both proof shapes (non-ZK 410 / ZK 458 fields). Every verify
+   is `catch_unwind`-wrapped so a malformed-input panic surfaces as its
+   own located failure. Sweep finding: zero panics in either shape. ~3 s
+   in --release. Generalizes the Phase-0 trailing-bytes finding; subsumes
+   ch. 13 §3.4.
 3. **✅ DONE (2026-07-09, PLAN 2.10): VK byte-KATs committed for the two
    KAT circuits.** [S / H — anti-drift + parity]
    `test_vectors/noir/{add3u64,poseidon}/kat/` now hold bb-generated

@@ -562,6 +562,11 @@ farm small backlog items to cheaper agents.
   transcript-consumption property test; backlog §2.7 lookup
   `table_index≥1` + SHA CH-L2 10-bit regression tests. Reports pending;
   merge after review.
+- §2.2 agent outcome: **DONE, merged** (`9224ad0b`, ff onto main).
+  Byte-level transcript-consumption sweep replacing the field-level
+  property test, ZK shape added, all verifies panic-guarded via
+  catch_unwind. Sweep found zero malformed-input panics in either shape.
+  Post-merge `fast-check.sh --sec`: 9/9 PASS. Worktree removed.
 - §2.7 agent outcome: **already done** — yesterday-evening commit
   `930efd48` had landed both §2.7 tests AND the 5-party Shamir test
   (closing §1.6/§2.1 too); the overnight backlog pass missed marking
