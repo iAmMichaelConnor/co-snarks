@@ -507,3 +507,46 @@ source-built oracle; verifier hardening + §3a regressions in place; docs calm
 and self-contained. Non-blocking follow-up: the deferred SSIPA A(1)=0
 boundary-claim consistency test. Backup tag `backup/phase2-code-complete-6c528309`
 still valid; nothing pushed.
+
+## Session 4 — 2026-07-08 23:48 → 09 ~00:32 — overnight backlog run (ended at usage limit; entry reconstructed next morning)
+
+Autonomous run through `15-improvement-backlog.md` (Mike's standing ask).
+Ended MID-ITEM at the usage limit; this entry was reconstructed from the
+transcript on 2026-07-09 morning. All work UNCOMMITTED on
+`mc/update-co-noir`; verified green next morning (`fast-check.sh` PASS,
+`--sec` 8/8 PASS). Full command-level record: ch. 14 §21.
+
+- **Backlog closed (code):** §1.4 VK `log_circuit_size` range-check +
+  panic-proof header reads + Gemini fold underflow guard (+ new
+  security-regression tests); §2.4 entity-order lock tests; §3.1
+  compile-time invariant block extended; §4.4 `rust-toolchain.toml`;
+  §4.5 `versions.env` pin single-sourcing; §4.6 `scripts/build-bb-oracle.sh`
+  (smoke-tested byte-identical vs `~/.bb-target-src/bb`); §4.7 parity-script
+  hardening.
+- **Backlog closed (analysis):** §1.5 gemini-masking commit byte-neutral;
+  §1.8 builder-determinism sweep clean; §1.10 (0,0)-sentinel
+  collision-freeness proven for BN254 G1 + Grumpkin.
+- **🔴 §1.9 headline finding — recursion VK/proof PARITY BREAK confirmed**
+  (twice, independently, fresh ACIR both sides): co-noir and bb build
+  different circuits for `recursion`/`recursion_zk` — VK differs at byte
+  112, ~21/28 precomputed commitments differ (incl. LAGRANGE_LAST ⇒ real
+  gate-count delta), cross-verify FAILS both ways; each side self-verifies;
+  all 31 non-recursion circuits stay byte-identical. **Corrects session 3:**
+  the earlier "recursion bb-cross-verifies" was a same-key check (co-noir
+  proof + co-noir VK), which tests internal consistency only. Localization
+  agent died with the session (~2 min in) — NO diagnosis yet. PLAN item
+  2.9 opened.
+- **In flight at cutoff:** §2.3/§4.3 VK byte-KATs — bb VKs generated
+  (scratchpad `vkkat/`) but not committed as KAT vectors; `plain_test` VK
+  byte-parity assertion not yet written. Resume point in ch. 14 §21.
+
+## Session 5 — 2026-07-09 morning — recovery/reconstruction
+
+State recovered from the overnight transcript; this PROGRESS entry, ch. 14
+§21, and PLAN 2.7/2.9 written (the overnight session died before logging).
+Tree re-verified: `fast-check.sh` PASS + `--sec` 8/8 PASS (new tests
+included). recvk2 repro artifacts copied into today's scratchpad. Overnight
+work still uncommitted per the commit-only-when-Mike-asks rule. Next up (in
+discussion with Mike): (a) localize + fix the recursion gate-emission
+divergence (ch. 15 §1.9), (b) finish the VK byte-KAT item, (c) commit the
+overnight batch.

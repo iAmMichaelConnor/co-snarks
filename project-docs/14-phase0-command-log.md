@@ -785,6 +785,19 @@ session (this one) then:
    410 (13120 B) — the ch. 04 §5 invariants hold at the target.
 6. Committed as `571c1305` (36 files, +628/−1095).
 
+**§17 closure (2026-07-09, backlog ch. 15 §1.5) — gemini masking dyadic
+sizing (`1f9d87ba3a`) confirmed byte-neutral.** The bb fix only enlarges the
+masking poly's `virtual_size` from `max_end_index()` to `dyadic_size()`; the
+random-coefficient *count* is unchanged and the new tail is virtual **zero**,
+so the commitment (MSM over the backed range), transcript entry, and MLE
+evaluation are bit-identical — it removes a debug-only one-past-end assert,
+not a value. co-noir sizes its masking poly to the full dyadic `w_l().len()`
+with all-random coefficients (plain `oink_prover.rs:95`, MPC
+`co_oink_prover.rs:566`); it doesn't mirror bb's zero-tail split, but the
+masking poly is per-prover ZK randomness (never byte-compared), co-noir is
+internally commit↔eval consistent, and the bidirectional ZK cross-verify
+(item 5 above) covers compatibility. No co-noir change required.
+
 Remaining for Phase 2 after step ④: PLAN 2.6 builder/DSL residue (ROM/RAM
 sorted-index pinning `1f7ed2ea79` — soundness fix; EC gate-count parity
 check EC_ADD 80→76 / MSM 3559→3557; recursion size-assert), then 2.7
@@ -900,3 +913,60 @@ port is correct):
 Prevention pointers added: ch. 12 §3 (two new gotchas: stale recursion
 vectors + gitignored artifacts) and ch. 12 §4a (regen procedure, WHEN-only).
 Committed: recgen fix `61100009`, merged to mc/update-co-noir `4b4a8f51`.
+
+## 21. Overnight backlog run (2026-07-08 23:48 → 2026-07-09 ~00:32, ended at
+## usage limit) — ch. 15 items closed + recursion VK parity break found
+
+Autonomous session working through `15-improvement-backlog.md`. Ended
+mid-item at the usage limit; all work left UNCOMMITTED on
+`mc/update-co-noir` (verified green next morning: `./fast-check.sh` PASS,
+`./fast-check.sh --sec` 8/8 PASS incl. the new tests).
+
+**Closed (code landed, uncommitted):** §1.4 `log_circuit_size` VK
+range-check (both deserializers + panic-proof `to_u64_digits` header reads +
+`saturating_sub` guard in the Gemini fold loop, mirrors bb `1391c49546`;
+tests `zero_log_circuit_size_vk_rejected` etc. in
+`security_regression.rs`); §2.4 entity-order lock tests (bb `EntityId`
+0–40 transcribed independently into `entities.rs` unit tests, 3 pass);
+§3.1 compile-time invariant block extended (NUM_ALL_ENTITIES=41,
+TRACE_OFFSET=4, CONST_PROOF_SIZE_LOG_N=25, libra/SSIPA counts); §4.4
+`rust-toolchain.toml` (1.90.0); §4.5 `versions.env` single-sourcing the
+nargo/bb pins for all four scripts + Readme; §4.6 `scripts/
+build-bb-oracle.sh` (git archive → cmake -DAVM=OFF → PROVENANCE.txt →
+optional `CHECK_AGAINST` write_vk byte-compare; smoke-tested: fresh source
+build's VK byte-identical to `~/.bb-target-src/bb`); §4.7 parity-script
+hardening (`set -euo pipefail`, no bare `>/dev/null` on oracle calls).
+
+**Closed (analysis, no code needed):** §1.5 bb gemini-masking dyadic-size
+commit `1f9d87ba3a` confirmed byte-neutral (§17 closure above); §1.8
+builder-determinism sweep (the flagged HashMap site was already BTreeMap
+since upstream `dee0972b3`; clippy `iter_over_hash_type` guard in place);
+§1.10 `(0,0)` infinity sentinel proven collision-free on BN254 G1 and
+Grumpkin by residue computation.
+
+**🔴 §1.9 — CONFIRMED recursion VK/proof parity break** (the headline; full
+record in ch. 15 §1.9). Running the byte-level VK oracle that §1.9 called
+for revealed: for `recursion`/`recursion_zk` (same freshly-compiled ACIR fed
+to both sides), co-noir and bb emit **different circuits** — VK differs from
+byte 112 (first SIGMA commitment; header matches; ~21/28 precomputed
+commitments differ incl. LAGRANGE_LAST ⇒ real gate count differs), proofs
+differ from byte 272, and cross-verification **fails both ways** while each
+side self-verifies. All 31 non-recursion circuits remain byte-identical
+(control: `poseidon` VK byte-identical → methodology sound). The earlier
+"recursion bb-cross-verify PASS" (§20) was a same-key check (co-noir proof +
+co-noir VK under bb's verifier) — internal consistency, not parity.
+Repro: `nargo compile` recursion; `bb write_vk --scheme ultra_honk
+--oracle_hash poseidon2 -b recursion.json` (oracle `~/.bb-target-src/bb`) vs
+`co-noir create-vk`; `cmp` the two VKs. Artifacts preserved (session
+scratchpad `recvk2/`). A read-only localization agent was spawned but died
+with the session ~2 min later — **no diagnosis exists yet**; localization is
+the next step (prompt preserved in the 2026-07-08 session transcript;
+suspects: recursion-verifier gate emission in `co-builder/src/
+honk_verifier/*` vs bb `stdlib/honk_verifier/*`).
+
+**In flight at cutoff (NOT finished):** §2.3/§4.3 VK byte-KATs — bb VKs for
+the two KAT circuits × both hashers were generated (session scratchpad
+`vkkat/`) but NOT yet committed under `test_vectors/.../kat/`, and
+`plain_test` was NOT yet extended to assert VK byte-parity. Resume point:
+generate VKs with `~/.bb-target-src/bb write_vk` per hasher, commit with
+provenance note, extend `tests/tests/noir/proof_tests/plain.rs`.

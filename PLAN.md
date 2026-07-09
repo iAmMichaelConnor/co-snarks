@@ -190,7 +190,9 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 - [x] 2.7 Green-up — DONE 2026-07-08 (session 3). Full sweep vs source-built
       oracle ~/.bb-target-src/bb: **all 31 non-recursion circuits PASS** plain
       + REP3 + cargo (603/603); recursion/recursion_zk fixed (stale vectors +
-      K count, ch.14 §20) and now self-verify + bb-cross-verify; ≥4-party
+      K count, ch.14 §20) and now self-verify (⚠ but see 2.9: the "bb
+      cross-verify" here was same-key only — true cross-key parity is
+      BROKEN for recursion); ≥4-party
       Shamir PASS (validates randomness accounting); ZK bidirectional
       cross-verify PASS; VK byte-identical; 410/458/115 invariants (now
       compile-time asserts). ch.13 §3a security regressions: #9 ROM/RAM +
@@ -199,6 +201,23 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       SSIPA A(1)=0 boundary-claim consistency test (§3a#8, deferred); non-canonical (≥modulus)
       encoding rejection (§3a#10 residue, ch.15 §1.3).
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
+- [ ] 2.9 **🔴 Recursion VK/proof parity break (found 2026-07-09, overnight
+      backlog run — ch. 15 §1.9, ch. 14 §21).** co-noir and bb build
+      different circuits from the same recursion ACIR: VK differs at byte
+      112 (~21/28 precomputed commitments incl. LAGRANGE_LAST ⇒ real
+      gate-count delta), proofs differ, cross-key verification fails BOTH
+      ways; each side self-verifies; all 31 non-recursion circuits remain
+      byte-identical. Masked until now because prior recursion
+      "cross-verify" used the same key on both sides. Needs: localize the
+      gate-emission divergence in co-builder's in-circuit recursion
+      verifier (`co-builder/src/honk_verifier/*` vs bb
+      `stdlib/honk_verifier/*`), fix, then add the recursion VK byte-KAT
+      as the anti-regression. NO diagnosis yet (the localization agent died
+      with the overnight session).
+- [ ] 2.10 Finish VK byte-KATs for the two KAT circuits × both hashers
+      (backlog §2.3/§4.3; in flight at the overnight cutoff — bb VKs
+      generated, not yet committed; plain_test VK-parity assertion not yet
+      written; resume point ch. 14 §21).
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
 *Out of scope while the target is v5-next (verified: neither commit is in
@@ -208,6 +227,9 @@ ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
 `rom_logup_gamma` challenge in oink, builder ROM gate changes.
 
 ### Phase 4 — maintenance machinery (anti-drift)
+**⚠ HOLD (Mike, 2026-07-08): discuss with Mike BEFORE making any changes to
+barretenberg or aztec-packages CI (items 4.1/4.2). Anti-drift work inside the
+local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
 - [ ] 4.1 CI job (aztec-packages-private) running co-noir KATs against bb
       nightly → UH-breaking changes detected on merge.
 - [ ] 4.2 Identify the ~6 proof-format-defining bb dirs; add co-snark-impact
