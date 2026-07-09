@@ -156,60 +156,162 @@ fn offcurve_vk_commitment_rejected() {
     );
 }
 
-/// Transcript-consumption property: for a valid proof of length L, EVERY
-/// truncation must be rejected, extensions of various sizes must be rejected
-/// (generalizes `trailing_proof_data_rejected`), and only the exact length
-/// verifies. Pins the verifier's read-exactly-L transcript discipline as a
-/// property, not a single case.
-#[test]
-fn proof_length_property_exact_length_only() {
-    let (proof, public_inputs, vk) = build_artifacts();
-    let inner = proof.inner();
-    let n = inner.len();
+/// Downcast a `catch_unwind` payload to a printable message. Panic payloads
+/// are `Box<dyn Any + Send>`; in practice `panic!`/`assert!`/`unwrap` all
+/// produce either `&'static str` or `String`.
+fn describe_panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
 
-    // Exact length verifies (property baseline).
-    let ok = UltraHonk::<_, Poseidon2Sponge>::verify(
-        HonkProof::new(inner.clone()),
+/// `UltraHonk::verify`, but a panic on malformed input is caught and returned
+/// as `Err(message)` instead of aborting the whole sweep with an opaque
+/// unwind. A malformed-input panic is itself a robustness finding (see the
+/// module doc), so callers must not treat `Err` here the same as a clean
+/// rejection: propagate it loudly.
+///
+/// `Ok(accepted)` collapses `Ok(true)` to `true` and both `Ok(false)` and
+/// `Err(_)` to `false` — for the transcript-consumption property below, a
+/// clean verifier error and a clean `false` are equally valid rejections.
+fn verify_catching_panics(
+    proof: HonkProof<ark_bn254::Fr>,
+    public_inputs: &[ark_bn254::Fr],
+    vk: &VerifyingKey<Bn254>,
+    has_zk: ZeroKnowledge,
+) -> Result<bool, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, public_inputs, vk, has_zk)
+    })) {
+        Ok(res) => Ok(matches!(res, Ok(true))),
+        Err(payload) => Err(describe_panic_payload(&payload)),
+    }
+}
+
+/// Transcript-consumption property, shared between the non-ZK (410-field) and
+/// ZK (458-field) proof shapes: for a valid proof of byte-length L, (a) EVERY
+/// truncation is rejected (cleanly, never panicking), (b) extensions carrying
+/// trailing bytes are rejected, and (c) the exact-length proof verifies.
+/// Generalizes `trailing_proof_data_rejected` into a loop over lengths, and
+/// pins the verifier's read-exactly-L transcript discipline as a property
+/// rather than a single case.
+///
+/// This operates at the BYTE level (`HonkProof::to_buffer` / `from_buffer`),
+/// not just the in-memory `Vec<Fr>`, because that is the boundary a real
+/// caller actually feeds (a proof file / wire buffer can be truncated or
+/// extended at any byte, not just at a 32-byte field-element boundary).
+///
+/// Cost note: truncation is swept EXHAUSTIVELY over every byte length
+/// `0..=total_bytes`, rather than the coarser "byte-exact for the last two
+/// field elements, field-boundary-only elsewhere" sampling that would be
+/// needed if this were expensive: a non-32-aligned length fails to
+/// deserialize before ever reaching `verify` (a cheap length
+/// check, no proving-system work), and only the `total_bytes / 32` aligned
+/// lengths pay a `verify` call — the same number of `verify` calls as the
+/// field-level sweep this replaces, plus ~31x that many near-free length
+/// checks. Measured: full sweep (both shapes, truncation + extension) runs in
+/// low single-digit seconds in `--release`. Extension is NOT exhaustive: the
+/// "extra bytes present" check fires only after a complete, successful
+/// verify, so every extension probe pays the full verify cost; we probe
+/// densely at the smallest scale (every extra byte count from 1 up to two
+/// field elements' worth, covering both sub-field-element and
+/// cross-field-element trailing garbage) and sparsely at field-multiple scale
+/// beyond that.
+fn assert_transcript_consumption_property(has_zk: ZeroKnowledge) {
+    let (proof, public_inputs, vk) = build_artifacts_with(has_zk);
+    let buf = proof.to_buffer();
+    let total_bytes = buf.len();
+    let n = total_bytes / 32;
+    assert_eq!(
+        n * 32,
+        total_bytes,
+        "proof byte length must be a whole number of field elements"
+    );
+
+    // (c) Exact length verifies (property baseline). A panic here is fatal to
+    // the whole test, since the tampering checks below are meaningless if the
+    // baseline is broken.
+    let ok = verify_catching_panics(
+        HonkProof::<ark_bn254::Fr>::from_buffer(&buf).expect("untampered proof must deserialize"),
         &public_inputs,
         &vk,
-        ZeroKnowledge::No,
+        has_zk,
     )
-    .unwrap();
-    assert!(ok, "exact-length proof must verify");
+    .unwrap_or_else(|panic_msg| {
+        panic!("verify PANICKED on the untampered exact-length proof ({has_zk:?}): {panic_msg}")
+    });
+    assert!(ok, "exact-length proof must verify ({has_zk:?})");
 
-    // Every truncation rejects. Truncations fail at the transcript-read
-    // boundary (cheap parse error), so sweeping all L-1 lengths is affordable.
-    for len in 0..n {
-        let mut t = inner.clone();
-        t.truncate(len);
-        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
-            HonkProof::new(t),
-            &public_inputs,
-            &vk,
-            ZeroKnowledge::No,
-        );
-        assert!(
-            !matches!(res, Ok(true)),
-            "verifier accepted a proof truncated to {len}/{n} fields: {res:?}"
-        );
+    // (a) Every truncation, swept byte-by-byte, is rejected or fails to
+    // deserialize — and never panics.
+    let mut panicking_truncations = Vec::new();
+    for len in 0..total_bytes {
+        match HonkProof::<ark_bn254::Fr>::from_buffer(&buf[..len]) {
+            // Non-field-aligned length: clean deserialization failure. Rejected.
+            Err(_) => continue,
+            Ok(parsed) => match verify_catching_panics(parsed, &public_inputs, &vk, has_zk) {
+                Ok(accepted) => assert!(
+                    !accepted,
+                    "verifier ACCEPTED a proof truncated to {len}/{total_bytes} bytes ({has_zk:?})"
+                ),
+                Err(panic_msg) => panicking_truncations.push((len, panic_msg)),
+            },
+        }
     }
+    assert!(
+        panicking_truncations.is_empty(),
+        "verify PANICKED on {} truncated byte length(s) ({has_zk:?}) — a malformed-input \
+         panic is a robustness regression in its own right, distinct from (and worse than) \
+         a clean rejection: {panicking_truncations:?}",
+        panicking_truncations.len()
+    );
 
-    // Extensions reject. Each extension costs a full verify (the trailing
-    // check fires after the final read), so probe a spread instead of all.
-    for extra in [1usize, 2, 7, 48, n] {
-        let mut t = inner.clone();
-        t.extend(std::iter::repeat_n(ark_bn254::Fr::zero(), extra));
-        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
-            HonkProof::new(t),
-            &public_inputs,
-            &vk,
-            ZeroKnowledge::No,
-        );
-        assert!(
-            !matches!(res, Ok(true)),
-            "verifier accepted a proof extended by {extra} fields: {res:?}"
-        );
+    // (b) Extensions carrying trailing bytes are rejected: dense over the
+    // smallest scale, sparse over field-multiple scale.
+    let dense_extra_bytes = 1..=64usize;
+    let sparse_extra_fields = [2usize, 7, 48, n];
+    let extra_lens = dense_extra_bytes.chain(sparse_extra_fields.iter().map(|f| f * 32));
+    let mut panicking_extensions = Vec::new();
+    for extra in extra_lens {
+        let mut extended = buf.clone();
+        extended.extend(std::iter::repeat_n(0u8, extra));
+        match HonkProof::<ark_bn254::Fr>::from_buffer(&extended) {
+            // Non-field-aligned extension: clean deserialization failure. Rejected.
+            Err(_) => continue,
+            Ok(parsed) => match verify_catching_panics(parsed, &public_inputs, &vk, has_zk) {
+                Ok(accepted) => assert!(
+                    !accepted,
+                    "verifier ACCEPTED a proof extended by {extra} trailing byte(s) ({has_zk:?})"
+                ),
+                Err(panic_msg) => panicking_extensions.push((extra, panic_msg)),
+            },
+        }
     }
+    assert!(
+        panicking_extensions.is_empty(),
+        "verify PANICKED on {} extended byte length(s) ({has_zk:?}): {panicking_extensions:?}",
+        panicking_extensions.len()
+    );
+}
+
+/// Transcript-consumption property on the non-ZK (410-field) proof shape. See
+/// `assert_transcript_consumption_property` for the full property and cost
+/// notes.
+#[test]
+fn proof_length_property_exact_length_only() {
+    assert_transcript_consumption_property(ZeroKnowledge::No);
+}
+
+/// Transcript-consumption property on the ZK (458-field) proof shape — same
+/// property, applied to the SmallSubgroupIPA/Libra-carrying ZK proof body so
+/// the sweep isn't blind to that region's transcript discipline.
+#[test]
+fn proof_length_property_exact_length_only_zk() {
+    assert_transcript_consumption_property(ZeroKnowledge::Yes);
 }
 
 /// Zero / out-of-range `log_circuit_size` in a VK must be rejected cleanly by
