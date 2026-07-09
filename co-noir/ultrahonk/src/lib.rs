@@ -23,6 +23,17 @@ pub const NUM_SMALL_IPA_EVALUATIONS: usize = 4;
 // boundary opening A(1) = 0 (claim order: G(r), A(g*r), A(r), A(1), Q(r)).
 pub const NUM_SMALL_IPA_OPENING_CLAIMS: usize = NUM_SMALL_IPA_EVALUATIONS + 1;
 
+// bb v5-next: 29 subrelations → 28 alphas. Also tie this crate's copies of the format-defining
+// constants to the co-noir-common versions so the duplicates cannot drift apart.
+const _: () = assert!(NUM_ALPHAS == 28);
+const _: () = assert!(CONST_PROOF_SIZE_LOG_N == co_noir_common::constants::CONST_PROOF_SIZE_LOG_N);
+const _: () = assert!(NUM_LIBRA_COMMITMENTS == co_noir_common::constants::NUM_LIBRA_COMMITMENTS);
+const _: () =
+    assert!(NUM_SMALL_IPA_EVALUATIONS == co_noir_common::constants::NUM_SMALL_IPA_EVALUATIONS);
+const _: () = assert!(
+    NUM_SMALL_IPA_OPENING_CLAIMS == co_noir_common::constants::NUM_SMALL_IPA_OPENING_CLAIMS
+);
+
 pub struct Utils {}
 
 impl Utils {

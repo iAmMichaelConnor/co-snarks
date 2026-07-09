@@ -62,7 +62,10 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         virtual_log_n: u32,
         transcript: &mut Transcript<TranscriptFieldType, H>,
     ) -> HonkVerifyResult<Vec<P::Affine>> {
-        let fold_commitments: Vec<_> = (0..virtual_log_n - 1)
+        // saturating_sub: virtual_log_n is >= 1 in practice (the VK loader rejects
+        // log_circuit_size = 0), but guard the subtraction so a stray 0 yields an empty range
+        // rather than an unsigned underflow to u32::MAX.
+        let fold_commitments: Vec<_> = (0..virtual_log_n.saturating_sub(1))
             .map(|i| transcript.receive_point_from_prover::<P>(format!("Gemini:FOLD_{}", i + 1)))
             .collect::<Result<_, _>>()?;
         Ok(fold_commitments)

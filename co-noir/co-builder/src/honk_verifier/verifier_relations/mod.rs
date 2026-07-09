@@ -64,6 +64,10 @@ pub(crate) const NUM_SUBRELATIONS: usize = UltraPermutationRelation::NUM_RELATIO
     + Poseidon2ExternalRelation::NUM_RELATIONS
     + Poseidon2InternalRelation::NUM_RELATIONS;
 
+// bb v5-next Ultra flavor: 29 subrelations. A change in any relation's subrelation count re-slices
+// every subsequent relation's alpha powers; fail at compile time rather than mis-batching silently.
+const _: () = assert!(NUM_SUBRELATIONS == 29);
+
 pub(crate) trait VerifyAccGetter<C: HonkCurve<TranscriptFieldType>> {
     fn get_accumulators(&self) -> Vec<FieldCT<C::ScalarField>>;
     fn scale_by_challenge_and_accumulate<T: NoirWitnessExtensionProtocol<C::ScalarField>>(

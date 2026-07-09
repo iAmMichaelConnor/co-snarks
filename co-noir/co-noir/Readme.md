@@ -1,6 +1,6 @@
 # UltraHonk
 
-This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0-nightly.20260708. To get Barretenberg with this version, use the following commands:
+This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0-nightly.20260708 — the pins quoted throughout this Readme are single-sourced in `versions.env` at the repo root (the example scripts source it; when bumping the pin, edit `versions.env` and update the mentions here). To get Barretenberg with this version, use the following commands:
 
 ```bash
 git clone https://github.com/AztecProtocol/aztec-packages.git
@@ -26,7 +26,7 @@ curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.
 
 ## Building this workspace
 
-- Requires **Rust ≥ 1.90** (the workspace `Cargo.toml` sets `rust-version = "1.90"`, but there is no `rust-toolchain.toml`, so an older default toolchain fails with per-crate version errors). Fix: `rustup install 1.90 && rustup override set 1.90` inside the repo.
+- Requires **Rust ≥ 1.90** — pinned by `rust-toolchain.toml` at the repo root, so rustup selects (and if needed installs) the right toolchain automatically.
 - The scripts in `examples/` (`run_full_poseidon.sh`, `compare.sh`, `compare_mpc.sh`, …) must be run **from the `examples/` directory** — all their relative paths (`test_vectors/`, `configs/`, `../../co-noir-common/…`) assume it.
 - Warning: `compare.sh`/`compare_mpc.sh` run `cleanup.sh` after every test case, which deletes proof/witness artifacts in `examples/` and `test_vectors/` — don't keep hand-made artifacts there while they run.
 

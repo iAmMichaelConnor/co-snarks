@@ -817,3 +817,84 @@ impl<T: Default> ShiftedWitnessEntities<T> {
         &mut self.elements[Self::Z_PERM]
     }
 }
+
+#[cfg(test)]
+mod entity_order_lock {
+    //! Locks co-noir's entity column order against bb's `EntityId` enum,
+    //! transcribed by hand from
+    //! `barretenberg/cpp/src/barretenberg/flavor/generated/ultra_flavor_generated.hpp`
+    //! (the generated Ultra flavor, whose source of truth is
+    //! `scripts/flavor-codegen/src/flavors/ultra.ts`). This order defines the
+    //! serialization order of the VK's precomputed commitments and of the
+    //! claimed sumcheck evaluations in the proof; an accidental struct/const
+    //! reorder here silently breaks byte-parity with bb. The test fails
+    //! locally without bb installed — today only a live bb cross-check would
+    //! notice such a reorder.
+    use super::*;
+
+    // bb EntityId global layout is [precomputed(0..28) | witness(28..36) | shifted(36..41)].
+    // Each co-noir struct indexes from 0 within its own array, so the witness/shifted
+    // expectations below are bb's global index minus the struct's base offset.
+    type P<T> = PrecomputedEntities<T>;
+    type W<T> = WitnessEntities<T>;
+    type S<T> = ShiftedWitnessEntities<T>;
+
+    #[test]
+    fn precomputed_entity_order_matches_bb() {
+        // bb EntityId 0..=27
+        assert_eq!(P::<()>::SIGMA_1, 0);
+        assert_eq!(P::<()>::SIGMA_2, 1);
+        assert_eq!(P::<()>::SIGMA_3, 2);
+        assert_eq!(P::<()>::SIGMA_4, 3);
+        assert_eq!(P::<()>::ID_1, 4);
+        assert_eq!(P::<()>::ID_2, 5);
+        assert_eq!(P::<()>::ID_3, 6);
+        assert_eq!(P::<()>::ID_4, 7);
+        assert_eq!(P::<()>::LAGRANGE_FIRST, 8);
+        assert_eq!(P::<()>::LAGRANGE_LAST, 9);
+        assert_eq!(P::<()>::Q_LOOKUP, 10);
+        assert_eq!(P::<()>::TABLE_1, 11);
+        assert_eq!(P::<()>::TABLE_2, 12);
+        assert_eq!(P::<()>::TABLE_3, 13);
+        assert_eq!(P::<()>::TABLE_4, 14);
+        assert_eq!(P::<()>::Q_M, 15);
+        assert_eq!(P::<()>::Q_R, 16);
+        assert_eq!(P::<()>::Q_O, 17);
+        assert_eq!(P::<()>::Q_C, 18);
+        assert_eq!(P::<()>::Q_L, 19);
+        assert_eq!(P::<()>::Q_4, 20);
+        assert_eq!(P::<()>::Q_ARITH, 21);
+        assert_eq!(P::<()>::Q_DELTA_RANGE, 22);
+        assert_eq!(P::<()>::Q_ELLIPTIC, 23);
+        assert_eq!(P::<()>::Q_MEMORY, 24);
+        assert_eq!(P::<()>::Q_NNF, 25);
+        assert_eq!(P::<()>::Q_POSEIDON2_EXTERNAL, 26);
+        assert_eq!(P::<()>::Q_POSEIDON2_INTERNAL, 27);
+        assert_eq!(PRECOMPUTED_ENTITIES_SIZE, 28);
+    }
+
+    #[test]
+    fn witness_entity_order_matches_bb() {
+        // bb EntityId 28..=35, struct-local 0..=7
+        assert_eq!(W::<()>::W_L, 0);
+        assert_eq!(W::<()>::W_R, 1);
+        assert_eq!(W::<()>::W_O, 2);
+        assert_eq!(W::<()>::W_4, 3);
+        assert_eq!(W::<()>::Z_PERM, 4);
+        assert_eq!(W::<()>::LOOKUP_INVERSES, 5);
+        assert_eq!(W::<()>::LOOKUP_READ_COUNTS, 6);
+        assert_eq!(W::<()>::LOOKUP_READ_TAGS, 7);
+        assert_eq!(WITNESS_ENTITIES_SIZE, 8);
+    }
+
+    #[test]
+    fn shifted_entity_order_matches_bb() {
+        // bb EntityId 36..=40, struct-local 0..=4 (the shifts of w_l, w_r, w_o, w_4, z_perm)
+        assert_eq!(S::<()>::W_L, 0);
+        assert_eq!(S::<()>::W_R, 1);
+        assert_eq!(S::<()>::W_O, 2);
+        assert_eq!(S::<()>::W_4, 3);
+        assert_eq!(S::<()>::Z_PERM, 4);
+        assert_eq!(SHIFTED_WITNESS_ENTITIES_SIZE, 5);
+    }
+}

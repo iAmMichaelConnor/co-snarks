@@ -86,6 +86,14 @@ pub const OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS: usize = WITNESS_ENTITIES_SIZE * 
 const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS + PUBLIC_INPUTS_SIZE == 410);
 const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK + PUBLIC_INPUTS_SIZE == 458);
 const _: () = assert!(ULTRA_VERIFICATION_KEY_LENGTH == 115);
+// Further format-defining constants pinned at their bb v5-next values: each of these moved (or was
+// explicitly reviewed) in the 20260324→20260708 sync. Any component change must fail loudly here.
+const _: () = assert!(NUM_ALL_ENTITIES == 41);
+const _: () = assert!(TRACE_OFFSET == 4);
+const _: () = assert!(CONST_PROOF_SIZE_LOG_N == 25);
+const _: () = assert!(NUM_LIBRA_COMMITMENTS == 3);
+const _: () = assert!(NUM_SMALL_IPA_EVALUATIONS == 4);
+const _: () = assert!(NUM_SMALL_IPA_OPENING_CLAIMS == 5);
 
 pub const MOCK_PROOF_DYADIC_SIZE: usize = 1 << 6;
 

@@ -16,6 +16,7 @@ use co_builder::prelude::UltraCircuitBuilder;
 use co_noir::UltraHonk;
 use co_noir_common::crs::parse::CrsParser;
 use co_noir_common::crs::ProverCrs;
+use co_noir_common::honk_proof::HonkProofError;
 use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
 use co_noir_common::transcript::Poseidon2Sponge;
 use co_noir_common::types::Bn254G1;
@@ -152,6 +153,95 @@ fn offcurve_vk_commitment_rejected() {
     assert!(
         res.is_err(),
         "VK parser accepted an off-curve commitment instead of erroring"
+    );
+}
+
+/// Transcript-consumption property: for a valid proof of length L, EVERY
+/// truncation must be rejected, extensions of various sizes must be rejected
+/// (generalizes `trailing_proof_data_rejected`), and only the exact length
+/// verifies. Pins the verifier's read-exactly-L transcript discipline as a
+/// property, not a single case.
+#[test]
+fn proof_length_property_exact_length_only() {
+    let (proof, public_inputs, vk) = build_artifacts();
+    let inner = proof.inner();
+    let n = inner.len();
+
+    // Exact length verifies (property baseline).
+    let ok = UltraHonk::<_, Poseidon2Sponge>::verify(
+        HonkProof::new(inner.clone()),
+        &public_inputs,
+        &vk,
+        ZeroKnowledge::No,
+    )
+    .unwrap();
+    assert!(ok, "exact-length proof must verify");
+
+    // Every truncation rejects. Truncations fail at the transcript-read
+    // boundary (cheap parse error), so sweeping all L-1 lengths is affordable.
+    for len in 0..n {
+        let mut t = inner.clone();
+        t.truncate(len);
+        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
+            HonkProof::new(t),
+            &public_inputs,
+            &vk,
+            ZeroKnowledge::No,
+        );
+        assert!(
+            !matches!(res, Ok(true)),
+            "verifier accepted a proof truncated to {len}/{n} fields: {res:?}"
+        );
+    }
+
+    // Extensions reject. Each extension costs a full verify (the trailing
+    // check fires after the final read), so probe a spread instead of all.
+    for extra in [1usize, 2, 7, 48, n] {
+        let mut t = inner.clone();
+        t.extend(std::iter::repeat_n(ark_bn254::Fr::zero(), extra));
+        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
+            HonkProof::new(t),
+            &public_inputs,
+            &vk,
+            ZeroKnowledge::No,
+        );
+        assert!(
+            !matches!(res, Ok(true)),
+            "verifier accepted a proof extended by {extra} fields: {res:?}"
+        );
+    }
+}
+
+/// Zero / out-of-range `log_circuit_size` in a VK must be rejected cleanly by
+/// both loaders. A `log_circuit_size = 0` VK drives the verifier's round count
+/// to 0; before this hardening the field-encoded (`from_buffer`) path PANICKED
+/// (`to_u64_digits()[0]` on zero indexes an empty vec) and the keccak path
+/// silently accepted it. Mirrors bb `1391c49546`.
+#[test]
+fn zero_log_circuit_size_vk_rejected() {
+    let (_proof, _public_inputs, vk) = build_artifacts();
+
+    // Field-encoded layout: log_circuit_size is the first header field element.
+    // Zeroing its 32-byte big-endian slot sets log_circuit_size = 0.
+    let mut buf = vk.inner_vk.to_buffer();
+    for b in buf.iter_mut().take(32) {
+        *b = 0;
+    }
+    let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+    assert!(
+        matches!(res, Err(HonkProofError::CorruptedKey)),
+        "from_buffer accepted (or panicked on) a log_circuit_size=0 VK: {res:?}"
+    );
+
+    // Keccak (U256) layout: same first-32-bytes header slot.
+    let mut buf_k = vk.inner_vk.to_buffer_keccak();
+    for b in buf_k.iter_mut().take(32) {
+        *b = 0;
+    }
+    let res_k = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&buf_k);
+    assert!(
+        matches!(res_k, Err(HonkProofError::CorruptedKey)),
+        "from_buffer_keccak accepted a log_circuit_size=0 VK: {res_k:?}"
     );
 }
 

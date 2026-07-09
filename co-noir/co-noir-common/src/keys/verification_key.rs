@@ -1,3 +1,4 @@
+use crate::constants::CONST_PROOF_SIZE_LOG_N;
 use crate::polynomials::entities::PRECOMPUTED_ENTITIES_SIZE;
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, pairing::Pairing};
@@ -87,6 +88,18 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
     const SER_FULL_SIZE: usize = 3 * Self::FIELDSIZE_BYTES as usize
         + PRECOMPUTED_ENTITIES_SIZE * 2 * 2 * Self::FIELDSIZE_BYTES as usize; // all elements are serialized as ScalarField elements
     const SER_FULL_SIZE_KECCAK: usize = 3 * 32 + PRECOMPUTED_ENTITIES_SIZE * 2 * 32; // all elements are serialized as U256 elements
+
+    /// Validate an untrusted VK's `log_circuit_size`. It must be at least 1 (no circuit has zero
+    /// rows) and at most `CONST_PROOF_SIZE_LOG_N` (the max the constant-size proof format supports).
+    /// A zero would drive the verifier's sumcheck round count to 0 and underflow the Gemini
+    /// fold-commitment loop; an over-large value would mis-size the transcript reads. Mirrors bb
+    /// `1391c49546`, which added the equivalent reject in the UltraKeccak verifier.
+    fn check_log_circuit_size(log_circuit_size: u64) -> HonkProofResult<()> {
+        if log_circuit_size == 0 || log_circuit_size > CONST_PROOF_SIZE_LOG_N as u64 {
+            return Err(HonkProofError::CorruptedKey);
+        }
+        Ok(())
+    }
 
     pub fn to_field_elements(&self) -> Vec<C::ScalarField> {
         let len = 3 + self.commitments.elements.len() * 2 * C::NUM_BASEFIELD_ELEMENTS;
@@ -183,22 +196,31 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             return Err(HonkProofError::InvalidKeyLength);
         }
 
-        // Read data
+        // Read data. Note `BigUint::to_u64_digits()` returns an EMPTY vec for zero,
+        // so index `[0]` would panic on a genuinely-zero (or malformed all-zero) VK
+        // header; take the low limb with a 0 default instead.
         let log_circuit_size: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let log_circuit_size: u64 = log_circuit_size.to_u64_digits()[0];
+        let log_circuit_size: u64 = log_circuit_size.to_u64_digits().first().copied().unwrap_or(0);
         let num_public_inputs: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let num_public_inputs: u64 = num_public_inputs.to_u64_digits()[0];
+        let num_public_inputs: u64 =
+            num_public_inputs.to_u64_digits().first().copied().unwrap_or(0);
         let pub_inputs_offset: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let pub_inputs_offset: u64 = pub_inputs_offset.to_u64_digits()[0];
+        let pub_inputs_offset: u64 =
+            pub_inputs_offset.to_u64_digits().first().copied().unwrap_or(0);
+
+        // Untrusted input: a VK with log_circuit_size = 0 (or out of range) is invalid for any
+        // circuit and, if accepted, drives the verifier's round count to 0 — reject it cleanly
+        // rather than letting a zero round count underflow downstream (mirrors bb `1391c49546`).
+        Self::check_log_circuit_size(log_circuit_size)?;
 
         let mut commitments = PrecomputedEntities::default();
 
@@ -238,6 +260,11 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         let pub_inputs_offset: u64 =
             U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
         offset += 32;
+
+        // Untrusted input: reject log_circuit_size = 0 / out of range (mirrors bb `1391c49546`).
+        // The Keccak path did not panic like the field path, but silently accepting a zero round
+        // count is the same soundness/robustness gap.
+        Self::check_log_circuit_size(log_circuit_size)?;
 
         let mut commitments = PrecomputedEntities::default();
 

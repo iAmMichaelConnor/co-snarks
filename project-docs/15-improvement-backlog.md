@@ -48,22 +48,35 @@ are listed here so nothing rides on memory.
    unchanged in the Ultra path → match bb, change nothing. (Honest proofs are
    canonical anyway; out-of-range encodings reduce identically in both → same
    accept/reject.) No code change; this is a parity-match invariant, not a fix.
-4. **VERIFY: the two verifier-hardening bb commits were never explicitly
-   ported.** [S / M — verifier]
-   Ch. 03 §2 flagged `1391c49546` (reject VKs with `log_circuit_size = 0` —
-   fixed an OOB write in bb's verifier) and `5f09c55a57`
-   (BB_ASSERT→throw_or_abort in IPA/KZG/Shplemini error paths) with "mirror
-   these as clean `Err` returns" — but no Phase 2 commit record (ch. 14
-   §§14–19) mentions them. Check co-noir's VK-load path for a
-   log_circuit_size sanity check; fold into the same 2.7 hardening pass as
-   items 1–3.
-5. **VERIFY: gemini masking dyadic-size commit `1f9d87ba3a` — confirmed
-   byte-neutral?** [S / L–M — ZK parity]
-   Ch. 03 said "likely allocation-only; confirm ZK bytes unchanged". The
-   step-④ scope mentioned a "gemini masking dyadic sizing check" (ch. 14
-   §17) but no record confirms the outcome. The ZK bidirectional bb
-   cross-verify passing (§17.2) is strong indirect evidence; one line in
-   ch. 14 either way would close it.
+4. **✅ DONE (2026-07-09): `log_circuit_size` VK check ported
+   (`1391c49546`); `5f09c55a57`'s other checks confirmed N/A.** [S / M —
+   verifier] Investigation found neither commit had been mirrored, and the
+   `log_circuit_size` gap was worse than bb's: the field-encoded
+   `from_buffer` path **panicked** on a `log_circuit_size = 0` VK
+   (`BigUint::to_u64_digits()` returns an empty vec for zero, so `[0]`
+   indexed out of bounds), and `from_buffer_keccak` **silently accepted**
+   it → 0 verifier rounds → underflow in the Gemini fold loop.
+   **Fix:** new `VerifyingKeyBarretenberg::check_log_circuit_size`
+   (reject `0` or `> CONST_PROOF_SIZE_LOG_N`, returns
+   `HonkProofError::CorruptedKey`) called in both loaders; the three
+   `to_u64_digits()[0]` conversions now use `.first().copied().unwrap_or(0)`;
+   defense-in-depth `saturating_sub` at `shplemini_verifier.rs`
+   `get_fold_commitments`. Regression test
+   `zero_log_circuit_size_vk_rejected` (both loaders). `5f09c55a57`'s
+   remaining hunks target IPA / ECCVM / Translator / Chonk (co-noir does not
+   implement these) or a KZG `expected_final_msm_size` check whose mismatch
+   cannot arise in co-noir's fixed-index Ultra design — no port needed.
+   (Non-Ultra MsgPack/Chonk portions were already dispositioned in item 3.)
+5. **✅ RESOLVED as BYTE-NEUTRAL (2026-07-09): gemini masking dyadic-size
+   commit `1f9d87ba3a` confirmed allocation-only.** [S / L–M — ZK parity]
+   Analyzed the commit directly: it only raises the masking poly's
+   `virtual_size` to `dyadic_size()`; the random-coefficient count is
+   unchanged and the tail is virtual zero → commitment/transcript/MLE
+   bit-identical (it fixes a debug-only one-past-end assert). co-noir uses a
+   full dyadic all-random masking poly — a different but compatible shape,
+   since the poly is per-prover randomness and never byte-compared; the
+   bidirectional ZK bb cross-verify covers it. No code change. Closure note
+   recorded in ch. 14 §17.
 6. **VERIFY: Shamir randomness accounting has zero test coverage at the
    party count that uses it.** [M / H — Shamir completeness]
    Ch. 14 §17.2: 3-party Shamir takes the `num_pairs = 0` on-the-fly path;
@@ -81,36 +94,68 @@ are listed here so nothing rides on memory.
    `~/.bb-target-src/bb` (ch. 14 §17.2) and ideally `set -o pipefail` +
    artifact-existence checks (the §11/§19.2 silent-failure gotcha, hit
    twice).
-8. **VERIFY: nondeterministic circuit construction — is
-   `acir_format.rs:417` an actual MPC-breaking risk today?**
+8. **✅ RESOLVED (2026-07-09): builder circuit construction is
+   deterministic today; the `acir_format.rs:417` comment was stale.**
    [M / H if real — co-builder correctness]
-   `co-builder/src/acir_format.rs:417`: "TACEO TODO: THIS IS NOT
-   DETERMINISTIC IN Barretenberg (use of unordered_map), thus some tests may
-   produce different circuits! … the MPC parties may produce different
-   circuits and MPC will fail". If any iteration order in co-noir's builder
-   is genuinely nondeterministic (HashMap iteration), parties could derive
-   different circuits/VKs from identical inputs — an MPC liveness landmine
-   and a parity flake source. Review that site (and any `HashMap` iteration
-   feeding gate emission); Rust makes determinism cheap (`BTreeMap` /
-   sorted iteration).
-9. **VERIFY: recursion verifier parity has no byte-level oracle.** [M / M —
-   recursion soundness surface]
-   The in-circuit recursion verifier absorbed the biggest churn (entity
-   reorder indexing, padding_indicator deletion, honest virtual rounds) but
-   `recursion`/`recursion_zk` vectors are only *self*-verified (ch. 13 §1)
-   and sit in the slow set that 2.7 hasn't run. A strong check exists:
-   build the recursion circuit's **VK with bb and with co-noir and
-   byte-compare** — VK equality pins the entire in-circuit verifier's gate
-   layout without needing proof determinism.
-10. **VERIFY: `(0,0)` infinity-sentinel edge case — confirm no valid BN254
-    point collides with the sentinel.** [S / M — co-builder soundness]
-    Step ① adopted bb's `(0,0)` encoding for the point at infinity with MPC
-    infinity detection (2 eq-tests + 1 mult). Ch. 13 §9.2 notes that
-    infinity handling is where EC soundness issues live. Record
-    the one-line argument that x=0 has no on-curve preimage for BN254
-    (y² = 3 must be a non-residue) — and, for the MPC path, that the
-    eq-test-based detection can't be confused by a shared point with one
-    zero coordinate.
+   Full sweep of `co-builder` + `co-acvm` for iterated unordered containers:
+   the flagged site was fixed in the SAME commit that introduced the comment
+   (upstream `dee0972b3`, 2025-02: `HashMap` → `BTreeMap<block_id, _>`);
+   the comment read as an open risk and has now been reworded. Every other
+   `HashMap`/`HashSet` in the builder path is either lookup-only (never
+   iterated) or iterated in a provably order-independent way (unique-value
+   search, commutative fold, debug print). Structural guard already in
+   place: crate-level `#![warn(clippy::iter_over_hash_type)]` + CI clippy
+   `-D warnings` makes any new hash-map iteration a build error (single
+   `#[allow]` in `pss_store.rs:38` audited safe — output never feeds gate
+   emission). Residual gap → new test idea §2.9: no in-tree vector has ≥2
+   memory blocks, so a `BTreeMap`→`HashMap` revert at that site would pass
+   the current single-array KATs.
+9. **🔴 CONFIRMED PARITY BREAK (2026-07-09): the `recursion` circuit's VK
+   and proof do NOT match bb — co-noir builds a different circuit from the
+   same ACIR.** [M / H — recursion soundness surface] The byte-level VK
+   oracle this item asked for was built and run (twice, independently, both
+   binary format, freshly `nargo compile`d ACIR fed to both sides):
+   - `recursion` VK: **DIFFERS** at byte 112 (first SIGMA commitment); 3680
+     B both. `recursion_zk`: same, differs at byte 112. Keccak variants
+     differ at byte 97. The `poseidon` non-recursion control is
+     **byte-identical** → methodology sound.
+   - Header (log_circuit_size=20, num_public_inputs=9, pub_inputs_offset=5)
+     matches; ~21/28 precomputed commitments differ (SIGMA_1–4, ID_1–4,
+     LAGRANGE_LAST, most Q selectors); Q_LOOKUP/TABLE/Q_ELLIPTIC match only
+     because unused (all-zero). LAGRANGE_LAST differing ⇒ the *real*
+     (pre-pad) gate count differs, i.e. co-builder emits a different number
+     and/or order of gates for the in-circuit verifier subcircuit than bb's
+     C++ recursion verifier does.
+   - **End-to-end impact confirmed**: bb verifies {co-noir proof + co-noir
+     VK} = PASS and {bb proof + bb VK} = PASS, but the two CROSS
+     combinations ({co-noir proof + bb VK} and {bb proof + co-noir VK}) both
+     **FAIL**, and the proofs differ at byte 272. So a co-noir-generated
+     recursion proof will NOT verify against a bb-issued VK and vice versa.
+   - This was masked because prior "recursion bb-cross-verify" checks used
+     the SAME key on both sides (co-noir proof + co-noir VK), which only
+     tests co-noir's internal consistency, not parity with bb. PLAN/PROGRESS
+     "recursion self-verifies + bb-cross-verifies" is true only in that
+     weaker sense.
+   - **Scope**: recursion only; all 31 non-recursion circuits are
+     byte-identical to bb. Fixing needs a co-builder recursion-verifier
+     gate-emission investigation (see the localization note in ch. 14 §21 /
+     PROGRESS) — deferred, flagged to Mike. Reproduction artifacts:
+     scratchpad `recvk2/`.
+10. **✅ RESOLVED (2026-07-08): `(0,0)` sentinel collides with no valid point
+    on either curve — verified computationally.** [S / M — co-builder
+    soundness] Step ① adopted bb's `(0,0)` encoding for the point at
+    infinity with MPC infinity detection (2 eq-tests + 1 mult). The
+    argument, checked by direct computation (Euler/cubic-residue criteria):
+    - **BN254 G1** (y² = x³ + 3 over F_p): x=0 needs y² = 3, but
+      3^((p−1)/2) ≡ −1 (mod p) → 3 is a non-residue → no point has x = 0.
+      y=0 needs x³ = −3, but (−3)^((p−1)/3) ≢ 1 (p ≡ 1 mod 3) → −3 is not
+      a cubic residue → no point has y = 0 either.
+    - **Grumpkin** (y² = x³ − 17 over F_r, the builder's embedded curve):
+      (−17)^((r−1)/2) ≡ −1 → no point has x = 0; 17^((r−1)/3) ≢ 1 → no
+      point has y = 0.
+    So on both curves no valid affine point has **even one** zero
+    coordinate; the MPC eq-test detection (is_zero(x) ∧ is_zero(y)) can
+    never be triggered — even partially — by a valid shared point.
 
 ## 2. Missing test ideas (beyond ch. 13's plan)
 
@@ -135,12 +180,14 @@ these are additions, not replacements.
    `PROVENANCE` file recording the bb version and that it was
    source-built — this also operationalizes the §17.1 oracle lesson.
    Guards: entity order, trace layout, all builder gate changes.
-4. **Entity-order lock test.** [S / M — verifier+builder consistency]
-   Assert co-noir's precomputed/witness/shifted iteration order against a
-   hard-coded expected list transcribed from bb's flavor-codegen output
-   (`scripts/flavor-codegen/src/flavors/*.ts`). Catches an accidental
-   struct-field reorder locally, without bb installed — today only a live
-   bb cross-check would notice (ch. 11 §2.3a "don't forget").
+4. **✅ DONE (2026-07-09): entity-order lock test.** [S / M —
+   verifier+builder consistency] `entity_order_lock` module in
+   `co-noir-common/src/polynomials/entities.rs` (3 tests) asserts every
+   precomputed/witness/shifted column index against a hand-transcription of
+   bb's `EntityId` enum (global 0–40) from
+   `flavor/generated/ultra_flavor_generated.hpp`, plus the three
+   `*_ENTITIES_SIZE` totals (28/8/5). Catches an accidental struct/const
+   reorder locally, no bb install needed.
 5. **Per-relation alpha-assignment negatives.** [M / M — verifier]
    For each relation, a witness violating ONLY that relation's constraint
    (bad range for delta-range, bad EC add for elliptic, …) must be
@@ -161,6 +208,14 @@ these are additions, not replacements.
    bb `bbbde54094` soundness rationale). These two were *discovered late*
    precisely because nothing tested them; don't let a refactor regress
    them invisibly.
+8a. **Multi-block ROM/RAM vector (added 2026-07-09 from §1.8's sweep).**
+   [S / M — builder determinism + coverage]
+   No in-tree circuit touches ≥2 distinct memory blocks, so the
+   `BTreeMap<block_id, _>` grouping in `acir_format.rs` (the determinism
+   fix) is unexercised where it matters: a revert to `HashMap` would pass
+   every current KAT. One Noir vector with two RAM arrays + a ROM array,
+   wired into the compare scripts, closes it (and adds multi-block memory
+   parity coverage bb-side too).
 8. **MPC-path negatives.** [M / M — MPC mirrors]
    Run the ch. 13 §3/§3a negative set through the REP3 prover→verifier
    loop, not just plain (ch. 13 §5.2 says this but 2.7's current task list
@@ -238,12 +293,17 @@ path.
 The compile-time 410/458/115 asserts (constants.rs:86-88) are the pattern:
 make drift fail loudly and locally. More of the same:
 
-1. **Extend the compile-time invariant block.** [S / M]
-   Add `const _` asserts for `NUM_SUBRELATIONS == 29`, `NUM_ALPHAS == 28`,
-   `NUM_ALL_ENTITIES == 41` (+42 ZK), `TRACE_OFFSET == 4`,
-   `CONST_PROOF_SIZE_LOG_N == 25`, and the SSIPA claim counts
-   (5 opening claims / 4 transcript evals / 3 commitments). Every one of
-   these moved (or was reviewed) this sync; each is one line.
+1. **✅ DONE (2026-07-09): compile-time invariant block extended.** [S / M]
+   Added `const _` asserts: `NUM_ALL_ENTITIES == 41`, `TRACE_OFFSET == 4`,
+   `CONST_PROOF_SIZE_LOG_N == 25`, `NUM_LIBRA_COMMITMENTS == 3`,
+   `NUM_SMALL_IPA_EVALUATIONS == 4`, `NUM_SMALL_IPA_OPENING_CLAIMS == 5`
+   in `co-noir-common/src/constants.rs`; `NUM_SUBRELATIONS == 29` beside
+   each of the three subrelation-count definitions (co-builder verifier
+   relations, co-ultrahonk decider relations, ultrahonk decider relations);
+   `NUM_ALPHAS == 28` plus cross-crate equality asserts tying `ultrahonk`'s
+   duplicated constants to the `co-noir-common` originals. (The `+42 ZK`
+   entity count and the separate 4-eval/3-commitment SSIPA breakdown are
+   implied by the constants already asserted.)
 2. **Entity/relation-order manifest generated from bb's flavor-codegen.**
    [M–L / H]
    bb's source of truth is now TypeScript specs
@@ -255,27 +315,32 @@ make drift fail loudly and locally. More of the same:
    this.)
 3. **Commit VK KATs + provenance files** — see §2.3; listed here too
    because it is the cheapest drift tripwire per byte. [S / H]
-4. **Check in `rust-toolchain.toml` (pin 1.90).** [S / M]
-   Ch. 14 §2/§9.1: default-toolchain builds die with a misleading error
-   wall. A one-file pin removes the whole failure class for every future
-   session/machine. (Upstream-facing suggestion too, but the local copy
-   can carry it now.)
-5. **Single-source the version pins.** [S–M / M]
-   The same pin lives in 5 places (Readme, compare.sh, compare_mpc.sh, two
-   compile.sh — ch. 02 §6) and they are *intentionally divergent* right
-   now (§1.7), which is exactly how a stale pin gets shipped. A
-   `versions.env` sourced by all scripts (Readme quoting it) makes a pin
-   bump a one-line diff and makes divergence grep-able.
-6. **Script the oracle bootstrap.** [S / M]
-   Encode ch. 12 §3's first gotcha as a checked-in script:
-   `git archive <tag>` → cmake build (`-DAVM=OFF`) → write PROVENANCE.txt →
-   byte-compare `write_vk` against any prebuilt candidate. Turns the
-   §17.1 lesson from prose into a tool; also gives compare*.sh its
-   source-built-oracle slot (§1.7).
-7. **Harden the parity scripts against silent failure.** [S / M]
-   `set -euo pipefail`, no bare `>/dev/null` on oracle invocations, assert
-   artifacts exist before `cmp` — the exact gotcha that produced fake
-   "VK DIFF" readings twice (ch. 14 §11.2, §19.2).
+4. **✅ DONE (2026-07-09): checked in `rust-toolchain.toml` (pin
+   1.90.0).** [S / M] One file at the repo root; rustup now auto-selects the
+   right toolchain. Readme "Building this workspace" note updated (no more
+   manual `rustup override`).
+5. **✅ DONE (2026-07-09): version pins single-sourced in
+   `versions.env`.** [S–M / M] New `versions.env` at the repo root holds
+   `NARGO_VERSION`, `BARRETENBERG_VERSION`, `BARRETENBERG_BINARY_DEFAULT`;
+   sourced by `compare.sh`, `compare_mpc.sh`, and both `compile.sh`; the
+   co-noir Readme now points at it. A pin bump is a one-line diff. (The
+   scripts already pointed at the source-built oracle by default — item
+   §1.7's "third oracle slot" is thus the standing default, env-overridable
+   via `BARRETENBERG_BINARY`.)
+6. **✅ DONE (2026-07-09): oracle bootstrap scripted.** [S / M]
+   `scripts/build-bb-oracle.sh`: `git archive <tag> barretenberg/cpp` →
+   cmake preset default `-DAVM=OFF` → install `bb` + write `PROVENANCE.txt`
+   → optional `CHECK_AGAINST=<candidate bb>` byte-compares `write_vk`
+   output against the fresh source build (the §17.1 rc.2 tripwire). Reads
+   the tag from `versions.env`; smoke-tested against the existing
+   `~/.bb-target-src/bb` (VK byte-identical). Leaves ~20% of cores free.
+7. **✅ DONE (2026-07-09): parity scripts hardened against silent
+   failure.** [S / M] `compare.sh` + `compare_mpc.sh` now `set -uo
+   pipefail` (not `-e`: the per-case loop deliberately accumulates failures
+   in `exit_code`), delete stale `vk`/`proof`/`public_inputs` before each
+   bb run, and assert the oracle actually produced non-empty artifacts
+   (erroring the case out with a message) before any `diff`/`verify` — the
+   exact gotcha behind the two fake "VK DIFF" readings.
 8. **Adopt PLAN-item numbering as the only work-item identifier.** [S / S]
    The 2.x numbering drifted three ways across PLAN.md / ch. 11 / the
    session logs (see ch. 11's mapping table). Rule going forward: PLAN.md

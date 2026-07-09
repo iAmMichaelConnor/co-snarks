@@ -7,10 +7,11 @@ export CARGO_TERM_QUIET=true
 # 186 (3x)→~950ms; small circuits even prefer fewer threads. Override via
 # env if experimenting: RAYON_NUM_THREADS=16 bash compare_mpc.sh
 export RAYON_NUM_THREADS=${RAYON_NUM_THREADS:-$(($(nproc --all)*8/30))}
-BARRETENBERG_BINARY=${BARRETENBERG_BINARY:-$HOME/.bb-target-src/bb}  ##specify the $BARRETENBERG_BINARY path here (env-overridable)
+set -uo pipefail  # no -e: the loop deliberately accumulates per-case failures in exit_code
 
-NARGO_VERSION=1.0.0-beta.22 ##specify the desired nargo version here
-BARRETENBERG_VERSION=5.0.0-nightly.20260708 ##specify the desired barretenberg version here or use the corresponding one for this nargo version
+# Version pins + default oracle live in versions.env at the repo root
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/versions.env"
+BARRETENBERG_BINARY=${BARRETENBERG_BINARY:-$BARRETENBERG_BINARY_DEFAULT}  ## env-overridable
 
 exit_code=0
 
@@ -76,9 +77,23 @@ run_proof_verification() {
 
   echo "comparing" $name "with bb and $algorithm transcript"
 
+  # Remove any stale oracle artifacts so a silently-failing bb invocation cannot
+  # produce a comparison against a previous run's output.
+  rm -f test_vectors/${name}/vk test_vectors/${name}/proof test_vectors/${name}/public_inputs
+
   bash -c "$BARRETENBERG_BINARY $write_command -b test_vectors/${name}/target/${name}.json -o test_vectors/${name}/ $PIPE"
+  if [[ $? -ne 0 || ! -s test_vectors/${name}/vk ]]; then
+    exit_code=1
+    echo "::error:: $name bb write_vk failed or produced no vk (with: $algorithm)"
+    return $exit_code
+  fi
 
   bash -c "$BARRETENBERG_BINARY $prove_command -b test_vectors/${name}/target/${name}.json -w test_vectors/${name}/target/${name}.gz -k test_vectors/${name}/vk -o test_vectors/${name}/ $PIPE"
+  if [[ $? -ne 0 || ! -s test_vectors/${name}/proof || ! -f test_vectors/${name}/public_inputs ]]; then
+    exit_code=1
+    echo "::error:: $name bb prove failed or produced no proof/public_inputs (with: $algorithm)"
+    return $exit_code
+  fi
 
   if [[ ( "$algorithm" == "poseidon" || "$algorithm" == "keccak" ) && "$name" != "recursion" && "$name" != "recursion_zk" ]]; then
     diff test_vectors/${name}/proof test_vectors/${name}/cosnark_proof
