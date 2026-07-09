@@ -558,6 +558,42 @@ farm small backlog items to cheaper agents.
 - **PLAN 2.9 started**: read-only localization agent running (default
   model) on the recursion gate-emission divergence, re-using the preserved
   overnight prompt + recvk2 artifacts.
+- **PLAN 2.9 localization LANDED** (ch. 14 §23): three divergences account
+  for the gate deltas exactly — (1) `mask_points` missing bb's ∞-asserts
+  (ALSO a security gap: they protect the ROM point tables from a malicious
+  prover), (2) `unsafe_assert_less_than` top-limb range at 68 bits vs bb's
+  50 (weaker bound), (3) ZK row-disabling factor applied once vs per
+  subrelation. All three fixes applied (uncommitted), mirroring bb's
+  emission order. Non-recursion parity intact (4/4 plain KATs;
+  fast-check --sec PASS). Recursion VK moved (19/28 blocks changed) but
+  still ≠ bb (21/28 differ) — residual divergence under re-instrumented
+  diagnosis by the same agent.
+- **PLAN 2.9 RESOLVED** (ch. 14 §23; four fix rounds, iterating with the
+  localization agent's per-phase → per-row instrumentation): seven root
+  causes total — the three above plus compute_naf's unpinned top NAF
+  entry (SECURITY: unconstrained witness; the real source of the arith
+  deficit, the ∞-asserts being gate-free), gate-separator multiply
+  operand order, self_reduce quotient-max off-by-one, and SmallSubgroupIPA
+  claim-batching emission order (in add_zk_data, not check_consistency as
+  first attributed). **End state: recursion + recursion_zk VK
+  byte-identical to bb; bidirectional cross-verification PASS in both zk
+  modes; 0/703,658 trace rows differ.** Proof bytes are prover-specific
+  by design (random masking offset generator) — VK identity + mutual
+  verification is the parity criterion, and compare.sh's proof-diff
+  exclusion for recursion is legitimate.
+- **Bonus finds along the way**: the cargo suite's own recursion vectors
+  were STILL stale (K=3 + beta.20 inner proof — 2.7's regen only fixed
+  the examples copies; never caught because the suite's recursion tests
+  are #[ignore]d as slow) — refreshed from the examples set. plaindriver
+  stack-overflows proving recursion_zk at default stack size (ch. 15
+  §1.11, workaround `ulimit -s unlimited`).
+- **Anti-regression landed**: always-on ~5 s `recursion{,_zk}_vk_kat`
+  suite tests (VK byte-KATs vs source-built bb, PROVENANCE.txt per dir)
+  + compare.sh now byte-diffs VKs for EVERY circuit. This class of break
+  can no longer hide.
+- Commits: `23e694ee` (fix rounds 1–3, recursion at parity) + final
+  round/KATs/docs commit following. Gates green throughout: plain suite
+  6/6, fast-check --sec PASS, clippy 0 warnings.
 - Parallel cheap-agent work (Sonnet, isolated worktrees): backlog §2.2
   transcript-consumption property test; backlog §2.7 lookup
   `table_index≥1` + SHA CH-L2 10-bit regression tests. Reports pending;

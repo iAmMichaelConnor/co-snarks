@@ -1062,3 +1062,48 @@ non-ZK — VK identity + mutual verification is the right parity criterion
 `recursion_zk` down to 6 differing VK blocks [0,1,2,15,16,19] =
 SIGMA_1–3, Q_M, Q_R, Q_L — exactly cluster C's footprint. Plain KATs 4/4
 + fast-check --sec PASS after every round.
+
+**Fix round 4 (2026-07-09) — recursion_zk AT PARITY; 2.9 CLOSED.**
+Cluster C course-correction: the divergence was NOT in
+`check_consistency` (already in perfect parity) but in the tail of
+**`add_zk_data`** — the SmallSubgroupIPA claim batching. bb groups the
+batching scalars by backing commitment INSIDE the claim loop
+(`grouped_scalars[commitment_index] -= scaling_factor`, between the
+ν-power multiply and the evaluation multiply — shplonk/shplemini.hpp
+`batch_small_ipa_opening_claims`); co-noir negated per-claim scalars in
+the loop and emitted the two grouping additions after it — same values,
+two gates in the wrong positions + witness-numbering ripple. Fix
+(row-dump-verified in the instrumented build before porting): grouping
+subtraction moved inside the loop with
+`COMMITMENT_INDEX = [0,1,1,1,2]`. Row diff after fix: **0 of 703,658
+rows**. Ported to `shplemini.rs`; verified in the main repo:
+- `recursion` AND `recursion_zk` VK byte-identical to bb (create-vk).
+- ZK bidirectional cross-verify: co-noir plaindriver --zk proof → bb
+  verifier w/ bb VK PASS; bb ZK proof → co-noir verifier (`--has-zk`)
+  PASS.
+- Gotcha: plaindriver hit a stack overflow proving recursion_zk with the
+  default stack; `ulimit -s unlimited` (or a large RUST_MIN_STACK)
+  fixes it → ch. 15 backlog item.
+
+**Bonus finding — the cargo suite's OWN recursion vectors were still
+stale.** §20's regen fixed only `examples/test_vectors`; the suite's
+`test_vectors/noir/recursion{,_zk}` copies still had K=3 main.nr + the
+beta.20 inner proof in Prover.toml (same `ultra_builder.rs:223` panic
+signature). Never caught because the only suite recursion tests
+(rep3/plaindriver) are `#[ignore]`d as too slow. Fixed: main.nr +
+Prover.toml copied from the examples set, `nargo execute`, target→kat
+per the compile.sh convention.
+
+**Anti-regression landed (closes the 2.10 deferral):**
+- `test_vectors/noir/recursion{,_zk}/kat/` now hold bb VK byte-KATs
+  (source-built oracle) + PROVENANCE.txt (incl. why there is no proof
+  byte-KAT for recursion circuits).
+- New ALWAYS-ON suite tests `recursion_vk_kat` / `recursion_zk_vk_kat`
+  (plain.rs `vk_kat_test`: build + create_keys + VK byte-assert, no
+  proving — ~5 s for both): the fast tripwire that would have caught
+  this whole class of break on day one.
+- `compare.sh` now byte-diffs `vk` vs `vk_plaindriver` for EVERY
+  circuit, recursion included (the previously-missing tripwire), with
+  comments explaining the proof-diff exclusion.
+Final gates: plain suite 6/6 (incl. both new vk_kat tests),
+fast-check --sec PASS, clippy 0 warnings.

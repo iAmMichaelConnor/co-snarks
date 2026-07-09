@@ -87,7 +87,20 @@ run_proof_verification() {
   fi
 
 
+  # VK bytes must match for EVERY circuit, recursion included: the VK pins the full gate
+  # layout, and (unlike recursion proof bytes, which are prover-specific) it is deterministic.
+  # This diff is the tripwire that was missing when the recursion builder divergence went
+  # undetected — do not exclude circuits from it.
+  diff test_vectors/${name}/vk test_vectors/${name}/vk_plaindriver
+  if [[ $? -ne 0 ]]; then
+    exit_code=1
+    echo "::error::$name diff check of VKs failed (with: $algorithm)"
+  fi
+
   if [[ ( "$algorithm" == "poseidon" || "$algorithm" == "keccak" ) && "$name" != "recursion" && "$name" != "recursion_zk" ]]; then
+    # recursion/recursion_zk excluded from PROOF byte-diff only: mask_points samples a random
+    # offset generator (free witness), so honest provers legitimately emit different proof
+    # bytes. Parity for them = VK diff above + the 4-way cross-verification below.
     diff test_vectors/${name}/proof test_vectors/${name}/proof_plaindriver
     if [[ $? -ne 0 ]]; then
       exit_code=1

@@ -109,37 +109,28 @@ are listed here so nothing rides on memory.
    emission). Residual gap → new test idea §2.9: no in-tree vector has ≥2
    memory blocks, so a `BTreeMap`→`HashMap` revert at that site would pass
    the current single-array KATs.
-9. **🔴 CONFIRMED PARITY BREAK (2026-07-09): the `recursion` circuit's VK
-   and proof do NOT match bb — co-noir builds a different circuit from the
-   same ACIR.** [M / H — recursion soundness surface] The byte-level VK
-   oracle this item asked for was built and run (twice, independently, both
-   binary format, freshly `nargo compile`d ACIR fed to both sides):
-   - `recursion` VK: **DIFFERS** at byte 112 (first SIGMA commitment); 3680
-     B both. `recursion_zk`: same, differs at byte 112. Keccak variants
-     differ at byte 97. The `poseidon` non-recursion control is
-     **byte-identical** → methodology sound.
-   - Header (log_circuit_size=20, num_public_inputs=9, pub_inputs_offset=5)
-     matches; ~21/28 precomputed commitments differ (SIGMA_1–4, ID_1–4,
-     LAGRANGE_LAST, most Q selectors); Q_LOOKUP/TABLE/Q_ELLIPTIC match only
-     because unused (all-zero). LAGRANGE_LAST differing ⇒ the *real*
-     (pre-pad) gate count differs, i.e. co-builder emits a different number
-     and/or order of gates for the in-circuit verifier subcircuit than bb's
-     C++ recursion verifier does.
-   - **End-to-end impact confirmed**: bb verifies {co-noir proof + co-noir
-     VK} = PASS and {bb proof + bb VK} = PASS, but the two CROSS
-     combinations ({co-noir proof + bb VK} and {bb proof + co-noir VK}) both
-     **FAIL**, and the proofs differ at byte 272. So a co-noir-generated
-     recursion proof will NOT verify against a bb-issued VK and vice versa.
-   - This was masked because prior "recursion bb-cross-verify" checks used
-     the SAME key on both sides (co-noir proof + co-noir VK), which only
-     tests co-noir's internal consistency, not parity with bb. PLAN/PROGRESS
-     "recursion self-verifies + bb-cross-verifies" is true only in that
-     weaker sense.
-   - **Scope**: recursion only; all 31 non-recursion circuits are
-     byte-identical to bb. Fixing needs a co-builder recursion-verifier
-     gate-emission investigation (see the localization note in ch. 14 §21 /
-     PROGRESS) — deferred, flagged to Mike. Reproduction artifacts:
-     scratchpad `recvk2/`.
+9. **✅ RESOLVED (2026-07-09, PLAN 2.9): recursion VK parity break found
+   and fixed.** [M / H — recursion soundness surface] The byte-level VK
+   oracle this item asked for found a genuine parity break (VK differed at
+   byte 112, 21/28 commitments; cross-key verification failed both ways;
+   masked previously because "cross-verify" had used the same key on both
+   sides). Differential gate instrumentation (per-phase counts, then
+   per-row selector/wire dumps over all ~704k trace rows) localized SEVEN
+   root causes in co-builder, three of them SECURITY issues in their own
+   right: missing `mask_points` ∞-asserts (bb's ROM-table guard against a
+   malicious prover), bigfield `unsafe_assert_less_than` top-limb range at
+   68 bits vs bb's 50 (weaker less-than bound), `compute_naf` top entry
+   never pinned (unconstrained witness); plus four pure gate-emission
+   mismatches (ZK row-disabling applied once vs per subrelation,
+   gate-separator multiply operand order, `self_reduce` quotient-max
+   off-by-one, SmallSubgroupIPA claim-batching grouped inside vs after the
+   claim loop). All fixed mirroring bb's emission order. **End state:
+   `recursion` and `recursion_zk` VKs byte-identical to bb; bidirectional
+   cross-verification passes in both zk modes; 0 differing trace rows.**
+   Proof BYTES remain prover-specific by design (random masking offset
+   generator) — VK identity + mutual verification is the parity criterion.
+   Anti-regression: always-on ~5 s `recursion{,_zk}_vk_kat` suite tests +
+   compare.sh VK byte-diff for every circuit. Full record: ch. 14 §23.
 10. **✅ RESOLVED (2026-07-08): `(0,0)` sentinel collides with no valid point
     on either curve — verified computationally.** [S / M — co-builder
     soundness] Step ① adopted bb's `(0,0)` encoding for the point at
@@ -155,6 +146,18 @@ are listed here so nothing rides on memory.
     So on both curves no valid affine point has **even one** zero
     coordinate; the MPC eq-test detection (is_zero(x) ∧ is_zero(y)) can
     never be triggered — even partially — by a valid shared point.
+11. **plaindriver stack overflow proving `recursion_zk` at default stack
+    size (found 2026-07-09).** [S / M — ops robustness]
+    `plaindriver --zk` on the recursion_zk circuit aborts with `fatal
+    runtime error: stack overflow` under the default 8 MiB main-thread
+    stack; `ulimit -s unlimited` (or spawning the prover on a thread with
+    a large `RUST_MIN_STACK`) fixes it. Non-ZK recursion proves fine.
+    Likely a deep recursion/large stack frame in the ZK proving path.
+    Options: spawn the proving work on a dedicated big-stack thread in
+    the driver binaries, or find and flatten the offending recursion.
+    Until then the workaround needs documenting wherever plaindriver
+    invocations are scripted (compare.sh runs it in-process today —
+    check whether the sweep is affected).
 
 ## 2. Missing test ideas (beyond ch. 13's plan)
 

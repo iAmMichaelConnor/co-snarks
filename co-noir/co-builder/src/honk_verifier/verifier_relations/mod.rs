@@ -117,6 +117,7 @@ pub(crate) trait Relation<C: HonkCurve<TranscriptFieldType>> {
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn compute_full_relation_purported_value<
     C: HonkCurve<TranscriptFieldType>,
     T: NoirWitnessExtensionProtocol<C::ScalarField>,

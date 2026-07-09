@@ -201,19 +201,24 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       SSIPA A(1)=0 boundary-claim consistency test (§3a#8, deferred); non-canonical (≥modulus)
       encoding rejection (§3a#10 residue, ch.15 §1.3).
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
-- [ ] 2.9 **🔴 Recursion VK/proof parity break (found 2026-07-09, overnight
-      backlog run — ch. 15 §1.9, ch. 14 §21).** co-noir and bb build
-      different circuits from the same recursion ACIR: VK differs at byte
-      112 (~21/28 precomputed commitments incl. LAGRANGE_LAST ⇒ real
-      gate-count delta), proofs differ, cross-key verification fails BOTH
-      ways; each side self-verifies; all 31 non-recursion circuits remain
-      byte-identical. Masked until now because prior recursion
-      "cross-verify" used the same key on both sides. Needs: localize the
-      gate-emission divergence in co-builder's in-circuit recursion
-      verifier (`co-builder/src/honk_verifier/*` vs bb
-      `stdlib/honk_verifier/*`), fix, then add the recursion VK byte-KAT
-      as the anti-regression. NO diagnosis yet (the localization agent died
-      with the overnight session).
+- [x] 2.9 **Recursion VK/proof parity break — RESOLVED 2026-07-09**
+      (found by the overnight backlog run; full record ch. 14 §23, ch. 15
+      §1.9). Seven root causes fixed via differential gate instrumentation
+      (per-phase counts → per-row selector/wire dumps) against source-built
+      bb: mask_points ∞-asserts (SECURITY: ROM-table guard), bigfield
+      top-limb range width 68→50 (SECURITY: tighter less-than bound),
+      compute_naf top-entry fix_witness (SECURITY: was unconstrained),
+      ZK row-disabling per-subrelation, gate-separator operand order,
+      self_reduce quotient-max off-by-one, SmallSubgroupIPA claim-batching
+      emission order. RESULT: recursion + recursion_zk VK byte-identical
+      to bb; bidirectional cross-verify PASS in both zk modes; 0/703,658
+      trace rows differ. Anti-regression: always-on ~5 s
+      `recursion{,_zk}_vk_kat` suite tests + compare.sh VK byte-diff for
+      every circuit. Bonus fix: the suite's own recursion vectors were
+      still stale (K=3 + beta.20 inner proof; only examples were fixed in
+      2.7) — refreshed. Proof BYTES are legitimately prover-specific for
+      recursion (random masking offset generator): VK identity + mutual
+      verification is the parity criterion.
 - [x] 2.10 VK byte-KATs — DONE 2026-07-09 (backlog §2.3/§4.3). bb VK bytes
       (source-built oracle) committed for add3u64+poseidon × both hashers
       with per-dir PROVENANCE.txt; plain_test asserts VK byte-parity in

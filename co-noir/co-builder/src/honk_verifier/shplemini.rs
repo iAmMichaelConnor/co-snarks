@@ -635,8 +635,6 @@ impl ShpleminiVerifier {
         // hardcoded to zero and enforced by the batched PCS opening).
         let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
             array::from_fn(|_| FieldCT::default());
-        let mut batching_scalars: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
-            array::from_fn(|_| FieldCT::default());
 
         // Compute Shplonk denominators and invert them
         let one = FieldCT::from(C::ScalarField::ONE);
@@ -675,14 +673,23 @@ impl ShpleminiVerifier {
             libra_evaluations[3].clone(),
         ];
 
-        // Compute the scalars to be multiplied against the commitments
+        // Compute the scalars to be multiplied against the commitments. Per-claim batching scalars
+        // are grouped by backing commitment (bb: `SMALL_IPA_CLAIMS[idx].commitment_index`), so the
+        // claims backed by the grand sum commitment (A(g*r), A(r), A(1)) fold into a single scalar.
+        // The grouping subtraction is emitted INSIDE the loop, between the nu-power multiplication
+        // and the evaluation multiplication, to match bb's gate emission order
+        // (`batch_small_ipa_opening_claims` in commitment_schemes/shplonk/shplemini.hpp).
+        const COMMITMENT_INDEX: [usize; NUM_SMALL_IPA_OPENING_CLAIMS] = [0, 1, 1, 1, 2];
+        let mut grouped_scalars: [FieldCT<C::ScalarField>; NUM_LIBRA_COMMITMENTS] =
+            array::from_fn(|_| FieldCT::from(C::ScalarField::ZERO));
         for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor = denominators[idx].multiply(
                 &shplonk_batching_challenge_powers[2 * virtual_log_n + idx],
                 builder,
                 driver,
             )?;
-            batching_scalars[idx] = scaling_factor.neg();
+            grouped_scalars[COMMITMENT_INDEX[idx]] =
+                grouped_scalars[COMMITMENT_INDEX[idx]].sub(&scaling_factor, builder, driver);
             *constant_term_accumulator = constant_term_accumulator.add(
                 &scaling_factor.multiply(&claim_evaluations[idx], builder, driver)?,
                 builder,
@@ -690,15 +697,9 @@ impl ShpleminiVerifier {
             );
         }
 
-        // To save scalar muls, group the batching scalars of the claims backed by the grand sum
-        // commitment (A(g*r), A(r), and A(1))
-        scalars.push(batching_scalars[0].clone());
-        scalars.push(
-            batching_scalars[1]
-                .add(&batching_scalars[2], builder, driver)
-                .add(&batching_scalars[3], builder, driver),
-        );
-        scalars.push(batching_scalars[4].clone());
+        for scalar in grouped_scalars {
+            scalars.push(scalar);
+        }
 
         Ok(())
     }

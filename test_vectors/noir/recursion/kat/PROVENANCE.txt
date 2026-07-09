@@ -1,0 +1,25 @@
+KAT provenance — recursion
+
+Circuit + witness (recursion.json / recursion.gz): compiled with nargo
+v1.0.0-beta.22 from ../src (see ../../compile.sh; pins in /versions.env);
+inner proof in ../Prover.toml regenerated with target bb per
+project-docs ch. 12 §4a.
+
+VK KAT (recursion_vk_with_pos): generated 2026-07-09 with SOURCE-BUILT
+barretenberg at tag v5.0.0-nightly.20260708 (the parity oracle, built by
+/scripts/build-bb-oracle.sh; a source-built bb prints a placeholder
+--version — see the PROVENANCE.txt beside the binary).
+Command: bb write_vk --scheme ultra_honk --oracle_hash poseidon2
+--disable_zk -b recursion.json
+(VK bytes are zk-independent; poseidon2 field format, 3680 B.)
+
+There is deliberately NO proof byte-KAT for this circuit: the in-circuit
+verifier's mask_points samples a random offset generator as a free
+witness, so honest provers emit different proof bytes for the same
+circuit and witness. The VK KAT pins the full gate layout (including the
+in-circuit recursion verifier); proof-level parity is covered by live
+bidirectional bb cross-verification.
+
+Do NOT regenerate this file with co-noir output — it is the bb-side
+oracle bytes. Regenerate only with a source-built bb at the pinned tag,
+and update this file when you do.
