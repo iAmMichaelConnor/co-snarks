@@ -104,27 +104,22 @@ impl SumcheckVerifier {
             AllEntities::from_elements(witness.to_vec(), precomputed.to_vec());
 
         // Evaluate the Honk relation at the point (u_0, ..., u_{d-1}) using claimed evaluations of prover polynomials.
-        // In ZK Flavors, the evaluation is corrected by full_libra_purported_value
+        // For ZK Flavors, the row-disabling factor is applied inside, per subrelation (bb's
+        // emission order), and the evaluation is then corrected by full_libra_purported_value.
         let mut full_honk_purported_value = compute_full_relation_purported_value(
             &claimed_evaluations,
             &mut AllRelationsEvals::default(),
             relation_parameters,
             gate_separators,
             alphas,
+            is_zk.then_some(multivariate_challenge.as_slice()),
             builder,
             driver,
         )?;
 
-        // For ZK Flavors: compute the evaluation of the Row Disabling Polynomial at the sumcheck challenge and of the
-        // libra univariate used to hide the contribution from the actual Honk relation
+        // For ZK Flavors: the libra univariate evaluation hides the contribution from the actual
+        // Honk relation
         let libra_evaluation = if is_zk {
-            // Compute the evaluations of the polynomial (1 - \sum L_i) where the sum is for i corresponding to the
-            // rows where all sumcheck relations are disabled
-            full_honk_purported_value = full_honk_purported_value.multiply(
-                &Self::evaluate_at_challenge(&multivariate_challenge, builder, driver)?,
-                builder,
-                driver,
-            )?;
             let libra_evaluation =
                 transcript.receive_fr_from_prover("Libra:claimed_evaluation".to_owned())?;
             let tmp = libra_evaluation.multiply(

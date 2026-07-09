@@ -804,7 +804,16 @@ impl<F: PrimeField> BigField<F> {
         builder.range_constrain_two_limbs(r0_idx, r1_idx, NUM_LIMB_BITS, NUM_LIMB_BITS, driver)?;
         let r2_idx = r2.get_witness_index(builder, driver);
         let r3_idx = r3.get_witness_index(builder, driver);
-        builder.range_constrain_two_limbs(r2_idx, r3_idx, NUM_LIMB_BITS, NUM_LIMB_BITS, driver)?;
+        // r3 is the top limb: constrain it to NUM_LAST_LIMB_BITS (50), not a full 68-bit limb.
+        // A 68-bit bound is weaker (the borrow-based less-than argument needs the top limb
+        // tight) and emits a different range-list shape than bb.
+        builder.range_constrain_two_limbs(
+            r2_idx,
+            r3_idx,
+            NUM_LIMB_BITS,
+            Self::NUM_LAST_LIMB_BITS,
+            driver,
+        )?;
 
         Ok(())
     }
@@ -1057,11 +1066,13 @@ impl<F: PrimeField> BigField<F> {
                 < Self::get_maximum_crt_product()
         );
 
-        // Build the quotient as a BigField with only the first limb set
+        // Build the quotient as a BigField with only the first limb set. The limb maximum is
+        // 2^maximum_quotient_bits − 1 (a range-constrained value's max, bb bigfield_impl.hpp) —
+        // one too high here ripples into the carry MSB and re-buckets the range lists.
         let mut quotient = BigField::default();
         quotient.binary_basis_limbs[0] = Limb::new(
             quotient_limb.clone(),
-            BigUint::one() << maximum_quotient_bits,
+            (BigUint::one() << maximum_quotient_bits) - BigUint::one(),
         );
         for i in 1..NUM_LIMBS {
             quotient.binary_basis_limbs[i] = Limb::new(

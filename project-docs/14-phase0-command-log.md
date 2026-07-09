@@ -984,3 +984,81 @@ plain tests pass; tripwire validated (flipping KAT byte 112 → clean
 assertion failure, restored, green). Recursion VK KAT deliberately NOT
 added — blocked on the 2.9 parity break (it would be red today) and is
 the natural anti-regression to add with the 2.9 fix.
+
+## 23. PLAN 2.9 — recursion parity: localization + fix round 1 (2026-07-09, IN PROGRESS)
+
+**Localization (read-only agent, per-phase gate instrumentation on scratch
+copies of both codebases):** both sides byte-equal through Oink,
+gate-challenges, non-ZK sumcheck, and Shplemini; three divergences account
+for the gate-count deltas exactly (non-ZK: arith −66, delta_range +32;
+ZK: arith −98, delta_range +34):
+1. `mask_points` (big_group_edgecase_handling.rs) missing bb's
+   point-at-infinity assertions — offset generator + every masked point
+   (biggroup_edgecase_handling.hpp). ALSO A SECURITY GAP: those asserts are
+   what stop a malicious prover exploiting ∞ entries in ROM point tables.
+2. `unsafe_assert_less_than` (big_field.rs) range-constrained the top limb
+   r3 at 68 bits instead of NUM_LAST_LIMB_BITS=50 (weaker bound + different
+   range-list shape; bb bigfield_impl.hpp).
+3. ZK-only: row-disabling factor applied once to the batched sumcheck total
+   instead of per subrelation (bb utils.hpp `scale_and_batch_elements`:
+   element × α × rd; algebraically identical, 28 fewer mul gates).
+
+**Fix round 1 (applied, uncommitted):** all three ported mirroring bb's
+emission order (∞-asserts via `BoolCT::assert_equal` against constant
+false = bb's `assert_equal_constant`, 1 gate each; r3 →
+`Self::NUM_LAST_LIMB_BITS`; rd factor computed between relation
+accumulation and batching, folded per subrelation in
+`scale_by_challenge_and_accumulate`, single post-multiply removed from
+`sumcheck.rs`). Gates: workspace check clean; 4/4 plain VK+proof KATs
+pass (non-recursion parity intact); fast-check --sec PASS.
+**Result: NOT yet parity** — recursion/recursion_zk VK still differs at
+byte 112; 21/28 commitment blocks differ (19 blocks DID move vs pre-fix,
+so the fixes bite but something residual remains: order/content or a
+mis-accounted delta). Residual re-instrumentation running (same agent,
+fixed files copied into its scratch workspace). Artifacts: scratchpad
+`recfix/`.
+
+**Fix round 2 (2026-07-09, applied, uncommitted).** Re-instrumentation
+verdicts: fixes #2 (r3 width) and #3 (ZK row-disabling) verified complete —
+all nine range lists and the post-sumcheck/post-shplemini counts now match
+bb exactly. Fix #1's ∞-asserts emit ZERO gates (bb's `assert_equal` vs a
+constant is a pure copy constraint) — the original 64/68/2 attribution was
+coincidental; asserts kept (bb security check + copy-constraint parity).
+The REAL arith source: co-noir `compute_naf` (big_group.rs) never pinned
+`naf_entries[0]` — bb emits `fix_witness()` (1 arith gate per MSM scalar,
+biggroup_nafs.hpp; also a soundness gap: the Strauss rounds don't consume
+entry 0, so outside the scalar-reconstruction sum it was unconstrained).
+**Fix 4**: `builder.fix_witness(naf_entries[0].witness_index, 0)` right
+after the witness creation (bb's order). Result: differing commitment
+blocks 21 → **11** (recursion) / **12** (recursion_zk); remaining diffs are
+content-level (same gate counts, different selector/wire values) in blocks
+[0–7,16,19,22(,15 zk)]. Row-level selector/wire dump in progress. Plain
+KATs 4/4 + fast-check --sec still PASS after every fix round.
+
+**Fix round 3 (2026-07-09) — recursion AT PARITY.** Row-level dump (all
+~682k/704k trace rows, both sides) found only 29 (non-ZK) / 41 (ZK)
+differing rows in three clusters:
+- **A** (both circuits): `GateSeparatorPolynomial::partially_evaluate`
+  multiply operand order — bb puts the challenge in the mul gate's left
+  wire (`challenge × (β−1)`); co-noir had `(β−1) × challenge`. Fixed
+  (gate_separator.rs).
+- **B** (both): `self_reduce` quotient limb maximum off by one —
+  `2^max_quotient_bits` vs bb's `2^max_quotient_bits − 1`
+  (bigfield_impl.hpp); the extra bit rippled into the carry MSB and
+  re-bucketed 4 range-list entries. Fixed (big_field.rs).
+- **C** (ZK only): SmallSubgroupIPA `check_consistency` emits the same 9
+  subexpression gates in a different order than bb
+  (small_subgroup_ipa.hpp) — fix pending (shplemini.rs reorder,
+  row-dump-guided).
+
+**After A+B: `recursion` VK BYTE-IDENTICAL to bb** ✅ and fully
+cross-verified: co-noir plaindriver proof → bb verifier w/ bb VK PASS;
+bb proof → co-noir verifier PASS; public inputs byte-identical; VK from
+plaindriver also byte-identical. Proof BYTES legitimately differ (byte
+272 onward): `mask_points` uses a prover-chosen random offset generator
+(free witness), so proof bytes are prover-specific for recursion even
+non-ZK — VK identity + mutual verification is the right parity criterion
+(this is also why compare.sh excludes recursion from proof byte-diffs).
+`recursion_zk` down to 6 differing VK blocks [0,1,2,15,16,19] =
+SIGMA_1–3, Q_M, Q_R, Q_L — exactly cluster C's footprint. Plain KATs 4/4
++ fast-check --sec PASS after every round.
