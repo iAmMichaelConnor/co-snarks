@@ -78,7 +78,7 @@ finds were in the *original* code, not the modernization.*
    range, driving witness index from a real artifact's `return_values`);
    `data_store` serialization round-trips + corrupted-buffer → Err;
    orchestrator handler negatives (mocked divergent responses → 502).
-3. **Transport security** [M×H]: party TOMLs carry key/cert paths that
+3. **Transport security — DECIDED (Mike 2026-07-13): wire it properly (TLS mesh + gRPC security)** [M×H]: party TOMLs carry key/cert paths that
    mpc-net's `NetworkConfigFile` silently IGNORES (wrong TOML shape → 
    `tls: None`) and the code hardcodes `TcpNetwork` anyway; gRPC plane
    has no TLS/auth either. Decide: wire `TlsNetwork` + tonic mTLS, or
@@ -108,7 +108,7 @@ finds were in the *original* code, not the modernization.*
    (address points are constructed to have square y², so real inputs
    may be fine — VERIFY the caller contract's guarantee) or propagate
    Option.
-3. **F2 "Aztec compatible" commit/nullifier claim is stale** [S×M]:
+3. **F2 — DECIDED (Mike 2026-07-13): option (b), full DOM_SEP rework** [M×H]:
    GENERATOR_INDEX__{NOTE_HASH=1,NOTE_NULLIFIER=53} no longer exist on
    v5-next — replaced by `DOM_SEP__NOTE_HASH=116501019` /
    `DOM_SEP__NOTE_NULLIFIER=50789342` + `poseidon2_hash_with_separator`

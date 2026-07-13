@@ -761,3 +761,29 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
   hash claim (DOM_SEP__* now), to_address_point sqrt panic (#8970),
   transport security (TLS config silently ignored!), contract F7–F11
   (unpack 2nd bug, write-only game_phase, no access control) → 5.1b.
+
+## Session 6 (continued) — 2026-07-13 — test harness landed; SCOPE EXPANDED by Mike
+
+- Rust harness DONE (monty-hall `71037a8`): MPC fns generic over Network;
+  LocalNetwork 3-party in-process e2e test (byte-identity + verify-true +
+  tampered-false, ~1.3s) + extract_public_returns + data_store unit
+  tests; 7 tests green, clippy 0. e2e.sh stays as the docker+bb gate.
+- **Mike's decisions (2026-07-13, supersede ch.16 Q1 + ch.17 options):**
+  1. **Implement ALL game rounds** (not just init+open_door), with e2e
+     tests running the ENTIRE game over an **Aztec local network** — see
+     aztec docs in ~/ap-next for how to run a local node/sandbox (Mike
+     doesn't know how; we must work it out) + TXE/.nr contract tests
+     (docs also in ~/ap-next). This pulls 5.1b (contract port) and 5.1c
+     (on-chain wiring) INTO the current work stream.
+  2. **Hash scheme: option (b)** — rework pss_utils commit/nullifier to
+     match CURRENT aztec-nr conventions (DOM_SEP__NOTE_HASH=116501019,
+     DOM_SEP__NOTE_NULLIFIER=50789342, poseidon2_hash_with_separator,
+     current preimage shapes). "Generator index" terminology is stale.
+     CHECK: aztec macros may already produce domain-separated notes —
+     read aztec-nr code in ap-next before hand-rolling.
+  3. **TLS: option (b)** — wire transport security properly (mpc-net
+     TlsNetwork with correctly-shaped tls config + tonic gRPC security),
+     understanding the deployment context first.
+- NEXT (continuation): update ch.16 (A5→full-game plan, fold 5.1b/5.1c),
+  ch.17 statuses; then Noir pss_utils tests + DOM_SEP rework; contract
+  port; all-rounds circuits/endpoints; TLS; Aztec local-network e2e.
