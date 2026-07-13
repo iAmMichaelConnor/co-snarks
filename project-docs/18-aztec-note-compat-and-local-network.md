@@ -193,6 +193,11 @@ aztec-kit's `setupLocalNetwork` fixture + `Capsule` usage in
    redesign PrivateSharedMutable to keep its current note in a capsule
    the operator restages each round, sidestepping discovery entirely.
    (b) is likely the cleaner answer and worth prototyping first.
+
+**UPDATE (2026-07-13):** the discovery question is resolved differently —
+see ch. 17 §6. PSS notes are NOT delivered/discovered at all; inclusion is
+proved by a hash-only kernel read request (`assert_note_exists`, option c),
+not by note discovery. The §6 primitives replace the deliver/get_note path.
 5. Assertions: the honest-proof rounds succeed; a TAMPERED proof round
    is REJECTED by the contract (the definitive in-circuit-verification
    soundness gate TXE cannot provide).

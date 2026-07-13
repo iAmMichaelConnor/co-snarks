@@ -407,6 +407,12 @@ source-built oracle remain valid.
 
 ## 5.1b contract design (fixed 2026-07-13; implement exactly this)
 
+> ⚠ **REVISION PROPOSED (2026-07-13, ch. 17 §6):** the state-variable
+> design below (PrivateShared{Immutable,Mutable}) is being reconsidered in
+> favour of composable PSS primitives (read via kernel `assert_note_exists`,
+> nullify with the MPC-supplied nullifier, emit, verify) + a shared
+> note-hash-composition library. Read ch. 17 §6 before implementing 5.1b.
+
 **Files**: `contract/src/{main,taceo_note,private_shared_state}.nr`;
 deps = path deps to ~/ap-next aztec-nr `aztec` + `uint-note` (trees ≡
 tag). `taceo_note.nr` DONE (canonical-hash carrier; derive(Packable)
