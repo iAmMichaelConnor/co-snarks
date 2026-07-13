@@ -404,3 +404,81 @@ source-built oracle remain valid.
   verify step).
 - Ch. 13 §9 — soundness lens; B4's negatives are the contract-side
   analogue.
+
+## 5.1b contract design (fixed 2026-07-13; implement exactly this)
+
+**Files**: `contract/src/{main,taceo_note,private_shared_state}.nr`;
+deps = path deps to ~/ap-next aztec-nr `aztec` + `uint-note` (trees ≡
+tag). `taceo_note.nr` DONE (canonical-hash carrier; derive(Packable)
+kills the old pack/unpack bugs; nullifier_unconstrained → Option::none).
+
+**PSS state vars** (`private_shared_state.nr`, fork base =
+`single_private_mutable.nr:95-215` — initialize copies verbatim incl.
+contract-keys init nullifier; only the read/replace paths diverge):
+- `PrivateSharedImmutable<Note>`: `initialize(note, owner) ->
+  NoteMessage` (callers sink it — nothing to deliver for PSS);
+  `get_note() -> ConfirmedNote<Note>` (read request WITHOUT nullifying;
+  exposes `.note.note_hash` for inner-hash asserts and
+  `.proven_note_hash` for nhfn asserts).
+- `PrivateSharedMutable<Note>`: `initialize` as above;
+  `replace_with_mpc_nullifier(new_note, nullifier, owner) ->
+  (old_note, old_proven_note_hash)` = get_note → mirror CURRENT
+  `destroy_note` (lifecycle.nr:77-97) but push the EXTERNAL nullifier
+  via `push_nullifier_for_note_hash` → `create_note` the replacement.
+  NOTE: mirror destroy_note's settled-vs-pending note_hash second arg
+  exactly.
+
+**Game contract** (all rounds; player + operator are separate actors):
+- Storage: `config: PublicImmutable<Config>` {operator, player,
+  init/open/finish vk_hashes, mpc_owner (the Field the circuits use as
+  note owner)}; `mpc_npk_m_hash: PublicImmutable<Field>` (set in
+  start_game — arrives with the init proof); `seed:
+  PrivateSharedImmutable<TACEONote>`; `game_state:
+  PrivateSharedMutable<TACEONote>`; `chosen_door, switch_choice:
+  SinglePrivateImmutable<UintNote>` (contract-wide, owner = player —
+  keeps the storage slot literal so the circuits' uint_note_hash
+  matches); `game_phase: PublicMutable<u8>` (READ+ASSERTED every round —
+  F8 fix); `opened_door, win: PublicMutable` (announced values).
+- Constructor `init_game(operator, player, vk_hashes, mpc_owner,
+  seed_note_hash, proof+vk via capsules)`: operator-only; VERIFIES the
+  taceo_commit proof (publics: [seed_slot, mpc_owner, seed_note_hash]);
+  initializes `seed`; phase → SEED_SET.
+- `start_game`: operator; verifies init-circuit proof (publics:
+  [seed_slot, mpc_owner, seed_note_hash(read from seed note), state_slot,
+  state_note_hash, npk_m_hash]); asserts seed note via
+  `seed.get_note()`; initializes `game_state`; stores npk_m_hash;
+  phase → STARTED.
+- `choose_door(door)`: player-only; phase STARTED; `chosen_door.
+  initialize(UintNote{value}, player).deliver_to(operator, onchain_
+  unconstrained)` — **the operator must discover this note** (their PXE
+  needs it so open_door's read request works; the door is public in the
+  physical game so this leaks nothing). phase → CHOSEN.
+- `open_door(...)`: operator; phase CHOSEN; verifies open_door proof;
+  asserts: nhfn public == game_state replace's old_proven_note_hash;
+  door_note_hash public == chosen_door.get_note() inner hash; door
+  public == that note's value; npk_m_hash public == stored; owner/slots/
+  contract_address publics == config/storage constants;
+  `game_state.replace_with_mpc_nullifier(TACEONote{new_hash},
+  nullifier)`; store opened_door publicly; phase → OPENED.
+- `switch_door(switch)`: player-only; phase OPENED; like choose_door.
+  phase → SWITCHED.
+- `finish_game(...)`: operator; phase SWITCHED; verifies finish proof
+  (asserts mirror open_door but with switch note + win output); nullify
+  final game_state (replace with... push nullifier WITHOUT replacement —
+  add `nullify_with_mpc_nullifier(nullifier)` to PrivateSharedMutable);
+  store win publicly; phase → DONE.
+- Proof plumbing every round: `vk: [Field; 115]` + `proof: [Field; 458]`
+  from capsules (CapsuleArray or capsules::load at distinct named
+  slots); `assert(poseidon2_hash(vk) == stored vk_hash)` — CHECK bb's
+  vk_hash convention at build time; `verify_proof_with_type(vk, proof,
+  publics, vk_hash, 6 /*HONK_ZK, unexported*/)`. Public-input ORDER =
+  ACIR: pub params in ABI order, then return tuple (see each circuit's
+  main signature).
+- Access control: `assert_eq(self.msg_sender(), config.operator/player)`
+  per function (F9 fix); phases assert + advance via
+  `self.enqueue_self._set_phase(...)` `#[internal("public")]`.
+
+**Write-up deliverable (Mike)**: after TXE tests pass, produce the
+review write-up per PROGRESS 2026-07-13 (why PSS abstractions exist, how
+these work, stock-vs-custom choices justified, learning-curve critique +
+improvement proposals).
