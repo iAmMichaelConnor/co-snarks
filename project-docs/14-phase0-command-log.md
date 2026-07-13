@@ -1176,3 +1176,20 @@ log: PROGRESS session 6. Commands + failures only here.*
 - Repeatable gate: `mpc/e2e.sh` — full clean-room rerun PASS (~40 s).
 - Commits: monty-hall `455893f` (all of A0–A4); co-snarks docs
   `d8970588`, `4a7d5550`.
+
+## 25. Quality review + batch-1 fixes (2026-07-13, PM)
+
+- Review agents: Rust workspace + Noir-vs-ap-next (Sonnet Explore, read
+  only); HackMD fetched. Reports distilled → ch. 17.
+- Noir F0 repro basis: agent built a scratch harness path-depending on
+  the unmodified libs; `3-2-2` u8 underflow panics at game_state.nr:78;
+  seed sweep showed ~1/6 of (seed,door=1) runs opened the winning door.
+  Fix verified: `nargo test` 11/11 in monty_hall (new exhaustive tests
+  fail against the old code by construction).
+- Rust fixes: see ch. 17 §1. `cargo build --release` green; `cargo
+  clippy` 0 warnings; gates `noir_logic/check.sh` PASS and `mpc/e2e.sh`
+  PASS after restaging artifacts (init/commit circuits semantically
+  unchanged by the game fix — choose/switch only — but restaged anyway).
+- Gotcha: axum routes moved GET→POST → any manual curl now needs `-X
+  POST`; e2e.sh updated, asserts the new "proof verified" log line and
+  502-signalling is now the real gate (the old grep workaround removed).

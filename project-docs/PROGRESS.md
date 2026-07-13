@@ -731,3 +731,33 @@ Mike: "proceed as you think best" + fold aztec-nr syntax survey into ch. 16
   also uncommitted. Next: commit on Mike's word; then A5 (open_door
   round) or 5.1b (contract port) — A5 recommended first (completes the
   Rust pattern before the contract consumes it).
+
+## Session 6 (continued) — 2026-07-13 — quality review + batch-1 fixes; ch. 17
+
+Mike: commit; review monty-hall work + original code (tests/quality/docs/
+refactors), Noir vs aztec-nr idioms + noir-contracts; read the HackMD
+design write-up; keep PROGRESS + command log current; NO TS until Rust is
+solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
+
+- Two review agents (Rust workspace; Noir vs ap-next idioms) + HackMD
+  read. Synthesis = **ch. 17** (statuses in place).
+- **Headline find (Noir review, confirmed): the ORIGINAL game logic was
+  broken** — `choose_door` with winning==chosen==1 opened the winning
+  door ~half the time, and winning==chosen==2 PANICKED (u8 underflow in
+  the eagerly-evaluated discarded branch). All original tests used seed
+  123 = winning door 0. FIXED + exhaustive (winning,chosen) sweep,
+  coin-flip coverage, 3 state-machine negatives (11 tests green).
+- **Rust batch-1 fixed** (ch. 17 §1): verify-failure now 502 (was
+  log-only 200); error taxonomy + no handler unwraps; VK parsed at
+  startup; GET→POST + TraceLayer; per-node session lock (EADDRINUSE
+  race) + run_mpc_session dedupe + distinct gRPC statuses; singleton-row
+  atomic upserts (new migration) + fallible DB deser; CryptoDevice/key-
+  phrase deleted (explicit rustls-provider install for sqlx); ABI
+  param-name fail-fast; config parsed once; timing-log delta bug; orphan
+  orchestrator/data/ deleted; compose image pinned; clippy 0 warnings.
+- Gates re-run: check.sh PASS + e2e.sh PASS (fresh artifacts staged).
+- Open backlog (ch. 17 §2–§5): LocalNetwork in-process 3-party tests
+  (top lever), pss_utils crypto tests+KATs, stale "Aztec compatible"
+  hash claim (DOM_SEP__* now), to_address_point sqrt panic (#8970),
+  transport security (TLS config silently ignored!), contract F7–F11
+  (unpack 2nd bug, write-only game_phase, no access control) → 5.1b.
