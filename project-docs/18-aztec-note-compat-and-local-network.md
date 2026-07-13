@@ -198,6 +198,19 @@ aztec-kit's `setupLocalNetwork` fixture + `Capsule` usage in
 see ch. 17 §6. PSS notes are NOT delivered/discovered at all; inclusion is
 proved by a hash-only kernel read request (`assert_note_exists`, option c),
 not by note discovery. The §6 primitives replace the deliver/get_note path.
+
+**UPDATE 2 (2026-07-13, session 9 — this section's plan is largely
+DONE-in-TXE):** the primitives landed and hash-only settled reads were
+verified to work in TXE (resolved via `node.findLeavesIndexes` on the
+note-hash tree, no note store involved — code path:
+`contract_function_simulator.ts::verifyReadRequests`). The FULL game now
+runs in TXE (10/10 tests, incl. tamper-adjacent negatives; ch. 17 §6.7).
+Step 4 below is therefore VOID — no discovery workaround is needed. The
+remaining e2e (real proving) simplifies to: TS driver fetches each
+round's tx effects from the node (first nullifier + note-hash leaves,
+the same data the TXE tests read via `get_last_tx_effects`) and passes
+leaves/tx-positions as function args. The definitive tamper-reject gate
+(step 5) still requires the local network with real proofs.
 5. Assertions: the honest-proof rounds succeed; a TAMPERED proof round
    is REJECTED by the contract (the definitive in-circuit-verification
    soundness gate TXE cannot provide).

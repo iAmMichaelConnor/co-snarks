@@ -170,11 +170,9 @@ finds were in the *original* code, not the modernization.*
 ## 6. DESIGN OPTION — generic PSS-note primitives + shared hashing library
 ### (proposed 2026-07-13 with Mike; supersedes the §"learning curve" proposals in the write-up)
 
-*Status: PROPOSED, not built. This is the direction to evaluate when we
-next touch `private_shared_state.nr`. It reshapes the contract-side PSS
-abstraction from a state-variable fork into a small set of composable
-primitives, driven by three realisations from the TXE work + Mike's
-review. Written to be self-contained for a future session.*
+*Status: **BUILT 2026-07-13** (session 9, on Mike's review directives —
+see §6.7 for the as-built record and answers to §6.6). Original proposal
+kept below for the rationale.*
 
 ### 6.1 The three realisations that motivate it
 
@@ -355,3 +353,86 @@ contracts. Current state and the gap:
    that reads/emits more than one note (not exercised by monty-hall,
    which is 1-old/1-new per round, but the generic pattern must support
    it — this is the whole reason to prefer primitives over the mega-helper).
+
+### 6.7 AS BUILT (2026-07-13, session 9) + §6.6 answers
+
+Landed on `mc/modernize` per Mike's review directives (which confirmed
+this section's direction). What exists now:
+
+- **Contract** (`contract/montyhall/src/main.nr`): the round functions
+  call the raw context primitives DIRECTLY — `push_note_hash` (emit),
+  `assert_note_exists(NoteExistenceRequest::for_settled(leaf))` (read),
+  `push_nullifier_for_note_hash(nullifier, 0)` (nullify), and the
+  siloing-chain leaf composition via `aztec::protocol::hash` inline in
+  start_game. (A first pass wrapped these as free functions in a pss.nr;
+  Mike's follow-up review judged even those one-liners unnecessary
+  indirection — inlined and deleted.) TACEONote and the
+  PrivateShared{Immutable,Mutable} fork are DELETED. Old-state leaves
+  arrive as function arguments; binding = the same values sit in the
+  proof's public-inputs array.
+- **Circuits**: `PrivateState`/`PrivateStateTrait` deleted; round
+  circuits inline `aztec_note` calls. NO recomputed hash is a parameter
+  any more — `monty_hall_init` outputs `seed_note_hash` (was a pub
+  input); `open_door`/`finish` derive the settled leaf (nhfn) from the
+  preimage + tx-position witnesses and output it. `aztec_note` slimmed
+  (dead `uint_note_hash`/`initialization_nullifier`/`commit.nr` removed;
+  `npk_m_hash` now uses protocol `hash_public_key`; sk decomposition =
+  stdlib `EmbeddedCurveScalar::from_field`, closing §3.5-F4). The
+  `TACEO_store` oracle moved to `pss_utils::mpc_store`. A commented-out
+  state-var-style wrapper sketch + assessment lives in
+  `pss_utils/src/state_var_style.nr` (Mike's "show both versions" ask).
+- **§6.6 Q1 ANSWERED — YES** (code-verified in ap-next + empirically in
+  TXE): settled note-hash read requests are resolved by direct
+  note-hash-tree lookup (`node.findLeavesIndexes` /
+  `getNoteHashMembershipWitness`), keyed on the leaf VALUE — no note
+  store, no preimage, no discovery. Option (c) fully removes the
+  `add_note_hash` need. **The FULL game runs green in TXE** (10/10,
+  incl. `full_game_flow` + negatives: wrong seed tx-position → read
+  request fails; replayed spent state → duplicate nullifier rejected;
+  operator lying about the player's door → public bind assert).
+- **Doc-conformance audit (aztec-nr docs + API ref, Mike's steer)**:
+  every primitive verified against documented usage. Fixed per docs:
+  nullify = `push_nullifier_for_note_hash(nullifier, 0)`
+  (THE documented note-nullifier call for settled notes; NOT
+  push_nullifier_unsafe), and zero-
+  address role rejection in init_game (direct public entrypoints see
+  `msg_sender == 0`). Verified fine: raw `push_note_hash` (documented
+  low-level primitive, "open an issue to describe your use case" is its
+  only steer), `for_settled` read requests (16/call, 64/tx budget;
+  anchor-block semantics), the enqueued bind-assert idiom (call_types.md
+  names it), capsules (data validated in-circuit as the docs require).
+- **Q2 (shared hashing lib)**: unchanged — pss_utils::aztec_note remains
+  our side's single definition; upstreaming still open.
+- **Q3 (soundness write-up)**: still REQUIRED, not yet written. The
+  in-code comments now carry the informal argument (deterministic
+  nullifiers make replay self-defeating; siloing makes forged leaves
+  unreachable; phase machine orders rounds; npk_m_hash pins the
+  identity) — formalise malicious-minority vs full-collusion cases.
+- **Q4 (multiplicity)**: primitives are free functions — N/M/K calls
+  compose trivially; still not exercised by monty-hall.
+- **Player door/switch: PRIVATE `ChoiceNote`s (final, session 9).** An
+  intermediate iteration made them public storage on the mistaken basis
+  that "they're in the proof's public inputs anyway" — **Mike's
+  correction: co-SNARK public inputs are NOT chain-public** (the proof
+  is verified inside a private function; its publics exist only in the
+  executing party's simulation). Final design: owner = player via
+  `Owned<PrivateImmutable<ChoiceNote>>` (NOT `SinglePrivate*`, whose
+  init nullifier derives from the CONTRACT's keys — documented
+  requirement, our contract is keyless; this was a latent bug in the
+  previous port, never caught because choose_door's happy path had
+  never executed), `deliver_to(operator)`, host rounds read via
+  `get_note` (value → proof publics; the read request is the binding).
+  Getting this to actually work surfaced a REAL upstream defect,
+  written up maintainer-ready in monty-hall-aztec
+  `upstream-issues/third-party-note-delivery-is-silently-broken.md`:
+  note DISCOVERY refuses to store any note whose
+  `compute_nullifier_unconstrained` it cannot evaluate
+  (nonce_discovery.nr "skipping PXE insertion", TODO Linear F-265), so
+  third-party delivery of stock `#[note]` notes either aborts the
+  recipient's sync ("Key validation request denied", when the owner's
+  public keys are known — always in TXE) or silently drops the note →
+  later generic "Failed to get a note". Workaround: ChoiceNote's
+  nullifier is KEYLESS (`P2(DOM_SEP__NOTE_NULLIFIER, nhfn)`, computable
+  by any note-holder, never pushed — sound because the note is
+  immutable). With it, real delivery + tagged-log discovery works in
+  TXE (default tagging strategy; no additional-scopes emulation).

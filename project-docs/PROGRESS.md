@@ -899,3 +899,89 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
   usage; common/setupLocalNetwork fixture).
 - NEXT: the local-network e2e TS driver (real proving + tamper-reject =
   the definitive soundness gate); resolve the PSS-discovery design fork.
+
+## Session 9 — 2026-07-13 — Mike's refactor review executed: ch.17 §6 primitives BUILT; full game green in TXE
+
+Mike's review comments on the monty-hall code (better comments; no
+recalculated-hash params; kill PrivateState/TACEONote; existence proofs
+via kernel read requests; audit aztec_note helpers; README) — all
+landed on `mc/modernize` (uncommitted). They confirmed ch.17 §6, which
+is now AS BUILT (full record: ch.17 §6.7; ch.16 5.1b banner has the
+as-built public-input shapes; ch.18 §6 updated).
+
+- **Circuits**: PrivateState/PrivateStateTrait deleted, aztec_note calls
+  inlined in the 4 round mains; recomputed hashes are now OUTPUTS not
+  params (init: seed_note_hash; open/finish: nhfn); TACEO_store oracle →
+  pss_utils::mpc_store; dead code deleted (commit.nr, uint_note_hash,
+  initialization_nullifier); npk_m_hash via protocol hash_public_key;
+  sk decomposition via stdlib EmbeddedCurveScalar::from_field (closes
+  ch.17 F4); commented-out state-var-style wrapper sketch + assessment
+  in pss_utils/src/state_var_style.nr per Mike's "both versions" ask.
+  Gates: 4 circuits compile, 42 lib tests green (KATs unchanged →
+  formulas byte-identical), check.sh PASS (bb prove/verify + tamper).
+- **Contract**: raw context primitives inlined in the round functions
+  (push_note_hash / assert_note_exists(for_settled) /
+  push_nullifier_for_note_hash; Mike follow-up: no pss.nr wrappers);
+  TACEONote + PrivateShared* fork deleted; old-state leaves are function
+  args bound via proof publics; hash-only `assert_note_exists` reads.
+  **Player door/switch: private ChoiceNotes** (Mike's correction of an
+  intermediate public-storage iteration — co-SNARK publics are NOT
+  chain-public; the proof verifies inside a private function, so its
+  public inputs exist only in the executing party's simulation). Owner =
+  player via Owned<PrivateImmutable> (NOT SinglePrivate*, whose init
+  nullifier needs CONTRACT keys — documented; latent bug in the previous
+  port), deliver_to(operator), host rounds read via get_note. Getting
+  that to work surfaced a REAL upstream defect: note DISCOVERY skips any
+  note whose unconstrained nullifier it can't compute ("skipping PXE
+  insertion", Linear F-265) → third-party deliver_to of stock #[note]
+  notes is silently broken (or aborts sync with "Key validation request
+  denied" when the owner's public keys are known — always in TXE).
+  Maintainer-ready write-up (Mike's ask): monty-hall repo
+  upstream-issues/third-party-note-delivery-is-silently-broken.md.
+  Workaround: ChoiceNote's nullifier is KEYLESS
+  (P2(DOM_SEP__NOTE_NULLIFIER, nhfn); never pushed; sound for an
+  immutable note) — with it, REAL delivery + tagged-log discovery works
+  in TXE under the default tagging strategy.
+- **KEY RESULT: full game green in TXE (10/10)** — first-ever full-flow
+  run, incl. real player-note delivery/discovery. Hash-only settled
+  reads resolve via note-hash-tree lookup
+  (verified in ap-next TS + empirically); ch.17 §6.6 Q1 = YES, the
+  add_note_hash gap is gone. New negatives: wrong seed tx-position
+  (read request fails), replayed spent state (duplicate nullifier),
+  open_door before any door was chosen (note read fails).
+- **Repo hygiene**: real README (stage ordering table, why init is
+  round 2, layout, trust model); stale target-residue dirs deleted
+  (monty_hall_choose/switch/test, dh_test); "I have" typo (stray IDE
+  input) fixed; uint_note deps dropped.
+- **A5c spec updated** (ch.16 banner): node/orchestrator were already
+  pre-A5a-stale; must now target the as-built ABIs + carry deployment
+  context + persist mpc_store shares.
+- **Design audited against the aztec-nr docs/API reference** (Mike's
+  steer; agent over ap-next docs + source doc-comments). Two fixes
+  applied: nullify_pss_note now uses the documented note-nullifier call
+  `push_nullifier_for_note_hash(nullifier, 0)` (docs: never
+  push_nullifier_unsafe for note nullifiers; the notify oracle is safe
+  for untracked notes); init_game rejects zero operator/player (direct
+  public-entrypoint invocation has msg_sender==0 — visibility.md danger
+  note — so the guards must fail closed). Confirmed fine: raw
+  push_note_hash (documented low-level primitive; kernel silos+
+  uniquifies), hash-only for_settled reads (1 of 16-per-call budget,
+  anchor-block semantics), the enqueued public bind-assert (the
+  documented "check validity condition on public state" idiom with tx
+  atomicity), capsule usage (validated in-circuit per the docs warning),
+  and utility getters for off-chain public reads.
+- **Nonce/naming review (Mike)**: circuits + start_game now take ONE
+  protocol `note_nonce` (not first_nullifier+index; self-verifying via
+  the read request; for PSS notes it must be a caller hint since no PXE
+  ever stores these notes); all "nhfn"/leaf naming replaced with
+  aztec-nr vocabulary (siloed_note_hash / unique_note_hash /
+  note_hash_for_nullification); aztec_note::unique_siloed_note_hash →
+  unique_note_hash(contract_address, note_hash, note_nonce), mirroring
+  compute_note_existence_request's settled branch (not callable
+  directly — it takes a HintedNote, which needs a preimage). Fixtures
+  regenerated; check.sh PASS; TXE 10/10.
+- NEXT: A5c (node/orchestrator all rounds), then the TS local-network
+  e2e with real proving + tamper negative (ch.18 §6, now simpler — no
+  discovery workaround needed). Ch.17 §6.6 Q3 soundness write-up still
+  owed; session-7 write-up artifact describes the OLD PrivateShared*
+  design and needs refreshing after Mike reviews this rework.

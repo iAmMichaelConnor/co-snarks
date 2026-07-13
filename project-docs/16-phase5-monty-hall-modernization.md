@@ -407,11 +407,40 @@ source-built oracle remain valid.
 
 ## 5.1b contract design (fixed 2026-07-13; implement exactly this)
 
-> ⚠ **REVISION PROPOSED (2026-07-13, ch. 17 §6):** the state-variable
-> design below (PrivateShared{Immutable,Mutable}) is being reconsidered in
-> favour of composable PSS primitives (read via kernel `assert_note_exists`,
-> nullify with the MPC-supplied nullifier, emit, verify) + a shared
-> note-hash-composition library. Read ch. 17 §6 before implementing 5.1b.
+> ⚠ **SUPERSEDED AS BUILT (2026-07-13, session 9):** the ch. 17 §6
+> primitives rework LANDED — TACEONote + PrivateShared{Immutable,
+> Mutable} are gone (see ch. 17 §6.7 for the as-built record, incl. the
+> player-choice ChoiceNote design and the new circuit public-input
+> shapes below). The design below is kept as the historical record of
+> the first port only. Current source of truth = the code
+> (`contract/montyhall/src/{main,proof_data}.nr`) + ch. 17 §6.7.
+>
+> **Circuit public inputs as built (ACIR order: pub params, then returns):**
+> - `taceo_commit`: `[storage_slot, owner, note_hash]`
+> - `monty_hall_init`: `[seed_slot, owner, state_slot, seed_note_hash,
+>   state_note_hash, npk_m_hash]` (seed_note_hash is now an OUTPUT)
+> - `monty_hall_open_door`: `[door, owner, state_slot, contract_address,
+>   old_state_unique_note_hash, nullifier, new_state_note_hash,
+>   opened_door, npk_m_hash]`
+> - `monty_hall_finish`: `[switch, owner, state_slot, contract_address,
+>   state_unique_note_hash, nullifier, win, npk_m_hash]`
+>
+> Settled-note location (Mike's naming/API review, session 9): circuits
+> and contract take ONE `note_nonce` (protocol vocabulary; the value a
+> PXE stores alongside discovered notes) instead of
+> (first_nullifier_in_tx, note_index_in_tx) — it is a self-verifying
+> hint (wrong nonce → leaf not in tree → read request fails). "nhfn"
+> naming is gone: the settled leaf is called the unique note hash
+> everywhere, matching compute_note_existence_request's settled branch,
+> which the contract's seed read mirrors line-for-line.
+>
+> **A5c impact (still open):** mpc-node/orchestrator remain at the
+> ROUND-1/2-only, pre-A5a ABI expectations (`check_abi_parameters`
+> wants `["x","meta"]` / `["seed","seed_r","seed_c","out_r"]`) — they
+> were already stale before this session; A5c must target the shapes
+> above, carry the deployment context (slots, owner, contract address,
+> tx positions) in the gRPC requests, and persist the game-state shares
+> handed over by the `pss_utils::mpc_store` (`TACEO_store`) oracle.
 
 **Files**: `contract/src/{main,taceo_note,private_shared_state}.nr`;
 deps = path deps to ~/ap-next aztec-nr `aztec` + `uint-note` (trees ≡
