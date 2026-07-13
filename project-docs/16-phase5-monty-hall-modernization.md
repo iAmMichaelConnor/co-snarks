@@ -211,13 +211,25 @@ A5 open.** AS-BUILT notes inline below.
   flipped byte → exit 1. Timings (loopback, 32-core box, 3 nodes
   sharing): witness extension 0.85 s, proving key 0.15 s, ZK prove
   1.74 s per party for `monty_hall_init`.
-- **A5 — the `open_door` state-transition round (Q1 scope, §8).** New
-  MPC circuit (previous-state commitment opening + transition + new
-  commitment + MPC-computed nullifier + nullifying-key relation — the
-  contract's `open_door` doc-comment is the spec; `monty_hall_choose`/
-  `monty_hall_switch` circuits are starting points), node endpoint
-  (replaces the `reveal_door` `todo!()`), orchestrator route, DB state.
-  Same gate battery as A4. `choose`/`switch`/`finish` stay out of scope.
+- **A5 — ⚠ SCOPE EXPANDED (Mike, 2026-07-13 PM; supersedes Q1): ALL
+  game rounds**, not just one `open_door` transition. Work items:
+  - **A5a — DOM_SEP rework FIRST** (ch. 17 §3.3 option (b), Mike):
+    rebuild `pss_utils` commit/nullifier to be bit-identical to current
+    aztec-nr note hashing (`DOM_SEP__*` + real preimage shapes — exact
+    formulas from the 2026-07-13 aztec-nr deep-dive, results below in
+    §5.0b once landed), with KATs pinning every chain-visible value +
+    the missing pss_utils test coverage (ch. 17 §3.1). Circuits and
+    contract must change together — this is why A5a precedes both.
+  - **A5b — full round circuits**: `open_door` (read player's chosen
+    door + old game state via commitment opening → transition → new
+    commitment + MPC nullifier + nullifying-key relation) and
+    `finish_game` (switch/stick → win/lose + nullifier). The player's
+    `choose`/`switch` inputs must be bound to their REAL on-chain
+    UintNote commitments (ch. 17 F3) — reproduce the UintNote hash
+    in-circuit.
+  - **A5c — node endpoints + orchestrator routes + DB state for every
+    round** (replaces all `todo!()`s); same gate battery as A4 per
+    round, plus a full-game LocalNetwork cargo test.
 
 ## 5. Work items — 5.1b (contract to v5-next aztec-nr)
 
@@ -282,14 +294,22 @@ v5-next @ `a455b9a943e` ≡ the tag for aztec-nr; file:line cites are into
   First-ever negative coverage on the contract path (soundness lens,
   ch. 13 §9: the verifier call sites are the soundness surface).
 
-## 6. Work items — 5.1c (on-chain wiring; scope with Mike)
+## 6. Work items — 5.1c (on-chain wiring) — ⚠ PULLED INTO SCOPE
+(Mike, 2026-07-13 PM; answers Q3 as option (a)+)
 
-The demo never implemented submission. Options when we get here:
-(a) minimal TS glue (aztec.js) just to drive sandbox e2e — accepting a
-little TS before 5.1d; (b) defer any on-chain run until the 5.1d TS
-orchestrator exists and drive it from there. Leaning (a) — the sandbox
-e2e is the real proof the constants/capsule work — but this is a
-scope call for Mike at the time (open question Q3, §8).
+The e2e target is now: **the ENTIRE game played over a real local Aztec
+network** — sandbox pinned at `v5.0.0-nightly.20260708`, contract
+deployed, player + operator as separate accounts, capsules injected for
+proof/VK delivery, all rounds driven programmatically (minimal TS/aztec.js
+glue is acceptable before the 5.1d full TS port; how-to being extracted
+from ~/ap-next docs — local-network runbook to be recorded HERE when
+worked out). TXE tests (B4) remain the fast contract-level tier; the
+sandbox e2e is the final integration gate.
+
+Also in scope now (Mike): **real transport security** (ch. 17 §2.3
+option (b)) — mpc-net `TlsNetwork` with correctly-shaped `tls` config
+for the node mesh + tonic TLS/auth on the gRPC plane + regenerated (not
+committed) dev certs.
 
 ## 7. Work items — 5.1d (TypeScript orchestration port; after Rust works)
 

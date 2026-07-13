@@ -787,3 +787,29 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
 - NEXT (continuation): update ch.16 (A5→full-game plan, fold 5.1b/5.1c),
   ch.17 statuses; then Noir pss_utils tests + DOM_SEP rework; contract
   port; all-rounds circuits/endpoints; TLS; Aztec local-network e2e.
+
+## Session 7 — 2026-07-13 — TLS landed; note-compat + local-network specs (ch. 18)
+
+- ch. 16 restructured for the expanded scope (A5a/A5b/A5c; 5.1c pulled in).
+- prng+ae tests w/ KATs; dead SAFE-commit helper deleted (mh `06d3c26`).
+- **TLS batch DONE (mh `70154c6`)**: TlsNetwork mesh (pinned certs) via
+  NodeNetwork enum; tonic mTLS on gRPC (all-or-nothing flags); committed
+  key material deleted+gitignored; scripts/gen_dev_certs.sh (rcgen mesh
+  DER + openssl dev-CA PEM). Gotcha: BOTH binaries need an explicit
+  rustls CryptoProvider install (orchestrator panicked without). e2e.sh
+  PASS fully secured; cargo tests 7/7; clippy 0.
+- Mike Q answered: e2e.sh = full process separation (real sockets/TLS/
+  separate DBs; only loopback+shared-CPU are unreal); cargo-test tier is
+  deliberately in-process for speed.
+- **Two deep-dives distilled into ch. 18**: (1) exact DOM_SEP formulas
+  for bit-identical notes/nullifiers (decision: pss_utils depends on the
+  REAL protocol_types crate at our tag — no reimplementation); external
+  circuits reproduce only the INNER note hash; no-delivery notes are
+  legal (push happens before NoteMessage); nhk_app = plain formula over
+  MPC-held sk_m; (2) local-network runbook (`aztec start --local-network`,
+  no sandbox; capsules are aztec.js-ONLY → TS driver required; TXE via
+  `aztec test`; ⚠ verify_proof_with_type is a NO-OP in TXE/witness-gen
+  AND local network defaults realProofs:false → the e2e MUST enable real
+  proving + include a tampered-proof-rejected negative).
+- NEXT: implement A5a (aztec_note.nr on protocol_types + PrivateState
+  rework + circuits + node/protos), then A5b full-game circuits.
