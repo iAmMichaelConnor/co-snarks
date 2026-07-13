@@ -838,3 +838,32 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
   execute_circuit_rep3 returns the PssStore; store shares in Postgres;
   requests carry deployment context), then TS driver + local-network e2e
   (ch.18 §5; realProofs caveat).
+
+## Session 7 (continued) — 2026-07-13 — contract port DONE; write-up published
+
+- **Contract ported to v5-next aztec-nr (mh `50692e2`)**: new
+  private_shared_state.nr with PrivateSharedImmutable/PrivateSharedMutable
+  (fork of SinglePrivateMutable; reads return ConfirmedNote, mutation takes
+  MPC-proven nullifier as input via push_nullifier_for_note_hash);
+  TACEONote = #[derive(Packable)] hash-carrier (kills pack/unpack bugs);
+  ALL six rounds; enforced phase machine + msg_sender access control;
+  keyed capsules; imported proof constants. Player door/switch = stock
+  SinglePrivateImmutable<UintNote>, bound to proof by value comparison
+  (F3, simpler than in-circuit hash binding). Compiles clean.
+- Contract design recorded in ch.16 §5.1b before implementing.
+- **Write-up published** (Mike's deliverable): artifact
+  https://claude.ai/code/artifact/28061f43-5114-490d-8ed4-1c57790759df —
+  why PSS abstractions exist (blind executor), how they work, stock-vs-
+  custom storage table, rest-of-port summary, learning-curve critique +
+  4 improvement proposals (verify_pss_transition helper; typed
+  public-input builder; drop the NoteMessage sink; PrivateSharedSet).
+- **aztec toolchain INSTALLED + RUNS**: npm @aztec/aztec@5.0.0-nightly.
+  20260708 into scratchpad/aztec-cli/pkg; `aztec --version` prints the
+  pinned version (no docker needed for that). TXE/local-network e2e now
+  reachable next session (may need docker for the network; `aztec test`
+  starts a TXE server).
+- NEXT: TXE contract tests (assert flow/phase/access-control — NOT proof
+  validity, which is a no-op in TXE per ch.18); A5c node/orchestrator for
+  all rounds (persist state shares between rounds via execute_circuit_rep3
+  PssStore); then TS driver + real-proving local-network e2e with a
+  tampered-proof-rejected negative (the definitive soundness gate).
