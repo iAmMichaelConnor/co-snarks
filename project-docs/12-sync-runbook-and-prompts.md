@@ -138,12 +138,30 @@ flavors. During a sync:
 - When the **inner circuit** (`inner_for_recursion/src/main.nr`) changes.
 - When `PUBLIC_INPUTS_SIZE` / pairing-point accounting changes (re-check the
   `public_inputs: pub [Field; K]` count in `recursion*/src/main.nr`).
-- **NOT per iteration.** Recursion is deliberately OUT of the fast inner loop
-  (`fast-check.sh` never touches it; the recursion cargo tests are
-  `#[ignore]`d; recursion only runs in `compare.sh`'s `TEST_SLOWER_CIRCUITS`
-  set / the `--full` gate). Regenerating on every edit would wreck iteration
-  speed for no benefit — the non-recursion `plain::poseidon` KAT already
-  guards the shared proof format.
+- **NOT per iteration.** Recursion PROVING is deliberately OUT of the fast
+  inner loop (`fast-check.sh` never touches it; the recursion prove/verify
+  cargo tests are `#[ignore]`d; proving only runs in `compare.sh`'s
+  `TEST_SLOWER_CIRCUITS` set / the `--full` gate). Regenerating on every
+  edit would wreck iteration speed for no benefit — the non-recursion
+  `plain::poseidon` KAT already guards the shared proof format. BUT (since
+  2026-07-09) the always-on `recursion{,_zk}_vk_kat` suite tests build the
+  recursion circuits and byte-compare their VKs vs committed bb bytes in
+  ~5 s total — stale vectors now fail fast instead of hiding.
+
+**⚠ The recursion vectors live in TWO places — regenerate BOTH.**
+`co-noir/co-noir/examples/test_vectors/recursion{,_zk}` (compare.sh set)
+AND `test_vectors/noir/recursion{,_zk}` (cargo-suite set; its compile.sh
+moves target→kat). The 2026-07-08 regen fixed only the examples copies;
+the suite copies kept the stale K=3 `main.nr` + beta.20 inner proof for a
+day (hidden by the `#[ignore]`s) until the vk_kat work hit the
+`ultra_builder.rs:223` panic (ch. 14 §23). After regenerating, also refresh
+the committed VK KATs (`kat/*_vk_with_pos` + PROVENANCE.txt) with
+`~/.bb-target-src/bb write_vk`.
+
+**⚠ plaindriver stack overflow on recursion_zk** (ch. 15 §1.11): proving
+`recursion_zk` with `plaindriver --zk` aborts with a stack overflow at the
+default 8 MiB stack; run it under `ulimit -s unlimited` (non-ZK recursion
+is fine).
 
 **How to regenerate (verified 2026-07-08, ch. 14 §20)** — from the
 `inner_for_recursion` dir, with the TARGET bb (`~/.bb-target-src/bb`):

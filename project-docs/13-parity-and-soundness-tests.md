@@ -35,6 +35,21 @@ self-verified, never `bb`-verified; (3) **almost no negative tests** —
 soundness is essentially untested; (4) no VK-byte parity assertion; (5) no
 property/fuzz coverage; (6) no MPC privacy check.
 
+**Status 2026-07-09:** (1)+(2) covered by the 2.7 sweep runs of
+`compare*.sh` against the source-built oracle (live bidirectional
+cross-verify incl. ZK); (3) partially closed — ch. 13 §3a set + verifier
+hardening + byte-level transcript-consumption sweep landed (§3a #8 SSIPA
+kernel-perturbation still deferred); **(4) CLOSED**: VK byte-KATs +
+`plain_test` assertions for the two KAT circuits (both hashers, both zk
+modes), always-on `recursion{,_zk}_vk_kat` tests, and `compare.sh` now
+byte-diffs `vk` vs `vk_plaindriver` for EVERY circuit. The recursion VK
+gap was not theoretical: closing it exposed and fixed seven co-builder
+gate-emission divergences, three of them soundness-relevant (PLAN 2.9,
+ch. 14 §23). NOTE on recursion parity criteria: recursion proof BYTES are
+prover-specific (random masking offset generator in `mask_points`), so
+proof byte-KATs are impossible there — VK byte-identity + 4-way
+cross-verification is the full-strength check.
+
 ## 2. Parity tests to add (co-noir ↔ real bb)
 Make the parity oracle a *live* `bb`, not just frozen bytes.
 
@@ -174,6 +189,12 @@ happy path.
    asserts byte-equality (non-ZK) or mutual verification (ZK). Run over many
    random witnesses per circuit. This turns bb into a live differential oracle
    and would catch essentially any parity regression automatically.
+   *Proven in anger 2026-07-09 (PLAN 2.9, ch. 14 §23)*: a deeper variant —
+   per-phase gate-count dumps, then per-row selector/wire dumps, patched
+   into scratch copies of both codebases — localized seven recursion-
+   verifier divergences to their emitting call sites. The instrumentation
+   recipe lives in ch. 14 §23's session artifacts and is cheap to re-stand
+   (bb `git archive` + dump patch; co-noir workspace copy + scratch driver).
 2. **Witness-extension differential**: run the ACVM/Brillig on random inputs in
    co-acvm vs stock Noir's ACVM (via nargo) and assert identical extended
    witnesses — catches opcode-semantics divergence (the co-acvm/co-brillig

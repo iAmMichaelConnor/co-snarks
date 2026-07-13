@@ -459,3 +459,25 @@ for the next sync):**
   sessions (2026-07-08, sessions 2–3) instead of 2–4 weeks — but 2.7
   (the full sweep + security regressions) is deliberately unfinished, and
   the estimate assumed unassisted engineering.
+
+✅ **POSTSCRIPT (2026-07-09, PLAN 2.9 — what the sync AND its green-up both
+missed; full record ch. 14 §23):** the in-circuit recursion verifier had
+SEVEN gate-emission divergences from bb that survived 2.1–2.7 undetected,
+because nothing byte-compared a recursion VK against bb — every recursion
+check was self-verify or same-key verify, and the KAT circuits never
+exercise the recursion-verifier expansion. Three were security issues in
+their own right (missing `mask_points` ∞-asserts guarding the ROM point
+tables; bigfield less-than top-limb bound 68 bits vs bb's 50; `compute_naf`
+top entry left unconstrained); four were pure order/off-by-one mismatches
+(ZK row-disabling once vs per-subrelation, gate-separator multiply operand
+order, `self_reduce` quotient-max, SmallSubgroupIPA claim-batching
+position). All found by differential gate instrumentation (per-phase counts
+→ per-row selector/wire dumps) and fixed to full VK byte-parity +
+bidirectional cross-verification. *Lessons for the next sync*: (1) a
+cross-key VK byte-diff per circuit — recursion included — is a mandatory
+gate, not an optional extra (now standing: `recursion{,_zk}_vk_kat` tests +
+compare.sh VK diff); (2) "verifies" is a weak oracle — byte-compare the
+artifacts; (3) the differential row-dump method (ch. 14 §23) is cheap to
+re-stand-up and localizes any future break to the emitting call in
+minutes; (4) test vectors that exist in two places (examples +
+test_vectors/noir) WILL drift apart — regen must cover both (ch. 12 §4a).

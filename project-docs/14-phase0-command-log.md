@@ -914,6 +914,15 @@ Prevention pointers added: ch. 12 §3 (two new gotchas: stale recursion
 vectors + gitignored artifacts) and ch. 12 §4a (regen procedure, WHEN-only).
 Committed: recgen fix `61100009`, merged to mc/update-co-noir `4b4a8f51`.
 
+**⚠ Addendum (2026-07-09): two of this section's conclusions were later
+qualified.** (1) The "cross-verify vs bb ✅" above was a SAME-KEY check —
+the true cross-key parity break it masked was found and fixed as PLAN 2.9
+(§23 below). (2) This regen fixed only the `examples/test_vectors` copies;
+the cargo suite's `test_vectors/noir/recursion{,_zk}` copies stayed stale
+until 2026-07-09 (§23; regen procedure updated in ch. 12 §4a to cover both
+locations). The core finding here — the self-verify failure was vectors,
+not verifier code — stands.
+
 ## 21. Overnight backlog run (2026-07-08 23:48 → 2026-07-09 ~00:32, ended at
 ## usage limit) — ch. 15 items closed + recursion VK parity break found
 

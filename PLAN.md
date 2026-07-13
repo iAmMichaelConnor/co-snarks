@@ -190,9 +190,9 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 - [x] 2.7 Green-up — DONE 2026-07-08 (session 3). Full sweep vs source-built
       oracle ~/.bb-target-src/bb: **all 31 non-recursion circuits PASS** plain
       + REP3 + cargo (603/603); recursion/recursion_zk fixed (stale vectors +
-      K count, ch.14 §20) and now self-verify (⚠ but see 2.9: the "bb
-      cross-verify" here was same-key only — true cross-key parity is
-      BROKEN for recursion); ≥4-party
+      K count, ch.14 §20) and now self-verify (note: the "bb cross-verify"
+      here was same-key only; the true cross-key parity break it hid was
+      found and RESOLVED as item 2.9); ≥4-party
       Shamir PASS (validates randomness accounting); ZK bidirectional
       cross-verify PASS; VK byte-identical; 410/458/115 invariants (now
       compile-time asserts). ch.13 §3a security regressions: #9 ROM/RAM +
@@ -222,8 +222,9 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 - [x] 2.10 VK byte-KATs — DONE 2026-07-09 (backlog §2.3/§4.3). bb VK bytes
       (source-built oracle) committed for add3u64+poseidon × both hashers
       with per-dir PROVENANCE.txt; plain_test asserts VK byte-parity in
-      both zk modes; flipped-byte tripwire validated. Recursion VK KAT
-      deferred to 2.9 (would be red today).
+      both zk modes; flipped-byte tripwire validated. Recursion VK KATs
+      were deferred to 2.9 and landed with its fix (always-on ~5 s
+      `recursion{,_zk}_vk_kat` tests).
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
 *Out of scope while the target is v5-next (verified: neither commit is in
@@ -262,10 +263,13 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       architecture mental-model + secret→location map is project-docs ch. 10.
 - [ ] 5.1 Modernize the monty-hall-aztec pattern to current aztec-nr/bb
       (constants: proof size 410/458, VK 115, vk-hash; capsule flow;
-      HONK_ZK=6 — see ch. 04 §5).
+      HONK_ZK=6 — see ch. 04 §5). Let's start with updating it in its current rust language, but then after that's all working, let's make a typescript implementation of all the orchestration logic, because that'll be preferred by people.
+      **[STARTED 2026-07-13 — Phase 5 begins here (Mike). Rust
+      modernization first; TS orchestration after it works. Workplan:
+      project-docs ch. 16.]**
 - [ ] 5.2 Design+build the user→MPC share submission channel (envelope
       encryption per node; TypeScript tooling; TACEO:Proof is the
-      commercial reference shape, ch. 02 §5.4).
+      commercial reference shape, ch. 02 §5.4), but if that's not open source, we should look at the ~/monty-hall-aztec repo for inspiration.
 - [ ] 5.3 (If needed per 1.1) blackbox build-out: ECDSA k1/r1, keccak —
       each in co-builder AND co-acvm.
 
