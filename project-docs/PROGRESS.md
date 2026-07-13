@@ -813,3 +813,28 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
   proving + include a tampered-proof-rejected negative).
 - NEXT: implement A5a (aztec_note.nr on protocol_types + PrivateState
   rework + circuits + node/protos), then A5b full-game circuits.
+
+## Session 7 (continued) — 2026-07-13 — A5a+A5b circuits DONE (mh `6f76591`)
+
+- aztec_note.nr (canonical formulas via real protocol_types path-dep);
+  private_state.nr rewritten (verify_and_nullify + npk identity); 45 lib
+  tests incl. negatives/KATs; GameState::from_field_array codec; full-game
+  circuits: taceo_commit+init reworked, open_door+finish NEW (player
+  UintNote binding = F3 closed in-circuit); legacy bins deleted; check.sh
+  extended (4 circuits, bb prove/verify init+open_door) PASS.
+- Gotcha: `git checkout <file>` after fixture-gen reverted UNCOMMITTED
+  same-file edits — re-applied. Fixtures via temp println test (seed=111).
+- **⚠ DELIVERABLE (Mike, mid-turn): when the contract port lands, produce
+  a review write-up of ALL aztec contract changes**: step-by-step,
+  assume-nothing explainer of WHY PrivateShared{Immutable,Mutable} exist
+  (the executor/orchestrator must handle only commitments+nullifiers,
+  never preimages — HackMD §abstractions), HOW the reworked versions
+  work, WHERE stock aztec-nr state vars are used vs not (justify each),
+  and an honest assessment of how to flatten the learning curve further
+  (minimal-mental-overhead PSS abstractions). Format: rendered write-up
+  for review.
+- NEXT: 5.1b contract port (with the A5b public-input contract design),
+  then A5c node/orchestrator (KEY: persist state shares between rounds —
+  execute_circuit_rep3 returns the PssStore; store shares in Postgres;
+  requests carry deployment context), then TS driver + local-network e2e
+  (ch.18 §5; realProofs caveat).

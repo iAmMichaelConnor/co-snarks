@@ -231,6 +231,45 @@ A5 open.** AS-BUILT notes inline below.
     round** (replaces all `todo!()`s); same gate battery as A4 per
     round, plus a full-game LocalNetwork cargo test.
 
+  **A5b protocol design (fixed 2026-07-13; formulas = ch. 18 §2):**
+  - **Privacy model**: ONLY the seed and game state (winning door) are
+    private-shared. The player's chosen door + switch decision are
+    public in the physical game and are PUBLIC inputs to the MPC rounds
+    — but each must be BOUND to the player's on-chain UintNote (the
+    player hands the MPC their note randomness; the circuit recomputes
+    `uint_note_hash` and exposes it publicly for the contract to assert
+    — closes ch. 17 F3). The opened door and win/lose are public
+    outputs (announced in the real game too).
+  - **MPC identity**: one shared random Field `mpc_sk` sampled at
+    `sample_rand` alongside the seed; circuits derive the Grumpkin
+    scalar in-circuit (`from_field_unsafe` decomposition, already in
+    dh.nr) and expose `npk_m_hash` publicly; the contract stores it at
+    init and asserts it every round (nullifier ↔ identity binding).
+  - **Nullifying settled notes**: circuits take `(contract_address,
+    first_nullifier_in_tx, note_index_in_tx)` as public inputs, rebuild
+    the unique-siloed chain, and output the canonical nullifier; the
+    contract asserts the chain against the note it actually read. The
+    TS driver (5.1c) fetches the anchoring tx's first nullifier + note
+    index from the node.
+  - **Circuits** (all ZK UH; PSS notes = canonical `#[note]` format):
+    1. `taceo_commit(x̂, randomnesŝ, slot, owner) → note_hash` — generic
+       single-field PSS creation (seed note; sample_rand round).
+    2. `monty_hall_init(seed̂, seed_rand̂, seed_slot, owner,
+       seed_note_hash, state_slot, state_rand̂) → state_note_hash` —
+       opens the seed note, derives the initial game state.
+    3. `monty_hall_open_door` (NEW): opens old game state (shared
+       9-field preimage + randomness), nullifies it (mpc_sk̂ +
+       settled-note chain), binds the player's door UintNote, runs
+       `GameState::choose_door`, creates the new state note. Public:
+       old_state_note_hash, nullifier, new_state_note_hash,
+       door_note_hash, door, opened_door, npk_m_hash + locations.
+    4. `monty_hall_finish` (NEW): opens the post-open state, nullifies
+       it, binds the switch UintNote, computes win/lose. Public: as
+       above + switch, win. (x̂ = secret-shared input.)
+  - `sample_rand` extends `RootRandomness` with the `mpc_sk` share;
+    gRPC requests gain the deployment context (contract address, slots,
+    owner, note positions, player-note bindings).
+
 ## 5. Work items — 5.1b (contract to v5-next aztec-nr)
 
 Dependency source: public aztec-packages tag `v5.0.0-nightly.20260708`
