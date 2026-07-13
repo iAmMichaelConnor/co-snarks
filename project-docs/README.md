@@ -38,6 +38,7 @@ future working sessions (human or AI).
 | `13-parity-and-soundness-tests.md` | Test plan for byte/verifier parity with bb + soundness (negative tests incl. §3a mandatory security regressions) + completeness + MPC-consistency + differential fuzz; what to build in each phase. | complete (2026-07-08) |
 | `14-phase0-command-log.md` | Chronological Phase 0 **and Phase 2** command record (§§12–23): every command (incl. failures + root causes), what it achieved, environment requirements, doc-improvement notes. §§21–23 = the overnight backlog run, VK byte-KATs, and the PLAN-2.9 recursion-parity investigation/fix. | live (2026-07-09; through PLAN 2.9/2.10) |
 | `15-improvement-backlog.md` | Post-Phase-2 backlog: VERIFY items, extra test ideas beyond ch. 13, Rust refactor/perf ideas (MPC mul batching, allocation hot spots), anti-drift machinery. Statuses maintained in place (✅ done / open); many §1–§2 and §4 items landed 2026-07-08/09. | live (2026-07-09) |
+| `16-phase5-monty-hall-modernization.md` | PLAN 5.1 workplan: modernize monty-hall-aztec to the synced co-noir + v5-next aztec-nr. As-is inventory (call sites, defects), old→new API delta tables (co-noir Rust §3 + aztec-nr contract §5.0), work items A0–A5 / B1–B4 / 5.1c–d with gates; Q1/Q2/Q4 answered. | live (2026-07-13); A0 done |
 
 ## Key facts established so far (updated 2026-07-08, after Phase 2 code-complete)
 

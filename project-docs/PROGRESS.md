@@ -613,3 +613,121 @@ farm small backlog items to cheaper agents.
   agent worktrees fork from the STALE branch base (36da0ea8), not the
   current tip — agents must `git merge --ff-only mc/update-co-noir`
   before working; §2.2 agent warned mid-flight.
+
+## Session 6 — 2026-07-13 — Phase-2 record closed out; Phase 5 kicked off (5.1 workplan)
+
+- Reconstructed session state: the uncommitted working-tree diff was the
+  doc-reconciliation pass matching the already-committed PLAN-2.9 fix
+  (`23e694ee`/`fa596e8a`), plus Mike's hand-edits scoping Phase 5 items
+  5.1/5.2. Verified tree green (`fast-check.sh` PASS, 1.6 s).
+- Backlog (ch. 15) confirmed at a sensible stopping point: remaining open
+  items are all deferrable (perf §3, negative-test ideas §2.5/2.6/2.8/2.8a,
+  §4.2 manifest, §4.9 diff-fuzz = Phase 4 on hold, §1.11 stack-overflow nit).
+- **Mike's decisions**: Phase 5 starts with **5.1** (monty-hall
+  modernization, Rust first, TS orchestration after); commit the doc pass.
+  Committed as `d8970588` (incl. PLAN 5.1 STARTED marker).
+- **PLAN 5.1 started.** Code-level survey of `~/monty-hall-aztec` @
+  `d333404` (mpc.rs seam, orchestrator verify, contract, circuits, DB) +
+  verified the current co-noir API shapes in our tree. Headline deltas:
+  `Rep3MpcNet` is gone (→ `TcpNetwork::networks::<2>`, two `&N` handles);
+  `prove` now takes `has_zk` + the bb-format VK and returns proof and
+  public inputs SEPARATED (load-bearing for capsule/DB/gRPC shapes);
+  `generate_proving_key_rep3` takes the CRS. Defects re-confirmed in
+  source: ZK No-prove/Yes-verify mismatch, hardcoded witness-index
+  extraction, Postgres table mismatch, finish_game vk_hash[2]/[1] bug,
+  TACEONote::pack .x duplication, GAME_OPENED_DOOR==GAME_DONE.
+- **Ch. 16 written** (5.1 workplan): ground rules (branch + no-push rail
+  in ~/monty-hall-aztec, path-deps into ~/co-snarks, ZK everywhere),
+  as-is inventory, API delta table, work items 5.1a A0–A4 (Rust; gate =
+  3-party e2e with bb-oracle cross-verify) / 5.1b B1–B4 (contract to
+  v5-next aztec-nr; TXE negatives) / 5.1c on-chain / 5.1d TS port; open
+  questions Q1–Q4 for Mike (game-phase scope, Postgres, on-chain glue,
+  aztec-nr tag parity check). README table updated.
+- Ch. 16 + README row + this entry left UNCOMMITTED pending Mike's review.
+  Next session: Mike answers Q1/Q2 (Q4 is a 10-min check we can just do),
+  then execute A0–A2.
+
+## Session 6 (continued) — 2026-07-13 — Q1/Q2/Q4 answered; aztec-nr delta surveyed; A0 done
+
+- **Mike**: do the ch. 16 recommendations for Q1 (init + ONE `open_door`
+  round; rest of the game out of scope — pulls the state-transition
+  circuit/endpoints INTO scope as new item A5) and Q2 (keep Postgres);
+  and survey ~/ap-next v5-next for current aztec-nr syntax, since the
+  demo extends aztec-nr with cosnark state-variable types.
+- **Pin re-verification (session-start rule)**: private v5-next moved
+  since 2026-07-08 but bb drift = wsdb tooling + foundry.toml only —
+  ZERO UH-relevant commits; Phase-2 parity target + oracle stand.
+- **Q4 answered by tree-hash diff**: public tag ≡ public v5-next HEAD
+  for aztec-nr; private delta (~39 files) is messaging/tagging/oracles/
+  test-helpers only — nothing in state_vars/note/macros/capsules → pin
+  contract deps + toolchain to public release v5.0.0-nightly.20260708.
+- **aztec-nr API delta surveyed** (Sonnet Explore agent over ~/ap-next,
+  spot-anchored file:line cites; table now in ch. 16 §5.0). Headlines:
+  `#[private]`→`#[external("private")]`; enqueue_self replaces bare
+  unsafe public calls; PrivateMutable/Immutable now OWNED (demo's bare
+  semantics = SinglePrivate*) — re-fork PrivateSharedMutable on
+  SinglePrivateMutable; NoteEmission/.discard() → #[must_use]
+  NoteMessage (no discard — design point for commitment-only notes);
+  NoteHash trait gained owner/randomness args, unconstrained nullifier
+  returns Option; **push_nullifier_for_note_hash is now a first-class
+  public primitive** → the external-nullifier fork shrinks to ~a screen;
+  Packable is assoc-const form; popCapsule oracle GONE → keyed
+  CapsuleArray/capsules::{store,load} (kills the pop-order fragility);
+  UintNote is a struct literal (owner at state-var layer); std
+  poseidon2 gone → aztec::protocol::hash::poseidon2_hash;
+  verify_proof_with_type unchanged; RECURSIVE_PROOF_LENGTH=410 +
+  ULTRA_VK_LENGTH_IN_FIELDS=115 importable, HONK_ZK still literal 6, no
+  exported ZK proof-length (458 stays a local const + build-time check).
+  value-note + easy-private-state crates NO LONGER EXIST (demo deps —
+  unused, drop). Ch. 16 §5 rewritten: delta table + B1/B1b/B2–B4.
+- **A0 DONE**: ~/monty-hall-aztec origin pushurl DISABLED
+  (confidentiality rail — Taceo's repo), branch `mc/modernize` @ base
+  `d333404`. Bonus check: upstream `themis/reveal_door_circuit` branch
+  is an ancestor of main (no circuit ever pushed) — nothing to salvage,
+  A5 is new work as planned.
+- Next: A1 (recompile noir_logic at beta.22) → A2 (port mpc workspace).
+  Ch. 16 + README + PROGRESS still uncommitted pending Mike's word.
+
+## Session 6 (continued) — 2026-07-13 — 5.1a EXECUTED: A0–A4 DONE, e2e milestone PASS
+
+Mike: "proceed as you think best" + fold aztec-nr syntax survey into ch. 16
+(done, see previous entry) + Q1/Q2 as recommended.
+
+- **A1 DONE** — noir_logic at beta.22. Churn confined to pss_utils (+1
+  game-lib line): poseidon2_permutation 1-arg; Poseidon2::hash → external
+  poseidon crate v0.3.0; u1→bool; EmbeddedCurvePoint {x,y} with (0,0)
+  infinity; u32 array indices; `Field as bool` removed — random-bit draw
+  made explicit LSB (`(rand as u8) % 2`) after noting the compiler's
+  `!= 0` suggestion would be a BIASED bit; game tests pin the semantics.
+  Old compare*.sh retired → new check.sh + versions.env + oracle_stub.py
+  (TACEO_store is side-effect-only; stub = empty values; MPC path handles
+  it in co-brillig). Gate PASS incl. bb prove/verify + tamper reject.
+  Poseidon2 unchanged across the jump (old Prover.toml still verifies).
+- **A2+A3 DONE** — mpc workspace on path-deps to local co-snarks.
+  ark 0.5→0.6 (must match co-snarks); protoc v29.3 installed to
+  ~/.local/bin; rust-toolchain 1.90. Port per ch. 16 §3 delta table;
+  co-noir re-exports shrank (import NetworkConfig/CrsParser/VK types
+  from mpc_net/co_noir_common). Defects fixed: ZK::Yes everywhere;
+  ABI-based extract_public_returns replaces witness_share[i]; TRUNCATE
+  table fix; proof/public_inputs separation through protos+DB+
+  orchestrator; CRS sized from compute_circuit_size; node computes its
+  own bb-format VK (ZK prover needs it). Build green; clippy leftovers =
+  pre-existing demo cruft.
+- **A4 MILESTONE PASS** — `mpc/e2e.sh` (repeatable): 3 docker Postgres +
+  3 nodes + orchestrator; sample_rand + init_game HTTP-driven; 3
+  byte-identical proofs+public inputs; our verifier accepts vs the
+  bb-WRITTEN VK; **source-built target bb verifies the MPC-produced ZK
+  proof** (458 fields); tampered byte rejected both sides. Timings/party
+  (loopback): witext 0.85s, pk 0.15s, ZK prove 1.74s.
+  ⇒ First end-to-end validation that our Phase-2 synced co-noir works in
+  the real orchestrated Aztec pattern.
+- Gotchas recorded: bb `prove` at this tag requires `-k vk`; bb verify
+  exit codes only meaningful un-piped ($? of a pipe = tail's); pgrep
+  self-match trap hit AGAIN during teardown ([[watcher-discipline]] —
+  use [r]elease bracket trick); orchestrator returns HTTP 200 on verify
+  failure (log-only) — flagged for the 5.1d TS rewrite.
+- **State: ALL monty-hall work uncommitted on `mc/modernize`** (base
+  d333404, push disabled). co-snarks docs (ch. 16 updates + this entry)
+  also uncommitted. Next: commit on Mike's word; then A5 (open_door
+  round) or 5.1b (contract port) — A5 recommended first (completes the
+  Rust pattern before the contract consumes it).
