@@ -132,3 +132,73 @@ init_nullifier = P2( 1653084894 /*INITIALIZATION_NULLIFIER*/, storage_slot, nhk_
   recursive_verification tutorial is the reference) or the in-circuit
   verification of MPC proofs is never actually exercised. Negative e2e
   test (tampered proof → tx rejected) is the definitive check.
+
+## 6. TXE + local-network: validated 2026-07-13 (toolchain proven)
+
+**Toolchain**: `@aztec/aztec@5.0.0-nightly.20260708` installed via npm
+(no docker needed for CLI); `aztec --version` prints the pin. `nargo`
+beta.22, `nc`, `anvil` (Foundry) all present. `aztec compile` builds the
+contract (MegaHonk VKs for all functions); `aztec test` runs TXE.
+
+**TXE (`aztec test`) — DONE, 6/6 green** (`contract/montyhall_test`).
+Contract restructured into a workspace (`montyhall` + `montyhall_test`) —
+`aztec test` requires it. Tests validate everything that runs BEFORE a
+note read: deploy, round-1 capsule proof verification, VK-hash-pin
+rejection, operator/player access control on every round. Hard limits
+of TXE, both confirmed empirically:
+1. `verify_proof_with_type` is a NO-OP in the TXE ACVM → proof validity
+   is NOT testable here (a forged proof passes). Only the local network
+   with real proving tests it.
+2. **PSS note discovery doesn't work in TXE (or plainly anywhere via the
+   normal path)** — this is the crux finding. A `TACEONote` carries only
+   a public commitment; it has no preimage the recipient can use to
+   recompute/discover it through ordinary PXE message delivery. Every
+   attempt to `deliver()`/`deliver_to()` it and then `get_note()` in a
+   later tx fails "Failed to get a note". **This is exactly the gap
+   Taceo's HackMD flagged as requiring an `add_note_hash()` PXE
+   endpoint** (ch. 17 §0 / the write-up): the operator KNOWS the note
+   hash (it's a public input) but the PXE has no way to be told "a note
+   with this hash exists at this slot" through delivery. The operator's
+   PXE note store must be populated out-of-band.
+
+   Gotchas discovered getting TXE green: `contract` is a reserved Noir
+   keyword (can't be a variable name); capsule oracles must run inside
+   `env.private_context(_at)`; capsule store/load want a nominal type
+   (`ProofData` struct), not bare `[Field; N]` (array-`Serialize` T
+   inference is flaky in-file); `init_game` can't be `#[initializer]`
+   because it consumes a capsule staged at the deployed address.
+
+**Local network — VALIDATED (starts; e2e driver is the remaining build).**
+`aztec start --local-network` (wrapper auto-starts anvil on :8545) brings
+up the node on :8080 + admin :8880, deploys protocol contracts, funds
+test accounts, deploys BananaCoin/FPC/SponsoredFPC. Confirmed running at
+the pin. No sandbox flag (`--local-network`, not `--sandbox`).
+
+### The e2e build (concrete plan, now de-risked)
+A TypeScript driver (aztec.js, pinned `@aztec/*@5.0.0-nightly.20260708`;
+aztec-kit's `setupLocalNetwork` fixture + `Capsule` usage in
+`embedded-wallet.ts` are the reference patterns) that:
+1. `createAztecNodeClient(:8080)` → `EmbeddedWallet.create`; create
+   operator + player accounts.
+2. `aztec codegen` the contract → TS class; deploy it.
+3. For each round: generate the REAL co-SNARK proof via the `mpc/`
+   pipeline (3-node run, or plaindriver for a single-prover proof at
+   first), get its bb VK, build a `ProofData` and attach it as a
+   `Capsule` (`.send({ capsules: [...] })`) to the round's call.
+4. **Solve PSS note discovery**: the operator's PXE must learn the
+   game_state note hash. Options: (a) the `add_note_hash`-style manual
+   injection Taceo wanted — investigate if aztec.js exposes a way to add
+   a note to the PXE store directly; (b) store the (hash-only) note as a
+   capsule the contract reads instead of via note discovery — i.e.
+   redesign PrivateSharedMutable to keep its current note in a capsule
+   the operator restages each round, sidestepping discovery entirely.
+   (b) is likely the cleaner answer and worth prototyping first.
+5. Assertions: the honest-proof rounds succeed; a TAMPERED proof round
+   is REJECTED by the contract (the definitive in-circuit-verification
+   soundness gate TXE cannot provide).
+
+This is a multi-step build in its own right; the toolchain, contract,
+circuits, and MPC prover are all proven, so it is now purely
+integration work. The note-discovery decision (step 4) is the one real
+design fork and should be settled with Mike (it also feeds PLAN 5.0's
+PXE-secret-sharer, which faces the mirror-image problem).

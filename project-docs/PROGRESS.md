@@ -867,3 +867,35 @@ solid. 5.1a committed as monty-hall `455893f`; docs `4a7d5550`+`3649d095`.
   all rounds (persist state shares between rounds via execute_circuit_rep3
   PssStore); then TS driver + real-proving local-network e2e with a
   tampered-proof-rejected negative (the definitive soundness gate).
+
+## Session 8 — 2026-07-13 — TXE tests GREEN (6/6); local network validated; e2e planned
+
+- aztec toolchain (@aztec/aztec@5.0.0-nightly.20260708) drives compile +
+  TXE + local-network — all pure Node, no docker needed for CLI.
+- **Contract TXE suite DONE (6/6, mh `f23c29c`)**: workspace restructure
+  (montyhall + montyhall_test); tests cover deploy + round-1 capsule proof
+  verification + VK-hash rejection + operator/player access control on all
+  rounds. Refinements found via TXE: ProofData nominal capsule struct;
+  init_game de-#[initializer]'d (capsule-before-deploy); slot-only PSS init
+  nullifier (siloing makes it sound, drops contract-keys need); PSS notes
+  owned+delivered to operator; `contract` is a reserved keyword.
+- **KEY FINDING (matches HackMD): PSS note discovery has no ordinary path.**
+  A TACEONote is hash-only (no discoverable preimage) → `deliver()` +
+  cross-tx `get_note()` fails "Failed to get a note". This IS the gap Taceo
+  flagged as needing `add_note_hash()`. TXE therefore validates only
+  pre-note-read logic; full-game flow needs the local-network e2e with the
+  discovery workaround. Also confirmed: verify_proof_with_type is a TXE
+  no-op (proof validity untestable in TXE).
+- **Local network VALIDATED**: `aztec start --local-network` brings up
+  node :8080 + anvil + protocol contracts + test accounts at the pin.
+  Toolchain proven; full e2e is now pure integration work.
+- **e2e plan (ch.18 §6)**: TS aztec.js driver (aztec-kit patterns:
+  setupLocalNetwork + Capsule) — deploy, real co-SNARK proof per round as
+  a Capsule, + solve PSS discovery. Recommended discovery fix: store the
+  current PSS note as a CAPSULE the operator restages each round (option
+  b), sidestepping note discovery — settle with Mike (also feeds 5.0
+  PXE-secret-sharer, the mirror-image problem).
+- aztec-kit cloned to scratchpad for reference (embedded-wallet.ts capsule
+  usage; common/setupLocalNetwork fixture).
+- NEXT: the local-network e2e TS driver (real proving + tamper-reject =
+  the definitive soundness gate); resolve the PSS-discovery design fork.
