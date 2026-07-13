@@ -1116,3 +1116,63 @@ per the compile.sh convention.
   comments explaining the proof-diff exclusion.
 Final gates: plain suite 6/6 (incl. both new vk_kat tests),
 fast-check --sec PASS, clippy 0 warnings.
+
+## 24. PLAN 5.1a — monty-hall-aztec modernization command log (2026-07-13)
+
+*Repo: `~/monty-hall-aztec`, branch `mc/modernize` (base `d333404`,
+origin pushurl DISABLED). Full narrative: ch. 16 §4 AS-BUILT; session
+log: PROGRESS session 6. Commands + failures only here.*
+
+### 24.1 A1 — circuits at beta.22
+- `nargo compile` (in `noir_logic/monty_hall_init/`) — first run listed
+  the breakage set: `is_infinite` field gone, `u1` removed,
+  `poseidon2_permutation` arity, Field array-indexing. After fixes
+  (ch. 16 §4 A1): all 6 circuits compile; `nargo test` in pss_utils
+  (17) + monty_hall (6) green.
+- ⚠ `nargo execute` FAILED: `No handler could be found for foreign call
+  'TACEO_store'` → wrote `noir_logic/scripts/oracle_stub.py` (JSON-RPC,
+  returns empty values) + `nargo execute --oracle-resolver
+  http://127.0.0.1:5599 witness` — witness solved; old Prover.toml's
+  commitment assertion still passes (Poseidon2 unchanged).
+- ⚠ bb GOTCHA (target tag): `bb prove` now REQUIRES `-k <vk>` (defaults
+  to `./target/vk`, errors if absent) → run `write_vk` FIRST. My first
+  "PASS" was fake: `&&`-chain + `tail` masked the missing-proof failure
+  — re-hit the §11/§19.2 silent-failure lesson; check.sh asserts
+  artifact existence.
+- ⚠ bb verify exit code is only meaningful UN-piped (`bb verify | tail`
+  → `$?` is tail's). Un-piped: honest exit 0, tampered exit 1.
+- Gate script: `noir_logic/check.sh` (sources `versions.env`) — PASS.
+
+### 24.2 A2/A3 — mpc workspace port
+- Path-deps to `~/co-snarks`; deleted stale `Cargo.lock`.
+- ⚠ FIRST BUILD: 75 errors, "two types coming from two different
+  versions of the same crate" — mpc workspace pinned ark 0.5, co-snarks
+  uses **ark 0.6** → bumped ark-bn254/-serialize/-ff to 0.6. Rebuild: 3
+  real errors (`get_constraint_system_from_artifact` is now 1-arg;
+  `AcirFormat` not Clone → recompute from artifact inside the blocking
+  task). Then green.
+- ⚠ `protoc` not installed (protos build.rs needs it) → installed
+  protoc v29.3 to `~/.local/bin` from the protobuf GitHub release zip;
+  build with `PATH=$HOME/.local/bin:$PATH`.
+- `cargo build --release -j 26` (leave ~20% cores free) + clippy:
+  remaining warnings are pre-existing demo cruft only.
+
+### 24.3 A4 — e2e
+- 3× dockerized Postgres: `docker run -d --rm --name mh-pg$i -e
+  POSTGRES_PASSWORD=postgres -p $((8080+i)):5432 postgres:16-alpine`
+  (docker usable without sudo on this box).
+- Staged into `mpc/mpc-node/data/`: fresh beta.22 circuit JSONs,
+  `bn254_g2.dat` (copied from co-snarks `co-noir-common/src/crs/`),
+  `monty_hall_init_bb.vk` (bb `write_vk` output — byte-identical to
+  co-noir's own VK per Phase 2, and the ZK prover requires a VK).
+- 3 nodes + orchestrator launched (see `mpc/e2e.sh` for exact args);
+  `curl /api/sample_rand` then `/api/init_game` → HTTP 200 + orchestrator
+  log "retrieved proofs!". Proof pulled from node0 DB via `docker exec
+  mh-pg0 psql ... encode(proof,'hex')` → **target bb verify: PASS**;
+  tampered byte at offset 2000 → exit 1.
+- ⚠ teardown: hit the pgrep SELF-MATCH trap again (`pgrep -f
+  "release/mpc-node"` matches its own cmdline) → `pgrep -f
+  "[r]elease/mpc-node"`. (Memory: watcher-discipline.)
+- Repeatable gate: `mpc/e2e.sh` — full clean-room rerun PASS (~40 s).
+- Commits: monty-hall `455893f` (all of A0–A4); co-snarks docs
+  `d8970588`, `4a7d5550`.
