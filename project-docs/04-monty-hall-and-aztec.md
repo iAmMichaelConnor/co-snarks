@@ -214,3 +214,17 @@ keeping in our design.
    only correct constants (proof size, VK layout, Honk identifier).
 4. Its user-side encryption layer is embryonic — building the real
    PXE-integrated share-submission channel is genuinely new work.
+
+---
+
+**⚠ §5 CAVEAT (added 2026-07-13, session 9):** the in-contract
+verification recipe in §5 was verified at the constants/artifact level
+(proof/VK lengths, HONK_ZK=6 existing and wired, TXE acceptance), but
+the first END-TO-END run under REAL client-side proving (local network,
+PROVER_REAL_PROOFS + PXE proverEnabled) FAILS at this tag: any private
+function containing `verify_proof_with_type(..., HONK_ZK)` dies in the
+Chonk/ClientIVC prover's self-check — with bb-generated proofs as much
+as with co-noir ones (probe record: ch. 18 §6). TXE and simulated
+proving mask this entirely (the opcode is a witness-gen no-op). Treat
+§5 as "shape-correct, soundness-gate pending" until the upstream-facing
+issue is resolved.

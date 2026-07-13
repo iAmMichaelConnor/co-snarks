@@ -1193,3 +1193,45 @@ log: PROGRESS session 6. Commands + failures only here.*
 - Gotcha: axum routes moved GET→POST → any manual curl now needs `-X
   POST`; e2e.sh updated, asserts the new "proof verified" log line and
   502-signalling is now the real gate (the old grep workaround removed).
+
+## 26. Session 9 (2026-07-13/14) — refactor review, A5c all-rounds MPC, local-network e2e
+
+Full narrative: PROGRESS session 9 + ch. 16 banner + ch. 17 §6.7–6.9.
+Commands/gotchas worth replaying, in order:
+
+- Noir/circuit gates (after the refactor + nonce/naming rework):
+  `noir_logic/check.sh` PASS (compile ×4, lib tests, bb prove/verify
+  init+open_door, tamper). Gotchas: `///` doc comments on fn PARAMETERS
+  are a Noir parse error (use `//`); no glob imports (`use super::*`);
+  `contract` is a reserved keyword (again).
+- TXE: `cd contract && aztec test` (aztec CLI from the session-8
+  scratchpad npm install; `PATH=+…/aztec-cli/pkg/node_modules/.bin`).
+  Debugging technique that cracked the note-delivery failure:
+  `LOG_LEVEL=debug aztec test full_game_flow` then grep the TXE log for
+  `Notified of new note|Attempting nonce discovery|skipping PXE
+  insertion` — the WARN pair ("Unable to compute nullifier … skipping
+  PXE insertion" / "Discarding private note message") is the smoking gun
+  for the third-party-delivery defect (upstream-issues/ write-up).
+- A5c Rust: `cargo build --release --workspace` + clippy 0 warnings;
+  in-process full-game gate: `RAYON_NUM_THREADS=8 cargo test -p mpc-node
+  --release --bin mpc-node three_party_full_game` (~8 s). GOTCHA: the
+  bundled test CRS (data/bn254_g1.dat) was a 4096-point prefix — the new
+  circuits need 8192+; fixed with `head -c $((32768*64))
+  ~/.bb-crs/bn254_g1.dat > …/data/bn254_g1.dat` (raw-point prefix file).
+  Circuit fixtures must be recopied from noir_logic/*/target after any
+  circuit change (the node's startup ABI check will name the mismatch).
+- Full-game process e2e: `mpc/e2e.sh` PASS (4 rounds over HTTP JSON
+  with a deployment context; per-round bb verify vs bb-written VKs;
+  tamper negative; seed-hash chaining check).
+- Local-network e2e: `e2e/run.sh` (npm-installed pinned @aztec deps;
+  moves the MPC Postgres ports to 15432+ because the aztec node owns
+  :8080). Node-24 gotchas hit in sequence: `@aztec/foundation/crypto`
+  is NOT an exported subpath (poseidon2Hash lives at
+  `@aztec/foundation/crypto/poseidon`); published @aztec/accounts
+  lazy.js does a dynamic JSON import WITHOUT `with {type:'json'}` →
+  ERR_IMPORT_ATTRIBUTE_MISSING under plain node — fixed with a module
+  load hook (`node --import ./register.mjs`, see
+  e2e/json-import-hooks.mjs).
+- bb VK fields for the TS driver: `bb write_vk … --output_format json`
+  → vk.json = { vk: [115 hex fields], hash } (the binary `vk` file
+  stays the orchestrator's input).

@@ -267,6 +267,19 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       **[STARTED 2026-07-13 — Phase 5 begins here (Mike). Rust
       modernization first; TS orchestration after it works. Workplan:
       project-docs ch. 16.]**
+      **[STATUS 2026-07-13 late (session 9): Rust phase COMPLETE — all
+      four game rounds: circuits (Aztec-native notes, note_nonce
+      convention), contract (raw kernel primitives, ChoiceNote, TXE
+      10/10 incl. full game), MPC node/orchestrator (A5c: share
+      persistence, per-round proofs; 3-party full-game cargo test ~8 s;
+      e2e.sh all rounds bb-verified + tamper negative). First TS
+      artifact exists: e2e/ local-network driver (aztec.js, pinned) —
+      full game on `aztec start --local-network` with real MPC proofs
+      as capsules; real-proving mode + tamper negative still pending
+      (verify_proof_with_type is a no-op under simulated proving).
+      Upstream aztec-nr defect found + written up (third-party note
+      delivery; monty-hall repo upstream-issues/). Record: PROGRESS
+      session 9, ch. 14 §26, ch. 16 banner, ch. 17 §6.7–6.9.]**
 - [ ] 5.2 Design+build the user→MPC share submission channel (envelope
       encryption per node; TypeScript tooling; TACEO:Proof is the
       commercial reference shape, ch. 02 §5.4), but if that's not open source, we should look at the ~/monty-hall-aztec repo for inspiration.

@@ -220,3 +220,41 @@ circuits, and MPC prover are all proven, so it is now purely
 integration work. The note-discovery decision (step 4) is the one real
 design fork and should be settled with Mike (it also feeds PLAN 5.0's
 PXE-secret-sharer, which faces the mirror-image problem).
+
+**BUILT + PASS (2026-07-13 night, session 9): `e2e/run.sh` +
+`e2e/driver.mjs`** (repo monty-hall-aztec). The ENTIRE game ran on
+`aztec start --local-network` with REAL MPC co-SNARK proofs staged as
+operator-scoped Capsules: initializerless deploy; per-round orchestrator
+fetch (JSON HTTP); nonces/leaves mined from `node.getTxEffect` +
+`computeNoteHashNonce`; MPC-derived unique note hashes cross-checked
+against the chain's tx effects every round; real ChoiceNote delivery +
+tagged-log discovery for the player notes; final phase/opened_door/win
+asserted on-chain. Simulated-proving mode only — the tamper
+negative is coded but gated on `EXPECT_REAL_PROOFS=1`
+(PROVER_REAL_PROOFS on the network + `proverEnabled` in the wallet's
+PXE).
+
+**⚠ REAL-PROVING MODE FAILS AT THIS TAG — and NOT because of co-noir
+(probed 2026-07-13 night).** With `EXPECT_REAL_PROOFS=1`: the plain
+deploy tx PROVES AND MINES fine (ClientIVC pipeline works), but the
+first tx containing `verify_proof_with_type(..., HONK_ZK)` — init_game —
+dies in the PXE prover with bb.js `BBApiException: Failed to verify the
+generated proof!` (the prover's own self-check after Chonk proof
+generation). Discriminating probe: substituting a **bb-generated** ZK
+proof of the same circuit (driver env `ROUND1_DIR` + `STOP_AFTER_ROUND1`,
+probe artifacts preserved in the session scratchpad `bbround1/`) fails
+IDENTICALLY → our MPC proofs are exonerated; the in-circuit
+UH-verification path itself breaks under real client proving. Checked:
+vk_hash convention is NOT the issue (bb's vk.json `hash` ==
+TS `poseidon2Hash(vk_fields)` == the contract's pin, verified equal).
+Notable: NO app contract in the whole ap-next tree calls
+`verify_proof_with_type` (only protocol/mock kernels use verify_proof,
+in UH→UH recursion) — "verify a UH proof inside a Chonk-proven app
+function" appears UNTESTED upstream at this tag; we are probably the
+first to run it for real. Next steps: (1) probe PROOF_TYPE_HONK=0 with
+a 410-field non-ZK bb proof (isolates the ZK flavor); (2) bb.js verbose
+logging to name the failing check; (3) minimal repro contract → upstream
+issue; (4) re-read ch. 04 §5's evidence — the recipe was verified at the
+artifact/constant level, evidently never end-to-end under real proving. Driver gotchas recorded in ch. 14
+§26 (foundation subpath exports; @aztec/accounts lazy JSON import needs
+a load-hook shim; send() waits by default — no `.wait()`).

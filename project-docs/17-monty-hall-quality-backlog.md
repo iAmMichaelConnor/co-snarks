@@ -436,3 +436,131 @@ this section's direction). What exists now:
   by any note-holder, never pushed — sound because the note is
   immutable). With it, real delivery + tagged-log discovery works in
   TXE (default tagging strategy; no additional-scopes emulation).
+
+### 6.8 The PSS anchoring soundness argument (§6.6 Q3 — written 2026-07-13, session 9)
+
+*The contract's core soundness surface, analyzed for the two adversaries
+Mike named. "Sound" here means: no sequence of transactions makes the
+chain accept a game transcript that violates the game rules relative to
+the committed seed and the player's committed choices.*
+
+**What the chain enforces (the binding layer).** Per host round: (1) a
+valid ZK UltraHonk proof under the POSEIDON2-PINNED vk_hash — so the
+transition semantics are exactly the four circuits', nothing else; (2)
+the proof's public inputs are not free: the contract feeds them from
+values it read-requested (old leaves), pushed (new hashes, nullifiers),
+read from the player's notes (door/switch), or has in public storage
+(slots, owner, npk_m_hash) — the operator chooses only values that are
+then cross-checked; (3) the public phase machine orders the rounds and
+runs each at most once; (4) tx atomicity makes every deferred public
+assert as binding as an inline one.
+
+**Why the state chain cannot be forked, rewound, or substituted.**
+- *Substitution:* every PSS preimage commits to (storage_slot, owner)
+  and its leaf commits to the emitting contract (kernel siloing). A leaf
+  passed to a round must exist in the tree (kernel read request) AND
+  open — inside the co-SNARK — to a preimage at THE slot/owner the
+  contract asserts. Only this contract can have pushed such leaves, and
+  it only pushes them in the guarded rounds; the seed slot receives
+  exactly one note ever (config's initialize nullifier makes init_game
+  once-only). So "some leaf in the tree" collapses to "THE note the
+  protocol anchored". The seed/state slots' preimage SHAPES also differ
+  (1 vs 9 fields), closing cross-slot confusion.
+- *Rewind/replay:* nullifiers are DETERMINISTIC in (leaf, nhk_app).
+  Re-advancing a spent state re-derives the same nullifier; the
+  protocol's nullifier tree rejects duplicates. Combined with the phase
+  machine there is exactly one open_door and one finish_game.
+- *Identity:* the nullifier is valid only under sk_m with
+  hash(sk_m·G) == the stored npk_m_hash (registered from the round-2
+  proof). Grumpkin DL + poseidon2 preimage resistance mean no outsider
+  can produce an accepted nullifier, and the SAME sk_m must be used in
+  every round (npk_m_hash equality forces pk_m equality forces sk_m).
+- *Player binding:* door/switch enter the proofs from the player's own
+  committed values (note reads in the operator's calls), and the
+  circuits' in-state phase field makes a wrong-phase preimage
+  unprovable even given a confused contract.
+
+**Adversary A — one actively malicious node (of 3, REP3).**
+- *Soundness holds unconditionally at the chain layer.* An active node
+  can corrupt shares mid-protocol, but a corrupted extended witness no
+  longer satisfies the circuit's constraints, so the joint proof fails
+  verification (UH soundness); divergent per-node outputs are also
+  caught earlier by the orchestrator's byte-identity check. Free inputs
+  (seed, blindings, sk_m) come from the correlated-RNG sampling, which
+  one party cannot bias alone. Net effect of an active minority node:
+  denial of service, not an accepted false transition.
+- *Privacy degrades to the protocol's stated model.* REP3 here is
+  semi-honest; a single share reveals nothing, but ACTIVE attacks on
+  semi-honest protocols can in general leak via selective failure. The
+  honest claim is: privacy against one HONEST-BUT-CURIOUS node
+  (protocol guarantee), soundness against one MALICIOUS node (from the
+  proof layer, not the MPC).
+
+**Adversary B — full collusion (all nodes + orchestrator).**
+- *Privacy is gone by definition* (they jointly hold every share).
+- *Soundness still holds:* collusion yields sk_m and all preimages, but
+  none of the binding layer depends on their secrecy. The colluders
+  still cannot substitute circuits (vk pin), rewind (deterministic
+  nullifiers), reorder or repeat rounds (phase machine), override the
+  player's committed choices, or report a win/lose other than what the
+  finish circuit computes from the seed-derived state.
+- *The one real power collusion grants:* seed choice. The seed is
+  "random" only if at least one node samples honestly; full collusion
+  can fix the winning door in advance. Crucially this must happen
+  BEFORE choose_door (the state is committed at round 2, and the phase
+  machine puts the player's choice after it), and the player's choice
+  is independent, so even a rigged seed leaves the game a fair 1/3 —
+  the colluders merely KNOW the outcome early. Formally: fairness
+  reduces to "≥1 honest node at round 1", outcome-integrity does not
+  rely on any honest node.
+
+**Assumptions inventory:** UltraHonk knowledge soundness + zero
+knowledge; poseidon2 collision/preimage resistance; Grumpkin discrete
+log; correctness of the Aztec kernel (read-request membership proofs,
+nullifier dedup, siloing/uniquifying) and of our bit-parity with its
+hash formulas (KAT-pinned); honest-majority semi-honest REP3 for
+privacy; ≥1 honest node for seed uniformity.
+
+### 6.9 ae.nr / dh.nr — the dormant encrypted user↔MPC channel (Mike's question, session 9)
+
+**What the code is:** `pss_utils/dh.nr` derives an ECDH shared secret
+against an AZTEC ADDRESS point (the recipient's address as a curve
+point, aztec-nr's own ephemeral-key scheme); `pss_utils/ae.nr` is a
+poseidon2-sponge authenticated-encryption scheme (SAFE-API duplex) over
+Fields. Together: "a user encrypts field elements to a party identified
+by an Aztec address, inside or outside a circuit".
+
+**What it was for (verified in the original repo @ d333404):** the
+intended user→MPC secret-input channel. The ORIGINAL choose/switch
+circuits took the player's door as a PRIVATE committed value, which
+implies the player's input had to reach the MPC as shares — the
+encryption toolkit is how they were meant to travel (encrypt share_i to
+node_i; the circuit could then prove correct decryption so the user
+cannot equivocate). It was never wired up: no game circuit at d333404
+imports ae/dh (only the `dh_test` demo bin), and the HackMD admits
+"secure data sharing hand-waved". It is exactly the seam PLAN 5.2 /
+TACEO:Proof (ch. 02 §5.4) fills commercially.
+
+**Is it needed in the as-built demo? No — by design.** The rework made
+door/switch PUBLIC inputs to the MPC (they are known to the operator,
+who is the game's host — the physical game announces them), bound
+on-chain via the player's ChoiceNotes. No user secret ever travels to
+the MPC: the seed/sk_m/blindings are SAMPLED INSIDE the network
+(correlated RNG) and never leave the nodes; the game-state shares
+persist node-locally; the orchestrator sees only proofs, public inputs
+and note hashes — all things it must see. Transport is mTLS on both
+planes (mesh + gRPC). The orchestrator→driver HTTP plane is plaintext
+dev-only (it carries only proofs/publics, but should get TLS before
+leaving localhost — noted in §2.5).
+
+**When it becomes load-bearing:** (a) genuinely-private player inputs
+(the F3 in-circuit note-binding path): the player would secret-share
+their choice, encrypt share_i to node_i (dh + ae), and the round circuit
+would PROVE DECRYPTION of the player-encrypted payload before using the
+value — that last step is what stops a malicious network from claiming
+a different choice; (b) PLAN 5.0/5.2 (PXE secret sharer + submission
+channel), where user-held notes/keys must reach the MPC as shares with
+exactly this envelope pattern. KEEP ae/dh (tested, KAT-pinned) for that;
+consider Grumpkin-point recipient keys for MPC nodes rather than Aztec
+address points (nodes are not Aztec accounts — smallest of ch. 15-style
+follow-ups).

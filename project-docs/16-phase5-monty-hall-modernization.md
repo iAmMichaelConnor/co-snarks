@@ -227,9 +227,12 @@ A5 open.** AS-BUILT notes inline below.
     `choose`/`switch` inputs must be bound to their REAL on-chain
     UintNote commitments (ch. 17 F3) — reproduce the UintNote hash
     in-circuit.
-  - **A5c — node endpoints + orchestrator routes + DB state for every
-    round** (replaces all `todo!()`s); same gate battery as A4 per
-    round, plus a full-game LocalNetwork cargo test.
+  - **A5c ✅ DONE (2026-07-13 night, session 9)** — node endpoints +
+    orchestrator routes + DB state for every round; round 1 now PROVES
+    taceo_commit; game-state shares persisted via the PssStore; gate
+    battery: `three_party_full_game` cargo test (~8 s) + full-game
+    `mpc/e2e.sh` (per-round bb cross-verify + tamper negative) — both
+    PASS. See PROGRESS session 9 + ch. 14 §26.
 
   **A5b protocol design (fixed 2026-07-13; formulas = ch. 18 §2):**
   - **Privacy model**: ONLY the seed and game state (winning door) are

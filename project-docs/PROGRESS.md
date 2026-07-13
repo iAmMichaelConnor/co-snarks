@@ -985,3 +985,65 @@ as-built public-input shapes; ch.18 §6 updated).
   discovery workaround needed). Ch.17 §6.6 Q3 soundness write-up still
   owed; session-7 write-up artifact describes the OLD PrivateShared*
   design and needs refreshing after Mike reviews this rework.
+
+## Session 9 (continued) — 2026-07-13 night — A5c DONE (all-rounds MPC stack); local-network e2e driver; soundness + ae/dh write-ups
+
+- **A5c COMPLETE (Rust)**: protos v2 (4 rpcs, every round returns
+  proof+publics; requests carry the deployment context + note_nonce);
+  mpc-node reworked — 4 circuits with startup ABI checks, per-circuit
+  bb-format VKs, CRS sized over all, round 1 now PROVES taceo_commit
+  (the old demo never did) and samples mpc_sk alongside seed+blinding;
+  game-state preimage shares flow back via execute_circuit_rep3's
+  PssStore ("game_state" key) and persist in Postgres as tag-encoded
+  mixed public/shared vectors (new migration: root_rand{seed,
+  seed_randomness,mpc_sk}, game_state{fields,randomness},
+  round_proofs); orchestrator: per-round VKs, JSON HTTP API (hex
+  fields in, proof+publics out — shaped for the TS driver), byte-
+  identity + verify per round. clippy 0.
+- **Gates**: `three_party_full_game` cargo test (~8 s, LocalNetwork):
+  all 4 rounds byte-identical across parties, every proof verifies,
+  tamper rejected, cross-round chaining asserted (seed hash, npk_m_hash
+  equality). `mpc/e2e.sh` reworked to the FULL GAME: 4 rounds over
+  HTTP with a deployment context, every proof bb-cross-verified against
+  bb-written VKs, tamper negative, seed-chaining check — PASS.
+  GOTCHA: bundled test CRS was a 4096-point prefix; new circuits need
+  more → 32k-point prefix cut from ~/.bb-crs (ch.14 §26).
+- **TS local-network e2e (e2e/)**: pinned aztec.js driver + run.sh
+  (brings up local network + MPC stack; MPC pg ports moved to 15432+ —
+  the aztec node owns :8080). Driver: EmbeddedWallet + initial local-
+  network accounts; initializerless deploy; per-round orchestrator
+  fetch → proof staged as an operator-scoped Capsule; nonces/leaves
+  mined from tx effects via node.getTxEffect + computeNoteHashNonce
+  (same data the TXE tests use); cross-checks MPC publics vs chain
+  leaves each round; asserts final phase/opened_door/win; tamper
+  negative runs BEFORE the honest finish and only under
+  EXPECT_REAL_PROOFS=1 (verify is a no-op under simulated proving).
+  Node-24 packaging gotchas (foundation subpath exports; @aztec/
+  accounts lazy dynamic JSON import missing `with {type:'json'}` →
+  load-hook shim) recorded in ch.14 §26.
+  **RESULT: PASS (simulated-proving mode)** — the ENTIRE game played
+  on-chain for the first time: real capsule staging, real ChoiceNote
+  delivery+discovery, real hash-only read requests, real nullifiers;
+  every MPC-derived leaf matched the chain's tx effects; final
+  phase/opened_door/win asserted. Real-proving mode
+  (EXPECT_REAL_PROOFS=1 → PROVER_REAL_PROOFS + wallet proverEnabled)
+  wired and attempted: **FAILS at this tag, and the bb-proof
+  substitution probe proves it is NOT co-noir's fault** — the
+  in-circuit verify_proof_with_type(HONK_ZK) path itself breaks under
+  real ClientIVC client proving (deploy proves fine; bb.js
+  "Failed to verify the generated proof!"; vk-hash conventions verified
+  equal; no app contract upstream ever calls verify_proof_with_type →
+  likely untested there). Full record + next steps: ch. 18 §6. The
+  soundness-definitive tamper negative therefore remains BLOCKED on
+  resolving that (upstream-facing) issue.
+- **Ch.17 §6.8 written** (Q3 soundness argument: binding layer;
+  malicious-minority → DoS only; full-collusion → privacy gone,
+  integrity intact, seed-bias-before-choice caveat; assumptions
+  inventory). **§6.9 written** (ae.nr/dh.nr: the dormant encrypted
+  user→MPC channel — never wired in the original repo (dh_test only),
+  not needed in the as-built demo since no user secret ever travels to
+  the MPC (all sampled in-network; transport mTLS), becomes
+  load-bearing for private player inputs (prove-decryption pattern)
+  and PLAN 5.0/5.2).
+- **Write-up artifact refreshed to rev 2 (as-built)** — same URL as
+  session 7; PLAN 5.1 status block updated; ch.14 §26 command log.
