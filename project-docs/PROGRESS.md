@@ -1047,3 +1047,42 @@ as-built public-input shapes; ch.18 §6 updated).
   and PLAN 5.0/5.2).
 - **Write-up artifact refreshed to rev 2 (as-built)** — same URL as
   session 7; PLAN 5.1 status block updated; ch.14 §26 command log.
+
+## Session 9 (continued) — 2026-07-13 night — real-proving failure DIAGNOSED (barretenberg-side, untested path)
+
+Mike: "diagnose and try to fix; if it needs barretenberg fixes I'll file
+a private bug report." Diagnosed to a bb defect; no speculative fix to
+audited proving C++ — produced a maintainer-ready report instead.
+
+- **Root cause located**: `verify_proof_with_type` inside a ClientIVC
+  **Mega app** circuit → `ChonkProve`'s own sanity verifier fails at
+  `ChonkVerifier: verification failed at batched translator+joint
+  reduction` (chonk_verifier.cpp:89; `reduction_succeeded==false`, the
+  Goblin Translator+joint-PCS step). Same binary proves+verifies, so the
+  PROVER emits a translator/joint sub-proof that fails its own verifier
+  for the recursive verifier's ~700-Goblin-ECC-op pattern.
+- **Discriminated** with a minimal probe contract (`contract/verify_probe`,
+  one fn per flavor): deploy PROVES; verify-containing app FAILS for
+  HONK=0/410 AND HONK_ZK=6/458, and with bb-generated inner proofs too →
+  not the ZK flavor, not co-noir, not vk_hash (verified bb hash ==
+  poseidon2(vk) == pin). Sole trigger: a Mega app carrying the UH
+  recursive verifier. And `verify_proof_with_type` has NO app-contract
+  caller in the whole aztec-packages tree — an unexercised path upstream.
+- **Deliverable**: `upstream-issues/clientivc-recursive-verify-fails-in-app.md`
+  + `clientivc-recursive-verify-repro/` (gzipped real 6-circuit folding
+  stack + captured output) — deterministic file-based repro
+  (`bb prove --scheme chonk --ivc_inputs_path …`), discrimination table,
+  capture technique, and a suggested bb-team C++ test. Ready for Mike to
+  file in the private bb repo.
+- Tooling built en route: `e2e/probe_driver.mjs` + `run_probe.sh` (real-
+  proof VerifyProbe driver); the bb-prover execution-steps dump hook and
+  bb.js native-logger patches (documented in the report — node_modules is
+  gitignored so the patches were reverted to keep the tree pristine).
+  Real-proving toggle wired into the main e2e (EXPECT_REAL_PROOFS=1 →
+  PROVER_REAL_PROOFS + wallet proverEnabled). run.sh cleanup hardened
+  (setsid + anvil sweep; a stale anvil otherwise makes the next start
+  die "Ethereum node is out of sync").
+- **CONSEQUENCE**: the tamper-reject soundness gate is BLOCKED on the bb
+  fix. Everything short of real ClientIVC proving is green. ch.04 §5's
+  recipe was verified at artifact/constant level + TXE, never end-to-end
+  under real proving — this is what surfaced that gap.

@@ -251,10 +251,38 @@ Notable: NO app contract in the whole ap-next tree calls
 `verify_proof_with_type` (only protocol/mock kernels use verify_proof,
 in UH→UH recursion) — "verify a UH proof inside a Chonk-proven app
 function" appears UNTESTED upstream at this tag; we are probably the
-first to run it for real. Next steps: (1) probe PROOF_TYPE_HONK=0 with
-a 410-field non-ZK bb proof (isolates the ZK flavor); (2) bb.js verbose
-logging to name the failing check; (3) minimal repro contract → upstream
-issue; (4) re-read ch. 04 §5's evidence — the recipe was verified at the
-artifact/constant level, evidently never end-to-end under real proving. Driver gotchas recorded in ch. 14
+first to run it for real. DIAGNOSED (2026-07-13 night, session 9 cont.) — it is a
+barretenberg-side defect in an untested path, NOT ours; full
+maintainer-ready report + deterministic repro in the monty-hall repo
+`upstream-issues/clientivc-recursive-verify-fails-in-app.md`
+(+ `clientivc-recursive-verify-repro/`). Findings:
+- The failing check is `ChonkVerifier: verification failed at batched
+  translator+joint reduction` (chonk_verifier.cpp:89, Step 5 Translator
+  Oink + Joint sumcheck + Joint PCS; `reduction_succeeded==false`, not
+  the pairing). Same binary proves and self-verifies, so the PROVER
+  emits a Goblin translator/joint sub-proof that fails its own verifier.
+- Discriminated with a minimal 2-function probe contract
+  (`contract/verify_probe`): deploy (no verify) PROVES; an app calling
+  `verify_proof_with_type` FAILS for BOTH HONK=0/410 and HONK_ZK=6/458,
+  and FAILS with bb-generated inner proofs too. So not the ZK flavor,
+  not co-noir, not vk_hash (bb vk.json hash == poseidon2(vk) == the
+  pin, verified equal). Sole common factor: a Mega app circuit
+  containing the UH recursive verifier (~700 Goblin ECC ops → ECCVM +
+  Translator).
+- `verify_proof_with_type` has NO app-contract caller anywhere in
+  aztec-packages-private at this tag; only protocol/mock kernels
+  recurse, over the ULTRA builder (UH→UH), never inside a Mega app.
+  The Mega-app-verifies-UH path is unexercised upstream.
+- Repro is file-based: the real 6-circuit folding stack captured from
+  the failing PXE run (dumped via serializePrivateExecutionSteps) +
+  `bb prove --scheme chonk --ivc_inputs_path …` on the matching 0703
+  bb.js binary. Capture technique (bb-prover dump hook, bb.js native
+  logger) documented in the report.
+CONSEQUENCE: the definitive tamper-reject soundness gate stays blocked
+until the bb team fixes this; everything up to real client proving is
+green (TXE 10/10, MPC full game, local-network e2e in simulated mode).
+Also: ch. 04 §5's in-contract recipe was verified at the
+artifact/constant level and in TXE, but never end-to-end under real
+ClientIVC proving — that gap is what this surfaced. Driver gotchas recorded in ch. 14
 §26 (foundation subpath exports; @aztec/accounts lazy JSON import needs
 a load-hook shim; send() waits by default — no `.wait()`).
