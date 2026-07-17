@@ -1109,3 +1109,35 @@ Mike pushed back on "nobody tries this pattern" (correctly). Chased it:
   and a "reproduce the official example" recipe.
 - Still not a speculative-fix candidate (audited Goblin/Translator C++);
   it's a maintainer bug report — now a much stronger one.
+
+## Session 10 — 2026-07-17 — RESOLVED: the bb bug is real AND already fixed on `next`
+
+Built the C++ reproduction the report's "suggested next step" called for and
+ran it on `next` (branch `mc/fix-clientivc-recursive-verify` in
+aztec-packages-private, based on next; commit 91e7212adb).
+
+- **New test** `barretenberg/cpp/src/barretenberg/dsl/acir_format/chonk_honk_recursion.test.cpp`
+  (`ChonkHonkRecursionTests`): injects a `UltraZKRecursiveFlavor_<MegaCircuitBuilder>`
+  recursive verifier into one Chonk app slot (via a new `app_finalizer` hook on
+  `PrivateFunctionExecutionMockCircuitProducer`), accumulates app+kernels,
+  `ivc.prove()`, verifies with `ChonkNativeVerifier`.
+- **VerifyHonkProofInApp → PASSES on next.** `num ultra ops = 581` vs a 504-op
+  baseline for the same producer without the injected verifier (the +77 goblin
+  ops are the recursive verifier's deferred group ops → it's genuinely present).
+- **BadInnerProofIsRejected (negative control) → PASSES**: corrupt inner proof
+  is rejected. Proves the verifier actually constrains the proof and the harness
+  can tell accept from reject, so the green result is meaningful.
+- **VERDICT**: There WAS a real barretenberg bug at v5.0.0-nightly.20260708
+  (confirmed at session 9 with Aztec's own tutorial example → not our monty-hall
+  work). It does NOT reproduce on `next`. The fix is upstream commit
+  **a69ffdf8a1 (#500)** — full-width Fiat-Shamir + `enforce op = 0 in odd rows in
+  translator (port #378)` + single VK regen — matching all three symptoms
+  (batched-translator failure locus, VK regen 4576→5216, op-stream dependence).
+- **Project resolution**: to unblock in-contract UH verify under REAL proving
+  (and the ch.04 §5 tamper-reject soundness gate), move co-snarks/monty-hall to a
+  pin containing a69ffdf8a1, or cherry-pick #500 (+ its VK regen). TXE/simulated
+  proving was never affected.
+- Fidelity caveat: reproduction builds the verifier via stdlib on the Mega
+  builder (same circuit the DSL emits), not the identical failing PXE artifact
+  (its 4576-byte Mega VKs no longer load post-regen). Final end-to-end proof on
+  next = a real-proving e2e with a next client (official_example_driver.mjs).
