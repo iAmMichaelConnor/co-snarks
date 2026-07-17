@@ -1221,3 +1221,23 @@ foreground sleep in my commands, NOT the node). Ran the REAL test:
   changes — so it rotates immutable VKs and is not app-side-only. Deployed/immutable
   v5 cannot be fixed in place; the resolution is to move to the v6/next line.
 - Report RESOLVED: monty-hall upstream-issues/…-fails-in-app.md (commit ed6a71b).
+
+## Session 11 (cont. 3) — BISECT: fix commit = a69ffdf8a1 (#500), full-width Fiat-Shamir
+
+Real-stack (NO-MOCK) git bisect over the next line pins the fix:
+- Oracle: build bb per commit + `bb prove --scheme chonk` the REAL captured stack
+  (real private_kernel_* + hiding_kernel + real verify-app, dumped from the
+  passing next PXE run). FIXED = exit 0 + proof written; BROKEN = fails/won't-load.
+  (First oracle attempt was VOID — it detected success by log message, but bb
+  prove succeeds silently; recalibrated to exit-code + proof-file.)
+- Result: parent a1f07c9fda BROKEN, **a69ffdf8a1 (#500) FIXED** → #500 is the fix.
+- Operative sub-change: **full-width Fiat-Shamir** (in-circuit convert_challenge →
+  convert_full_challenge, exact fr→fq). The other two sub-fixes in #500 (op=0 #378,
+  shift-size #409) were ALREADY in the failing v5 pin …20260708, so ruled out.
+- Fix == VK-format change (4576→5216) by construction: full-width FS rotates all
+  Honk VKs, so the completeness fix and the format regen are the same commit.
+  (Couldn't test the parent with an old stack — new stack won't load, old v5 stack
+  no longer parses "Missing field kind"; the op=0/shift-size elimination is the
+  independent confirmation.)
+- NOTE: this VINDICATES the original #500 hypothesis that was wrongly retracted on
+  the void mock bisect. Real circuits only, always (Mike's rule).
