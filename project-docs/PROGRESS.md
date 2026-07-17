@@ -1196,3 +1196,28 @@ multiple bb binaries (no mocks, no network):
   retracted and looks UNLIKELY. Testing the current next tip needs regenerating
   the stack with a post-07-10 client (full e2e or source build) — no such client
   on npm. ALL mock C++ results are VOID (mocks hide the bug — Mike's instruction).
+
+## Session 11 (cont. 2) — DEFINITIVE: bug FIXED on v6/next (real-proving, no mocks)
+
+Got the from-source next node running (earlier exit-144s were from pkill -f /
+foreground sleep in my commands, NOT the node). Ran the REAL test:
+- Built next bb CLI + started `aztec start --local-network` (real proofs) from
+  source (anvil for L1). Node came up on :8080.
+- Generated a real inner UH-ZK proof with next bb; deployed the compiled
+  HonkVerifier contract; called increment() (which runs verify_honk_proof) from
+  an EmbeddedWallet with proverEnabled=true → REAL ClientIVC proving, REAL kernels.
+- RESULT: deploy + increment() both generated ClientIVC proofs with NO error;
+  counter 10→11. The identical flow FAILS on v5 (session 9). So the in-contract
+  UH-verify bug is **FIXED on the v6/next line, broken on v5**.
+- Driver: aztec-packages-private:yarn-project/verify_driver.mjs (+ register.mjs
+  shim), commit 781b21f6f3. Run: node --import ./register.mjs verify_driver.mjs
+  with ARTIFACT=honk_verifier_contract-HonkVerifier.json, INNER_DIR=<inner/out>,
+  BB_BINARY_PATH=<next bb>, PROVER_REAL_PROOFS=true.
+- The mock ivc-integration cross-check (581 ops, verifier present, reduction:true)
+  passed on next but is inconclusive alone (mocks pass on v5 too); the real-kernel
+  run above is the conclusive one.
+- Task #17 (app-side-only fix on immutable v5.0.1): ANSWERED NO. The fix spans
+  protocol machinery — Honk VK format changed 4576→5216 + transcript/translator
+  changes — so it rotates immutable VKs and is not app-side-only. Deployed/immutable
+  v5 cannot be fixed in place; the resolution is to move to the v6/next line.
+- Report RESOLVED: monty-hall upstream-issues/…-fails-in-app.md (commit ed6a71b).
