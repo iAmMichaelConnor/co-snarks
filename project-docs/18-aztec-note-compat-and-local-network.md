@@ -269,10 +269,21 @@ maintainer-ready report + deterministic repro in the monty-hall repo
   pin, verified equal). Sole common factor: a Mega app circuit
   containing the UH recursive verifier (~700 Goblin ECC ops → ECCVM +
   Translator).
-- `verify_proof_with_type` has NO app-contract caller anywhere in
-  aztec-packages-private at this tag; only protocol/mock kernels
-  recurse, over the ULTRA builder (UH→UH), never inside a Mega app.
-  The Mega-app-verifies-UH path is unexercised upstream.
+- Recursive UH verification IS exercised upstream, but never in the
+  failing configuration. In BOTH trees every verify_proof caller is
+  either standalone Ultra→Ultra recursion proven directly with bb
+  (barretenberg/noir/bb_proof_verification + docs/examples/.../recursive),
+  a protocol/rollup/mock kernel (Ultra builder), or on-chain L1 Solidity
+  (integration_proof_verification.test.ts). ZERO `#[aztec]` contract
+  functions call verify_proof in either tree. So "UH verifier in a Mega
+  app accumulated by ClientIVC" is the unexercised path.
+- POSITIVE CONTROL: the repro circuit (only gate = verify_proof_with_type)
+  proves + self-verifies fine as a standalone ULTRA proof
+  (`bb prove --scheme ultra_honk`); the identical constraint fails ONLY
+  under Mega/ClientIVC. Localizes the defect to the Goblin/ECCVM/
+  Translator path, not the recursion verifier. (Corrects an earlier
+  overstatement that there were no verify_proof callers at all — there
+  are, just no #[aztec] contract ones.)
 - Repro is file-based: the real 6-circuit folding stack captured from
   the failing PXE run (dumped via serializePrivateExecutionSteps) +
   `bb prove --scheme chonk --ivc_inputs_path …` on the matching 0703
