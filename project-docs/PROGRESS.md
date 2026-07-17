@@ -1129,10 +1129,14 @@ aztec-packages-private, based on next; commit 91e7212adb).
   can tell accept from reject, so the green result is meaningful.
 - **VERDICT**: There WAS a real barretenberg bug at v5.0.0-nightly.20260708
   (confirmed at session 9 with Aztec's own tutorial example → not our monty-hall
-  work). It does NOT reproduce on `next`. The fix is upstream commit
+  work). It does NOT reproduce on `next`. Leading (NOT bisect-confirmed) fix:
   **a69ffdf8a1 (#500)** — full-width Fiat-Shamir + `enforce op = 0 in odd rows in
-  translator (port #378)` + single VK regen — matching all three symptoms
-  (batched-translator failure locus, VK regen 4576→5216, op-stream dependence).
+  translator (port #378)` + shift-size + single VK regen. It's the only PIN..next
+  commit touching the failing translator subsystem + the VK regen, BUT its
+  sub-fixes are soundness-framed (why an honest proof flips fail→pass is
+  inferred), PIN..next has 60+ commits, and there's a v5/v6 divergence (next is
+  v6-based; #500 is a v6-line commit — the same one PLAN Phase 3 already flags
+  for the co-noir transcript port). Only a bisect confirms attribution.
 - **Project resolution**: to unblock in-contract UH verify under REAL proving
   (and the ch.04 §5 tamper-reject soundness gate), move co-snarks/monty-hall to a
   pin containing a69ffdf8a1, or cherry-pick #500 (+ its VK regen). TXE/simulated

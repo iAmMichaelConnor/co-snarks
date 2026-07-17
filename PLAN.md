@@ -229,7 +229,12 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
 *Out of scope while the target is v5-next (verified: neither commit is in
 v5-next). Reactivate only if the target moves to the v6 line:*
-full-width FS challenges (`a69ffdf8a1`) in `co-noir-common/src/transcript.rs`;
+full-width FS challenges (`a69ffdf8a1` = #500) in `co-noir-common/src/transcript.rs`;
+**[NOTE session 10: `a69ffdf8a1` (#500) is ALSO the leading fix for the
+in-contract UH-verify real-proving bug (Phase 5.1 status) — it bundles
+translator op=0 + shift-size + full-width FS + VK regen. That bb-side fix
+lands via the AZTEC toolchain pin, not this co-noir transcript port; the two
+are independent consumers of the same commit.]**
 ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
 `rom_logup_gamma` challenge in oink, builder ROM gate changes.
 
@@ -280,6 +285,20 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       Upstream aztec-nr defect found + written up (third-party note
       delivery; monty-hall repo upstream-issues/). Record: PROGRESS
       session 9, ch. 14 §26, ch. 16 banner, ch. 17 §6.7–6.9.]**
+      **[STATUS 2026-07-17 (session 10): the real-proving blocker is a REAL
+      bb bug, NOT our work — confirmed session 9 with Aztec's own tutorial
+      example failing identically at the v5.0.0-nightly.20260708 pin. Built the
+      in-process C++ reproduction (`ChonkHonkRecursionTests` in bb, branch
+      `mc/fix-clientivc-recursive-verify`, commit 91e7212adb): a UH recursive
+      verifier in a Mega app, accumulated+proven+verified via Chonk, + a
+      corrupt-proof negative control. Both PASS on `next` → the bug is fixed
+      upstream. Leading (unconfirmed-by-bisect) fix: `a69ffdf8a1` (#500) — the
+      SAME v6-line commit Phase 3 already flags (full-width FS + translator op=0
+      + shift-size + VK regen); it is the only PIN..next commit touching the
+      failing translator subsystem. Resolution for real-proving: bump the AZTEC
+      toolchain pin to a v6/next release, or cherry-pick #500 into bb. This is
+      an aztec-client/bb pin concern, SEPARATE from co-noir's v5-next sync
+      target. Record: PROGRESS session 10.]**
 - [ ] 5.2 Design+build the user→MPC share submission channel (envelope
       encryption per node; TypeScript tooling; TACEO:Proof is the
       commercial reference shape, ch. 02 §5.4), but if that's not open source, we should look at the ~/monty-hall-aztec repo for inspiration.
