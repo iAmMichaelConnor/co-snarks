@@ -1145,3 +1145,31 @@ aztec-packages-private, based on next; commit 91e7212adb).
   builder (same circuit the DSL emits), not the identical failing PXE artifact
   (its 4576-byte Mega VKs no longer load post-regen). Final end-to-end proof on
   next = a real-proving e2e with a next client (official_example_driver.mjs).
+
+## Session 11 — 2026-07-17 — RETRACTION: the C++ repro does NOT reproduce the bug; "fixed on next" is unproven
+
+Ran the bisect Mike asked for. It overturned session 10:
+- **#500 is NOT the fix**: built + ran ChonkHonkRecursionTests at a69ffdf8a1's
+  parent a1f07c9fda → PASS. If the parent passes, #500 can't be the fix.
+- **The C++ test does NOT reproduce the bug**: ported it to
+  aztec-packages-private:v5.0.0-nightly.20260708 (the tag where the bug IS
+  validated via e2e) and clean-built → PASS (637 ops vs 581 on v6, so the build
+  is faithful, not stale). The test passes exactly where the bug is real.
+- **Therefore RETRACTED**: session-10's "real bug, FIXED on next, confirmed via
+  negative control" was overstated. The negative control only proved the
+  verifier is wired in — NOT that the test reproduces the bug. "Fixed on next" is
+  UNPROVEN (the only C++ evidence was a test that can't see the bug). #500 /
+  full-width-FS attribution withdrawn.
+- **Still solid**: the bug manifests at v5.0.0-nightly.20260708 under real
+  proving (e2e, Aztec's own example, session 9). That's the only hard fact.
+- **Why the C++ test misses it (hypotheses)**: injects the recursive verifier via
+  stdlib directly instead of the real DSL create_honk_recursion_constraints /
+  create_circuit<Mega>(program,{.ivc}) path; mock kernels simpler than real
+  private kernels; mock inner proof differs from the co-noir/bb one.
+- **Next to get a VALID repro**: (a) rebuild the test through the real DSL path
+  (what the bug report's "suggested next step" actually specified — I only
+  approximated it); if it fails at the v5 pin it's a faithful guard and a bisect
+  can find the real fix. (b) real e2e on a next/v6 client (gold standard, heavy).
+- Bug md rewritten with a status table + bisect log; branches bisect-v5pin /
+  bisect-fix-parent hold the ported test. LESSON: don't call something a
+  reproduction until it has actually failed on the real bug.

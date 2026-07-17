@@ -299,6 +299,15 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       toolchain pin to a v6/next release, or cherry-pick #500 into bb. This is
       an aztec-client/bb pin concern, SEPARATE from co-noir's v5-next sync
       target. Record: PROGRESS session 10.]**
+      **[RETRACTION 2026-07-17 (session 11): the bisect overturned the above.
+      #500 is NOT the fix (its parent a1f07c9fda passes), and — more importantly
+      — the C++ test does NOT reproduce the bug: it PASSES at the v5 pin
+      v5.0.0-nightly.20260708 where the bug is validated via e2e. So "fixed on
+      next" is UNPROVEN and the #500/full-width-FS attribution is withdrawn. The
+      ONLY hard fact remains the e2e validation at the v5 pin (session 9). Need a
+      faithful reproduction first (DSL create_honk_recursion_constraints path, or
+      real e2e on a next client) before any fix/branch claim. Record: PROGRESS
+      session 11.]**
 - [ ] 5.2 Design+build the user→MPC share submission channel (envelope
       encryption per node; TypeScript tooling; TACEO:Proof is the
       commercial reference shape, ch. 02 §5.4), but if that's not open source, we should look at the ~/monty-hall-aztec repo for inspiration.
