@@ -1173,3 +1173,26 @@ Ran the bisect Mike asked for. It overturned session 10:
 - Bug md rewritten with a status table + bisect log; branches bisect-v5pin /
   bisect-fix-parent hold the ported test. LESSON: don't call something a
   reproduction until it has actually failed on the real bug.
+
+## Session 11 (cont.) — FAITHFUL no-mock result: bug present on v5 AND early-v6
+
+After Mike said "never use mock circuits" + "maybe there was never a bug",
+re-examined the ONLY non-mock evidence and ran the REAL captured stack through
+multiple bb binaries (no mocks, no network):
+- Re-scrutinized session-9 e2e: Aztec's OWN official example (ValueNotEqual)
+  fails at increment() under real proving; native log shows failure at
+  `batched translator+joint reduction` (NOT the pairing check → bb-bug shape,
+  not invalid-inner-proof), with REAL kernels (private_kernel_init/reset/tail +
+  hiding_kernel), and a positive control (same verify as standalone Ultra proof
+  verifies fine). So the bug is REAL, not a monty-hall artifact.
+- Ran the real failing stack (failing-ivc-inputs.msgpack) through bb CLI:
+  - 6.0.0-nightly.20260605 (early v6): **FAILS** identically (698 ops, translator
+    reduction). So the bug is on the v6 line too.
+  - 5.0.0-nightly.20260703 (produced the stack) / 5.0.0-nightly.20260708 (pin):
+    FAIL.
+  - 5.0.0-nightly.20260710 (in npm 5.0.0-n.715 / 5.1.0-n.717): can't load the
+    stack (VK format 4576→5216 changed ~07-10) → inconclusive.
+- NET: bug confirmed on v5 AND early-v6 via REAL circuits. "Fixed on next" is
+  retracted and looks UNLIKELY. Testing the current next tip needs regenerating
+  the stack with a post-07-10 client (full e2e or source build) — no such client
+  on npm. ALL mock C++ results are VOID (mocks hide the bug — Mike's instruction).
