@@ -281,9 +281,23 @@ maintainer-ready report + deterministic repro in the monty-hall repo
   proves + self-verifies fine as a standalone ULTRA proof
   (`bb prove --scheme ultra_honk`); the identical constraint fails ONLY
   under Mega/ClientIVC. Localizes the defect to the Goblin/ECCVM/
-  Translator path, not the recursion verifier. (Corrects an earlier
-  overstatement that there were no verify_proof callers at all — there
-  are, just no #[aztec] contract ones.)
+  Translator path, not the recursion verifier.
+- ★ DECISIVE (corrects the "untested" framing): the pattern IS
+  documented — Aztec's own tutorial "Verify Noir Proofs in Aztec
+  Contracts" + `docs/examples/contracts/recursive_verification_contract`
+  (ValueNotEqual, uses bb_proof_verification::verify_honk_proof). We
+  compiled that OFFICIAL example at our pin and ran it under real
+  proving: deploy OK, counter=10, then `increment()` fails identically
+  ("Failed to verify the generated proof!" from createChonkProof). So
+  it is NOT our code and NOT a niche pattern — it is the blessed,
+  documented capability, broken end-to-end at this pin. It escapes CI
+  because the docs examples aren't in the proving matrix and local
+  networks default to realProofs:false (simulated, where verify is a
+  no-op). Community demos (satyambnsal/critesjosh aztec-noir-verify) try
+  the same shape at aztec 2.0.3 but ship no working-run evidence — open
+  question whether 2.0.x worked (regression) or it never did.
+  Transcript: monty-hall upstream-issues/clientivc-recursive-verify-repro/
+  official-example-run.log; driver e2e/official_example_driver.mjs.
 - Repro is file-based: the real 6-circuit folding stack captured from
   the failing PXE run (dumped via serializePrivateExecutionSteps) +
   `bb prove --scheme chonk --ivc_inputs_path …` on the matching 0703

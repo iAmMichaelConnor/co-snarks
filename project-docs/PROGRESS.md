@@ -1086,3 +1086,26 @@ audited proving C++ — produced a maintainer-ready report instead.
   fix. Everything short of real ClientIVC proving is green. ch.04 §5's
   recipe was verified at artifact/constant level + TXE, never end-to-end
   under real proving — this is what surfaced that gap.
+
+## Session 9 (continued) — 2026-07-13 night — DECISIVE: Aztec's own documented example fails the same way
+
+Mike pushed back on "nobody tries this pattern" (correctly). Chased it:
+- The pattern is DOCUMENTED: Aztec tutorial "Verify Noir Proofs in Aztec
+  Contracts" + `docs/examples/contracts/recursive_verification_contract`
+  (ValueNotEqual, verify_honk_proof from bb_proof_verification). Also
+  community demos (satyambnsal/critesjosh aztec-noir-verify) at aztec
+  2.0.3. My earlier "untested/no caller" claim was WRONG and is
+  corrected in the report + ch.18.
+- Ran the OFFICIAL example verbatim at our pin under real proving:
+  deploy OK, counter=10, `increment()` (→ verify_honk_proof) fails
+  identically ("Failed to verify the generated proof!" from
+  createChonkProof). So the failure is NOT ours — Aztec's own tutorial
+  example is broken end-to-end at v5.0.0-nightly.20260708. It escapes CI
+  because docs examples aren't in the proving matrix + local networks
+  default realProofs:false (simulated → verify is a no-op).
+- Report upgraded to lead with this (upstream-issues/…-fails-in-app.md
+  + official-example-run.log + e2e/official_example_driver.mjs +
+  run_official.sh). Added the regression-vs-never-worked open question
+  and a "reproduce the official example" recipe.
+- Still not a speculative-fix candidate (audited Goblin/Translator C++);
+  it's a maintainer bug report — now a much stronger one.
