@@ -17,3 +17,6 @@ groth16_tester.rs
 
 # agent worktrees + local Claude state
 .claude/
+
+# local scratch — links/notes, never committed
+ARTIFACTS.md
