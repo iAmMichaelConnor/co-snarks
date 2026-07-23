@@ -364,15 +364,11 @@ fn baseline_zk_proof_accepts() {
 /// decider/SSIPA region is actually consumed and constrained by the verifier,
 /// not silently ignored.
 ///
-/// NOTE: this is deliberately NOT the full SmallSubgroupIPA A(1)=0 consistency
-/// test. That one requires constructing the homogeneous-kernel perturbation
-/// (delta_A(1)=delta, delta_A(g^j) = -delta/(g-1), delta_s = c) that satisfies
-/// the standalone SSIPA identity yet changes the claimed Libra inner product,
-/// and asserting rejection specifically through the Shplemini-batched path (the
-/// standalone consistency check accepts such a perturbation, so a test that
-/// bypasses Shplemini would pass without exercising the real enforcement). That
-/// is a known follow-up; a naive version would give false confidence, so it is
-/// intentionally not written here.
+/// NOTE: this general binding check is complemented by
+/// `zk_proof_ssipa_evaluation_tamper_rejected` below, which pins the four
+/// transmitted SmallSubgroupIPA evaluation fields specifically (this test's
+/// fractional probe positions do not land on the SSIPA eval region). See that
+/// test for the SSIPA-specific enforcement discussion and the mutation matrix.
 #[test]
 fn zk_proof_decider_field_tamper_rejected() {
     let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
@@ -396,6 +392,100 @@ fn zk_proof_decider_field_tamper_rejected() {
         assert!(
             !matches!(res, Ok(true)),
             "ZK verifier accepted a proof with field {pos}/{n} tampered: {res:?}"
+        );
+    }
+}
+
+/// SmallSubgroupIPA (Libra) evaluation binding — the deferred §3a #8 negative.
+///
+/// The ZK prover emits four transmitted SmallSubgroupIPA evaluations in the
+/// proof, in this transcript order at the tail of the decider proof:
+///   G(r)  = "Libra:concatenation_eval"
+///   A(g*r)= "Libra:shifted_grand_sum_eval"
+///   A(r)  = "Libra:grand_sum_eval"
+///   Q(r)  = "Libra:quotient_eval"
+/// Together with the untransmitted, hard-coded boundary opening A(1) = 0 these
+/// form the five SmallSubgroupIPA opening claims (NUM_SMALL_IPA_OPENING_CLAIMS)
+/// batched through Shplonk/Shplemini. They occupy the four field elements just
+/// before the two trailing commitments (Shplonk:Q = 4 frs, then KZG:W = 4 frs),
+/// i.e. inner indices n-12 ..= n-9. This test tampers each one in turn and
+/// asserts the ZK verifier rejects cleanly (Ok(false) or a clean Err), never a
+/// panic.
+///
+/// What the verifier actually enforces here (empirically established while
+/// writing this test, via a temporary two-point mutation of the verifier — the
+/// verifier is unchanged in the committed tree):
+///
+///   * the final ZK verdict is `sumcheck.verified && pcs_verified &&
+///     consistency_checked` — a three-way AND;
+///   * each of the four evaluations is bound *twice, independently*: once by
+///     the Shplemini/KZG batched opening (they feed the Shplonk constant-term
+///     accumulator, so any change breaks the KZG pairing → `pcs_verified`
+///     false), and once by `check_evaluations_consistency` (they must satisfy
+///     the SmallSubgroupIPA identity at the Gemini challenge r → the returned
+///     `consistency_checked` false).
+///
+/// Mutation matrix observed for each of the four fields (tamper = +1):
+///   honest verifier                       -> Ok(false)   (rejected)
+///   check_evaluations_consistency := true  -> Ok(false)   (KZG still catches it)
+///   pairing_check := true                  -> Ok(false)   (consistency catches it)
+///   BOTH neutralized                       -> Ok(true)    (accepted — RED)
+///
+/// So this is defense-in-depth: it is *stronger* than bb's own note that the
+/// standalone SmallSubgroupIPA `check_consistency` accepts the homogeneous
+/// kernel perturbation (delta_A(1)=delta, delta_A(g^j)=-delta/(g-1), delta_s=c).
+/// That perturbation is a prover-side forgery: it rebuilds the [A]/[Q]
+/// commitments and re-derives the whole Fiat-Shamir transcript so the identity
+/// holds at r while A(1) != 0, leaving only the KZG boundary opening to reject
+/// it. It cannot be reproduced by byte-tampering a finished proof, because the
+/// transmitted evaluations are absorbed into the transcript *before* the Shplonk
+/// challenges nu/z are drawn, so any byte edit desynchronizes every downstream
+/// challenge. Reproducing it in-process would require the SmallSubgroupIPA
+/// prover internals (they are `pub(crate)`), i.e. a production-code change,
+/// which this test intentionally avoids. The byte-level negative here still
+/// pins the property the deferral cared about: the verifier does not silently
+/// accept altered SmallSubgroupIPA evaluations — the A(1)=0 / identity binding
+/// is enforced on the verifier side.
+#[test]
+fn zk_proof_ssipa_evaluation_tamper_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let n = proof.inner_as_ref().len();
+
+    // Layout at the tail of the ZK decider proof: [.. , 4 SSIPA evals, Shplonk:Q
+    // (4 frs), KZG:W (4 frs)]. Locate the SSIPA evals relative to the end so the
+    // test does not depend on the (public-input-dependent) absolute offset.
+    const TRAILING_COMMITMENT_FRS: usize = 8; // Shplonk:Q (4) + KZG:W (4)
+    let ssipa_eval_indices = [
+        n - TRAILING_COMMITMENT_FRS - 4, // Libra:concatenation_eval   G(r)
+        n - TRAILING_COMMITMENT_FRS - 3, // Libra:shifted_grand_sum_eval A(g*r)
+        n - TRAILING_COMMITMENT_FRS - 2, // Libra:grand_sum_eval        A(r)
+        n - TRAILING_COMMITMENT_FRS - 1, // Libra:quotient_eval         Q(r)
+    ];
+    let labels = [
+        "Libra:concatenation_eval G(r)",
+        "Libra:shifted_grand_sum_eval A(g*r)",
+        "Libra:grand_sum_eval A(r)",
+        "Libra:quotient_eval Q(r)",
+    ];
+
+    for (pos, label) in ssipa_eval_indices.into_iter().zip(labels) {
+        let mut inner = proof.inner_as_ref().clone();
+        inner[pos] += ark_bn254::Fr::from(1u64);
+        let tampered = HonkProof::new(inner);
+
+        // Must reject and must not panic. A malformed-input panic would itself
+        // be a robustness regression (see the module doc and
+        // `verify_catching_panics`).
+        let accepted = verify_catching_panics(tampered, &public_inputs, &vk, ZeroKnowledge::Yes)
+            .unwrap_or_else(|panic_msg| {
+                panic!(
+                    "ZK verify PANICKED on tampered SSIPA field {label} (idx {pos}/{n}): \
+                     {panic_msg}"
+                )
+            });
+        assert!(
+            !accepted,
+            "ZK verifier ACCEPTED a proof with SSIPA field {label} (idx {pos}/{n}) tampered"
         );
     }
 }

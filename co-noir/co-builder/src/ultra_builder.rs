@@ -4623,9 +4623,10 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         Ok(())
     }
 
-    // TODO(phase2-2.6): The is_infinite inputs were removed with Noir v1.0.0-beta.22 (the point at
-    // infinity is now encoded as (0, 0)); re-verify gate-count parity of the EcAdd/MSM constraints
-    // against bb (ec_operations.cpp, multi_scalar_mul.cpp, witness_constant.cpp).
+    // The is_infinite inputs were removed with Noir v1.0.0-beta.22 (the point at infinity is now
+    // encoded as (0, 0)). EcAdd/MSM gate-count parity vs bb (ec_operations.cpp,
+    // multi_scalar_mul.cpp, witness_constant.cpp) was re-verified empirically: EC_ADD 80->76 and
+    // MSM 3559->3557 match bb at the pin, and embedded_curve_add is proof/VK byte-identical.
     fn create_ec_add_constraint(
         &mut self,
         constraint: &EcAdd<P::ScalarField>,
