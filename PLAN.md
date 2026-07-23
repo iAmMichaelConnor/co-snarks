@@ -139,6 +139,15 @@ Goal: a co-snark generated and verified end-to-end this week; baseline metrics.
 
 ### Phase 2 — sync co-noir to the v5-next target  (~2–4 wks, LOCAL ONLY)  [STARTED 2026-07-08]
 
+**⚠ SUPERSEDED 2026-07-20 (Phase 2b below): the pin moved on from
+`v5.0.0-nightly.20260708` to `v5.0.1`.** The working-set block immediately
+below is preserved as the historical record of how the *original* Phase 2
+sync was pinned — do not treat it as current. Also note (ch. 19 §1): the
+`~/.bb-target-src/bb` oracle this block names was actually built from
+private-repo commit `289aaec1e027`, not the public mirror's same-named
+`v5.0.0-nightly.20260708` tag (a divergent commit) — re-verify tag/commit
+identity yourself before relying on any tag name in this block.
+
 **Pinned working set (re-verify at each session start, repos move daily):**
 - **Work branch**: `mc/update-co-noir` in `~/co-snarks` (branched off local
   `main` @ `36da0ea8`; origin pushurl DISABLED as no-push rail; local
@@ -225,6 +234,33 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       both zk modes; flipped-byte tripwire validated. Recursion VK KATs
       were deferred to 2.9 and landed with its fix (always-on ~5 s
       `recursion{,_zk}_vk_kat` tests).
+
+### Phase 2b — resync to bb v5.0.1  [DONE 2026-07-20; ch. 19]
+- [x] Full write-up: `project-docs/19-v5.0.1-resync-gap-analysis.md`.
+      Headline: the C++ source for every UltraHonk-critical directory is
+      **byte-identical** between co-noir's true current baseline and
+      `v5.0.1` — Stage 3 (porting) is empty by construction. This traces to
+      a tag-provenance surprise: the existing oracle (`~/.bb-target-src/bb`,
+      `PROVENANCE.txt`) was actually built from private-repo commit
+      `289aaec1e027`, which shares the nightly *tag name*
+      `v5.0.0-nightly.20260708` with a different, divergent commit in the
+      public mirror — verified 4 independent ways in ch. 19 §1.2 (byte-
+      identical from-source rebuild of `289aaec1e027`; empty tree-diff
+      `289aaec1e027..v5.0.1` for every UltraHonk dir; identical Noir/ACIR
+      submodule pin; co-noir's own commit messages already describing
+      v5.0.1-era content). Stage 4 (validation) was still run in full and is
+      green: bb-vs-bb 100% byte parity, `compare.sh`/`compare_mpc.sh`
+      (incl. slow set + recursion) 0 errors vs the new oracle. Pin flipped:
+      `versions.env` → `BARRETENBERG_VERSION=5.0.1`,
+      `BARRETENBERG_BINARY_DEFAULT=~/.bb-target-src-v5.0.1/bb`. New oracle at
+      `~/.bb-target-src-v5.0.1/bb`; old oracle/pin left on disk, not deleted.
+      Two incidental pre-existing script bugs found + fixed (ch. 19 §4):
+      `compare_mpc.sh`'s hardcoded `TEST_SLOWER_CIRCUITS=0` silently
+      overriding the caller's env var, and `fast-check.sh` hardcoding its own
+      (now-stale) copy of the oracle path instead of reading `versions.env`.
+      Held uncommitted through 2026-07-20 (Mike's confidentiality
+      correction); **committed 2026-07-23 on Mike's explicit ask**, after a
+      full code-level re-verification of every claim (PROGRESS session 13).
 
 ### Phase 3 — CONTINGENCY ONLY: port the two v6-line commits
 *Out of scope while the target is v5-next (verified: neither commit is in

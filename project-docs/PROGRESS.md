@@ -1241,3 +1241,164 @@ Real-stack (NO-MOCK) git bisect over the next line pins the fix:
   independent confirmation.)
 - NOTE: this VINDICATES the original #500 hypothesis that was wrongly retracted on
   the void mock bisect. Real circuits only, always (Mike's rule).
+
+## Session 12 — 2026-07-20 — v5.0.1 resync: built the new oracle, found the true diff is EMPTY, full Stage-4 green, pin flipped
+
+New task, separate from the sessions 9–11 monty-hall/bb-bug thread above:
+re-sync co-noir's bb pin from `v5.0.0-nightly.20260708` to `v5.0.1`, run with
+the same rigor as the original Phase 2 sync (ch. 03/11/12/13 methodology).
+Full write-up: **project-docs ch. 19** (new chapter). Summary:
+
+- **Stage 1 (oracle)**: built `bb` from source at `~/ap-next`'s `v5.0.1` tag
+  (`b97ff8c3e88f`, release commit `72666f8d1d6`) via `git worktree add
+  --detach` off `~/ap-next` (never touched its checkout, which stayed on
+  branch `v5`) — same recipe as the existing oracle (clang-20, `cmake
+  --preset default -DAVM=OFF`, ~129s build). Saved to
+  `~/.bb-target-src-v5.0.1/bb` + `PROVENANCE.txt`; old oracle untouched.
+- **Stage 2 (gap analysis) — the real finding**: the C++ source for every
+  UltraHonk-critical directory (relations/ultra_honk/flavor/
+  commitment_schemes/sumcheck/stdlib_circuit_builders, plus a wider net:
+  transcript/honk/constants.hpp/dsl/plonk_honk_shared) is **byte-identical**
+  between co-noir's TRUE current baseline and `v5.0.1`. This was not
+  assumed — it followed a genuine puzzle (bb's lookup `table_index`
+  numbering looked contradictory between what co-noir's own shipped test
+  asserts and what the naive tag diff showed) that got resolved via a
+  coordinator note (relayed from the sibling monty-hall-aztec task) and then
+  **independently re-derived from scratch in this session**: the existing
+  oracle was actually built from private-repo commit `289aaec1e027` (per its
+  own `PROVENANCE.txt`), which shares the nightly *tag name*
+  `v5.0.0-nightly.20260708` with a **different, divergent** commit
+  (`a455b9a943e7`) in the public `~/ap-next` mirror — two separate
+  merge-train branches, neither an ancestor of the other, that happened to
+  get the same nightly label. Verified four independent ways: (1) rebuilt bb
+  from source at `289aaec1e027` in a fresh worktree off
+  `~/aztec-packages-private` (never touched its checkout) — the resulting
+  45,391,032-byte binary is `cmp`-identical to `~/.bb-target-src/bb`; (2)
+  `git diff 289aaec1e027 v5.0.1` restricted to the UltraHonk dirs (and a
+  wider net) is empty, 0 files — the only diff anywhere in
+  `barretenberg/cpp/src/barretenberg` is 7 unrelated `world_state`/`wsdb`
+  files; (3) the Noir/ACIR submodule pin is also byte-identical at both
+  commits; (4) co-noir's own original-sync commit messages (`5ac55600`,
+  `1a13fcdc`) turn out to already describe exactly the content that a naive
+  public-tag diff made to look like new v5.0.1 work (ROM sorted-chain pinned
+  at both ends, lookup `table_index` 1-based, entity/relation reorder) —
+  confirmed by reading `co-builder/src/ultra_builder.rs`'s
+  `process_rom_array_{public,shared}_inner` directly, which already has the
+  exact both-ends pin. **Net: Stage 3 (porting) is empty by construction.**
+  Chapter 19 keeps the code-reading method (which files were read in full,
+  how the Mega-only `IsOffsetOnlyRelation` generalization in
+  `sumcheck_round.hpp`/`relations/utils.hpp` was confirmed byte-neutral for
+  Ultra) as a transferable technique for the next sync, even though it
+  turned out to be reading an already-absorbed diff.
+- **Stage 4 (validation) — run in full regardless**, not skipped on the
+  strength of the tree-diff argument alone: direct bb-vs-bb (old oracle vs
+  new oracle, no co-noir involved) gives 100% VK/proof byte parity across
+  all 32 committed-KAT circuits, both hashers, non-ZK, plus 100% VK parity +
+  100% mutual ZK verification in ZK mode. Then the real gate — co-noir vs
+  the new oracle: `fast-check.sh --all-fast` green; full
+  `cargo test -p tests --release --test noir` 106/106 (8 intentionally
+  `#[ignore]`d slow recursion-prove tests); `compare.sh` (plain, all 32
+  circuits × both hashers × ZK/non-ZK × 4-way cross-verify, VK-diff
+  including recursion) 0 errors; `compare_mpc.sh` (REP3 3-party, same
+  matrix, **including the slow set** aes128/bb_sha256_compression/
+  recursion_zk) 0 errors. ≥4-party Shamir already covered by the in-tree
+  5-party-threshold-2 poseidon test. Matches the original Phase 2 bar in
+  full.
+- **Two incidental pre-existing bugs found + fixed while running Stage 4**
+  (both unrelated to v5.0.1's content, recorded in ch. 19 §4): (1)
+  `compare_mpc.sh` had a hardcoded `TEST_SLOWER_CIRCUITS=0` that silently
+  overrode the caller's env var, so `fast-check.sh --full`'s attempt to
+  enable the slow set never actually worked — fixed to
+  `${TEST_SLOWER_CIRCUITS:-0}`; (2) `fast-check.sh` hardcoded its own copy of
+  the oracle path instead of reading `versions.env`, which would have made
+  it silently keep validating against the *old* pin forever after this
+  session's pin flip — fixed to `source versions.env`.
+- **Stage 5 (pin flip) — DONE**: `versions.env` now
+  `BARRETENBERG_VERSION=5.0.1`,
+  `BARRETENBERG_BINARY_DEFAULT=~/.bb-target-src-v5.0.1/bb`, comments rewritten
+  to explain the tag-provenance caveat (not just find-replaced); `Readme.md`'s
+  version mentions updated to match (and its prebuilt-binary instructions
+  re-verified: unlike the old rc.2 lesson, the real `v5.0.1` GitHub release
+  asset genuinely is `write_vk`-byte-identical to the source build — checked,
+  not assumed). Old oracle + old pin values left on disk/documented, not
+  deleted.
+- **Confidentiality correction mid-session (Mike)**: earlier PLAN.md guidance
+  that local commits were "fine and expected... at real milestones" was
+  retracted — **no commits of any kind this session**, everything above is
+  uncommitted working-tree state. Flagging here so the next session doesn't
+  assume any of this landed via `git log`.
+- Resource use: two source builds (~130s/~150s each) + two ~9-min
+  BARRETENBERG_BINARY-driven sweeps, all within the 80%-of-186-cores budget
+  (`RAYON_NUM_THREADS` capped per the scripts' own existing formulas). No
+  circom, no unrelated test suites, per standing testing discipline.
+
+## Session 13 — 2026-07-23 — full code-level verification of the doc record; monty-hall deps → release-tag git deps; both trees committed
+
+Mike's brief: comprehend project state, but "don't necessarily trust the md
+files — look at the code too." So this session re-verified the record
+empirically before acting on it, then (on Mike's explicit ask) committed the
+accumulated working-tree state in BOTH repos.
+
+**Verification sweep (docs vs code/artifacts) — the record holds up:**
+- Two Explore agents checked 25 load-bearing claims against source. co-snarks:
+  all 12 CONFIRMED at the cited lines (relation tuple reorder + perm
+  NUM_RELATIONS=3, `lookup_table_index_starts_at_one`, ROM/RAM both-ends
+  pinning, 410/458/115 compile-time asserts, always-on `recursion{,_zk}_vk_kat`,
+  trailing-bytes + off-curve hardening, `fast-check.sh`→versions.env fix,
+  `compare_mpc.sh` env fix, deferred-SSIPA-test absence is deliberate and
+  documented in-code, Shamir ZK randomness accounting incl. 8×NUM_MASKED_ROWS).
+- Live gates re-run: `fast-check.sh --all-fast` PASS vs the v5.0.1 oracle
+  (KAT byte-parity, 9/9 security regressions, 7/7 REP3+Shamir incl. 5-party,
+  bb cross-verify proof+VK byte-identical); recursion VK KATs 2/2.
+- **Strongest new fact: `cmp` shows the old (`~/.bb-target-src/bb`) and new
+  (`~/.bb-target-src-v5.0.1/bb`) oracles are BYTE-IDENTICAL binaries** (all
+  45,391,032 bytes) — ch. 19's empty-diff conclusion confirmed at the whole-
+  binary level, doc-independent.
+- monty-hall: 12/13 claims confirmed (TXE 10 tests incl. full game + wrong-vk
+  + replay + access-control negatives; ZK::Yes in the prover; keyless
+  ChoiceNote nullifier; raw context primitives + HONK_ZK=6; postgres
+  migrations; e2e trial logs 3×PASS with exactly one deliberate tamper
+  BBApiException each). ONE CONTRADICTION found: `noir_logic/pss_utils`'s
+  `protocol_types` was still a live path dep into `~/ap-next` — the exact
+  drift-hazard class behind the 2026-07-20 confound; the re-pin had fixed the
+  contract but missed the circuits.
+
+**Monty-hall dependency rework (Mike: vendored snapshot = code smell; use the
+released package):** the 22 MB `contract/.pinned-aztec-packages-v5.0.1/`
+snapshot AND the pss_utils `~/ap-next` path dep were replaced by nargo git
+deps pinned to the immutable public release tag (`{ git = aztec-packages,
+tag = "v5.0.1", directory = ... }`) — the documented aztec-nr consumption
+path; npm (e2e) and aztec-up (toolchain) were already on released 5.0.1.
+Equivalence PROVEN, not assumed: differential compile git-dep-vs-snapshot →
+artifacts byte-identical modulo `file_map` source paths; `aztec_process` all
+6 VKs cache-hit; `check.sh` PASS (incl. note-hash/nullifier byte KATs that
+would catch any protocol_types drift); TXE 10/10; mpc full-game cargo test
+4/4 re-run against freshly restaged `data/circuits/*.json` (bytecode+ABI
+byte-identical to prior copies). Snapshot retired to session scratchpad
+(regenerable from the tag). Honest caveats recorded in the finding doc §10:
+`mpc/e2e.sh` + real-proving `e2e/run.sh` not re-run (inputs proven identical,
+but the real-proving run remains the definitive gate — do once, after scoping
+`run.sh`'s indiscriminate `pkill -x anvil`); git tags are immutable by
+convention not mechanism (nargo's local cache + the KATs mitigate).
+
+**Housekeeping:** stray `codegenCache.json` (aztec.js debris from bisection
+work) deleted from co-snarks root. `~/.bb-target-src-v5.0.1/PROVENANCE.txt`
+corrected: v5.0.1 DOES ship prebuilt bb release assets (GitHub API-checked;
+the file claimed none exist) — policy stays source-built-oracle regardless.
+Raw e2e evidence logs left untracked + gitignored in monty-hall (decisive
+lines are quoted in the reports) per Mike.
+
+**Commits (Mike's explicit ask, local only, never pushed):** monty-hall
+`fdaa8de` (deps re-pin) + `f028b73` (the five 2026-07-20 investigation
+reports); co-snarks: this session's two commits (v5.0.1 pin flip + script
+fixes; ch. 19 + PLAN/PROGRESS).
+
+**Known-stale items deliberately NOT fixed in this session's commits (next
+docs pass):** PLAN 5.1 status blocks still end at the session-11 saga (don't
+yet record the 2026-07-20 resolution: game passes at consistent v5.0.1, bug
+was a pin-mismatch confound); the committed
+`clientivc-recursive-verify-fails-in-app.md` header ("BROKEN on v5") is
+superseded by the newer reports; monty-hall `versions.env` still names the
+old oracle path (harmless — binaries proven byte-identical). NEXT: that
+reconciliation pass, then one real-proving e2e re-run, then 5.1d (TS
+orchestration port).
