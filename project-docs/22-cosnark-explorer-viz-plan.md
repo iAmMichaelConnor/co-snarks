@@ -151,7 +151,18 @@ estimated; no axis that hides the latency-dominated regime.
 - [x] V5 — honesty layer: badges, assumptions panel, reproduce command.
 - [x] V6 — published (private): https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa  (redeploy same file path to keep the URL).
 - [ ] V7 — after the 0.5 bench: swap ANCHORS to measured medians, flip
-      badges, redeploy same URL.
+      badges, redeploy same URL. **Pipeline wired (2026-07-23):** the
+      launcher runs `scripts/bench-to-site.py results.csv → site-anchors.json`
+      (medians of rc==0 rows per circuit/config/phase; loopback only;
+      unmeasured cells emitted as `null` so they STAY modeled — never
+      fabricated; a CONTENDED-box run is flagged so those numbers are
+      badged not-clean). Remaining manual step (one Artifact call): read
+      `site-anchors.json` into the explorer's `ANCHOR`/`CIRCUITS` block,
+      flip those cells' badge to measured, redeploy the same file path to
+      keep the URL. Distance axis + off-anchor gate sizes remain modeled
+      by construction (we can't place nodes across the planet; bench v2
+      would add netem latency sweeps + mpc-net ConnectionStats to measure
+      R and retire the biggest modeled unknown).
 
 ## 8. Scope / honesty boundary
 

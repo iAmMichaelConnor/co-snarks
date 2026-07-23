@@ -38,5 +38,11 @@ BENCH_OUT="$OUT" bash "$ROOT/scripts/bench-0_5.sh" >>"$LOG" 2>&1
 rc=$?
 [[ -n $contended ]] && mv "$OUT/results.csv" "$OUT/${contended}results.csv" 2>/dev/null
 echo "$(date -Is) bench finished rc=$rc" >>"$LOG"
-echo "BENCH_DONE rc=$rc out=$OUT" >>"$LOG"
+# Aggregate into the explorer's data shape (medians, loopback only, nulls
+# where unmeasured) so the next session bakes it in + redeploys the same
+# artifact URL (ch. 22 §5/V7). Never fabricates: absent cells stay modeled.
+csv="$OUT/${contended}results.csv"; [[ -f $csv ]] || csv="$OUT/results.csv"
+python3 "$ROOT/scripts/bench-to-site.py" "$csv" "$OUT/site-anchors.json" >>"$LOG" 2>&1 \
+  && echo "$(date -Is) site-anchors.json written" >>"$LOG"
+echo "BENCH_DONE rc=$rc out=$OUT   (bake: read $OUT/site-anchors.json into the explorer's ANCHOR block, then redeploy)" >>"$LOG"
 exit $rc
