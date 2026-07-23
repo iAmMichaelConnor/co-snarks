@@ -55,13 +55,19 @@ rc=0
 run() { echo; echo ">>> $*"; "$@" || rc=1; }
 
 if [[ $want_full -eq 1 ]]; then
-  echo "⚠  --full runs the ~60-min acceptance gate (compare_mpc.sh + full noir suite + slow set)."
-  echo "   This is for MILESTONES / end-of-phase only. It still must NOT run circom."
+  echo "⚠  --full runs the acceptance gate (full noir suite + the sharded"
+  echo "   compare.sh/compare_mpc.sh matrix incl. the slow set — wall time"
+  echo "   ≈ the heaviest shard, ~10-15 min on a quiet box; serial fallback:"
+  echo "   run the compare scripts directly). MILESTONES / end-of-phase only."
+  echo "   It still must NOT run circom."
   read -r -p "   Proceed? [y/N] " ans
   [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "aborted."; exit 0; }
   # noir binary only — never -p tests without --test noir.
   run cargo test -p tests --release --test noir
-  ( cd co-noir/co-noir/examples && TEST_SLOWER_CIRCUITS=1 BARRETENBERG_BINARY="$BB" bash compare_mpc.sh )
+  # Sharded parallel sweep (ch. 15 §4.9a): covers compare.sh AND
+  # compare_mpc.sh over the full circuit matrix with a hard coverage
+  # assertion — strictly more than the old serial compare_mpc-only step.
+  run env BARRETENBERG_BINARY="$BB" bash scripts/acceptance-parallel.sh
   echo; echo "fast-check --full done (rc=$rc)"; exit $rc
 fi
 

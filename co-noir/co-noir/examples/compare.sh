@@ -141,6 +141,43 @@ run_proof_verification() {
   return $exit_code
 }
 
+# CIRCUIT_FILTER (optional, space-separated): run exactly this subset —
+# lets a wrapper shard the matrix across concurrent instances on DISJOINT
+# circuit sets (all per-circuit artifacts live under test_vectors/<name>/).
+# Unknown names are a hard ERROR so a shard typo can never silently skip
+# a circuit. Same scheme as compare_mpc.sh.
+if [[ -n "${CIRCUIT_FILTER:-}" ]]; then
+  filtered=()
+  for want in $CIRCUIT_FILTER; do
+    found=0
+    for have in "${test_cases[@]}"; do [[ $have == "$want" ]] && found=1; done
+    if [[ $found -ne 1 ]]; then
+      echo "::error::CIRCUIT_FILTER contains unknown circuit '$want'"
+      exit 2
+    fi
+    filtered+=("$want")
+  done
+  test_cases=("${filtered[@]}")
+fi
+
+# Scoped equivalent of cleanup.sh for one circuit (same patterns, that
+# circuit's dir only) — concurrent disjoint shards can't wipe each other.
+cleanup_circuit() {
+  local d=test_vectors/$1
+  find "$d" -maxdepth 1 -name "*.proof" -type f -delete
+  find "$d" -maxdepth 1 -name "*.shared" -type f -delete
+  find "$d" -maxdepth 1 -name "public_input*" -type f -delete
+  find "$d" -maxdepth 1 -name "verification_key" -type f -delete
+  find "$d" -maxdepth 1 -name "proof.bb*" -type f -delete
+  find "$d" -maxdepth 1 -name "vk.bb*" -type f -delete
+  find "$d" -maxdepth 1 -name "vk*" -type f -delete
+  find "$d" -maxdepth 1 -name "proof*" -type f -delete
+  find "$d" -maxdepth 1 -name "zk_proof" -type f -delete
+  find "$d" -maxdepth 1 -name "cosnark_vk*" -type f -delete
+  find "$d" -maxdepth 1 -name "cosnark_proof*" -type f -delete
+  find "$d" -maxdepth 1 -name "cosnark_public_input*" -type f -delete
+}
+
 # comparing works with all test scripts where "run_full_" is followed by the precise test case name
 for f in "${test_cases[@]}"; do
   echo "running ultrahonk example" $f
@@ -171,7 +208,7 @@ for f in "${test_cases[@]}"; do
     echo "::error::" $f "failed with ZK"
   fi
   run_proof_verification "$f" "poseidon_zk"
-  bash cleanup.sh
+  cleanup_circuit "$f"
 
    # -e to exit on first error
   bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} $PIPE"  || failed=1
@@ -182,7 +219,7 @@ for f in "${test_cases[@]}"; do
     echo "::error::" $f "failed"
   fi
   run_proof_verification "$f" "keccak"
-   bash cleanup.sh
+  cleanup_circuit "$f"
   # Run with ZK:
   bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} --zk $PIPE" || failed=1
   if [ "$failed" -ne 0 ]
@@ -191,7 +228,7 @@ for f in "${test_cases[@]}"; do
     echo "::error::" $f "failed with ZK"
   fi
   run_proof_verification "$f" "keccak_zk"
-  bash cleanup.sh
+  cleanup_circuit "$f"
   echo ""
 done
 
