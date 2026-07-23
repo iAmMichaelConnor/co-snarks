@@ -28,7 +28,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 # THE bb oracle: source-built at the target tag. NOT ~/.bb-target/bb (rc.2, wrong).
-BB="${BB_TARGET:-$HOME/.bb-target-src/bb}"
+# Source versions.env for the default rather than hardcoding it a second time here —
+# this script's own copy of the path went stale across the v5.0.1 pin flip (it still
+# pointed at the old ~/.bb-target-src/bb oracle after versions.env moved on) until
+# this fix; see project-docs ch. 19 §4.
+source "$ROOT/versions.env"
+BB="${BB_TARGET:-$BARRETENBERG_BINARY_DEFAULT}"
 CRS_G1="$ROOT/co-noir/co-noir-common/src/crs/bn254_g1.dat"
 CRS_G2="$ROOT/co-noir/co-noir-common/src/crs/bn254_g2.dat"
 # Cap MPC threads so parallel work / other agents aren't starved (see mainframe policy).

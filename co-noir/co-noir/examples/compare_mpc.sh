@@ -16,7 +16,7 @@ BARRETENBERG_BINARY=${BARRETENBERG_BINARY:-$BARRETENBERG_BINARY_DEFAULT}  ## env
 exit_code=0
 
 REMOVE_OUTPUT=1
-TEST_SLOWER_CIRCUITS=0 ## this is a flag to also run the slower test cases
+TEST_SLOWER_CIRCUITS=${TEST_SLOWER_CIRCUITS:-0} ## this is a flag to also run the slower test cases; env-overridable (was a hardcoded literal that silently ignored the caller's env var, e.g. fast-check.sh --full's TEST_SLOWER_CIRCUITS=1 — found during the v5.0.1 resync Stage 4 validation)
 PIPE=""
 if [[ $REMOVE_OUTPUT -eq 1 ]];
 then

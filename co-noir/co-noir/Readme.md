@@ -1,11 +1,11 @@
 # UltraHonk
 
-This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0-nightly.20260708 — the pins quoted throughout this Readme are single-sourced in `versions.env` at the repo root (the example scripts source it; when bumping the pin, edit `versions.env` and update the mentions here). To get Barretenberg with this version, use the following commands:
+This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.1 — the pins quoted throughout this Readme are single-sourced in `versions.env` at the repo root (the example scripts source it; when bumping the pin, edit `versions.env` and update the mentions here). To get Barretenberg with this version, use the following commands:
 
 ```bash
 git clone https://github.com/AztecProtocol/aztec-packages.git
 cd aztec-packages
-git checkout tags/v5.0.0-nightly.20260708
+git checkout tags/v5.0.1
 ```
 
 To compile Barretenberg, one can use:
@@ -17,12 +17,14 @@ cmake --preset default
 cmake --build --preset default --parallel --target bb
 ```
 
-Alternatively, prebuilt `bb` binaries for v5-era nightlies are published as GitHub release assets under the *unprefixed* tag name (note: older `bbup` versions construct an `aztec-packages-v*` URL and silently download garbage — "not in gzip format"):
+Alternatively, a prebuilt `bb` binary is published as a GitHub release asset under the *unprefixed* tag name (note: older `bbup` versions construct an `aztec-packages-v*` URL and silently download garbage — "not in gzip format"):
 
 ```bash
-curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.0-nightly.20260708/barretenberg-amd64-linux.tar.gz | tar xz -C ~/.bb
-~/.bb/bb --version   # 5.0.0-nightly.20260708
+curl -sL https://github.com/AztecProtocol/aztec-packages/releases/download/v5.0.1/barretenberg-amd64-linux.tar.gz | tar xz -C ~/.bb
+~/.bb/bb --version   # 5.0.1
 ```
+
+Unlike some past nightly rc builds (see project-docs ch. 12 §3's first gotcha), this v5.0.1 release asset was verified during the pin bump to this version: its `write_vk` output is byte-identical to a from-source build at the `v5.0.1` tag. Still, prefer the source build as the parity oracle for any real sync work — verify provenance again before trusting a prebuilt, every time (project-docs ch. 19 documents a case, unrelated to this specific binary, where a nightly *tag name* did not uniquely identify a source tree across a private/public repo split — a different failure mode than a stale release binary, but the same lesson: verify, don't assume, from the tag name alone).
 
 ## Building this workspace
 
