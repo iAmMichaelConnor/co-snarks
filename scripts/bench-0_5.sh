@@ -31,6 +31,37 @@ BIN="$ROOT/target/release/co-noir"
 PLAINDRIVER="$ROOT/target/release/plaindriver"
 cargo build --release --bin co-noir --bin plaindriver >/dev/null 2>&1
 
+# ---- run manifest: without this the CSV is not re-usable/comparable ----
+# (which machine, thread cap, bb/nargo vintage, co-noir commit produced it).
+# JSON, written before the run so a crash still leaves provenance behind.
+git_desc=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+git_branch=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+git_dirty=$(git -C "$ROOT" diff --quiet 2>/dev/null && echo clean || echo dirty)
+nargo_v=$(nargo --version 2>/dev/null | head -1 || echo unknown)
+bb_prov=$([[ -f "$(dirname "$BB")/PROVENANCE.txt" ]] && head -1 "$(dirname "$BB")/PROVENANCE.txt" || echo "no PROVENANCE.txt")
+cat >"$BENCH_OUT/manifest.json" <<MANIFEST
+{
+  "benchmark": "PLAN 0.5 co-SNARK proving matrix",
+  "started_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "host": "$(hostname)",
+  "cpu_cores_total": $(nproc --all),
+  "rayon_threads_per_party": ${RAYON_NUM_THREADS},
+  "co_snarks_commit": "$git_desc",
+  "co_snarks_branch": "$git_branch",
+  "co_snarks_worktree": "$git_dirty",
+  "bb_oracle_path": "$BB",
+  "bb_version_pin": "${BARRETENBERG_VERSION:-unknown}",
+  "bb_provenance": "$(printf '%s' "$bb_prov" | sed 's/"/\\"/g')",
+  "nargo_version": "$(printf '%s' "$nargo_v" | sed 's/"/\\"/g')",
+  "circuits": "poseidon bb_sha256_compression recursion_zk",
+  "protocols": "bb plaindriver REP3 SHAMIR",
+  "zk_modes": "nonzk zk",
+  "reps": ${REPS},
+  "network": "loopback (single host; distance/latency NOT measured here)",
+  "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc  (rc!=0 = failed cell, excluded from medians)"
+}
+MANIFEST
+
 declare -a pids
 now_ms() { date +%s%3N; }
 row() { echo "$1,$2,$3,$4,$5,$6,$7" >>"$CSV"; }

@@ -125,6 +125,28 @@ factors themselves.
   provenance strings, and a `provenance: "measured|modeled"` flag per
   number that drives the badges.
 
+## 5a. Benchmark dataset (re-usable record) — layout & provenance
+
+Runs live in **`~/bench-0_5-results/<date>/`** (dated, so runs accumulate
+and are diffable across time — a re-usable dataset, not a one-off). Each
+run directory holds:
+
+| file | what | for |
+|---|---|---|
+| `manifest.json` | **provenance** — started_utc, host, cpu_cores_total, rayon_threads_per_party, co_snarks commit/branch/worktree, bb oracle path + version pin + provenance, nargo version, circuits/protocols/zk/reps, network, and the CSV schema | makes the run **comparable** to any other; without it a CSV is meaningless |
+| `results.csv` | raw: `circuit,protocol,zk,rep,phase,seconds,rc` (one row per timed phase per rep; `rc!=0` = failed cell) | re-analysis, custom aggregation |
+| `site-anchors.json` | medians per (circuit,config,phase); `null` where unmeasured; embeds the manifest | baking into the explorer (V7) |
+| `RESULTS.md` | human-readable per-circuit tables + the provenance header + REP3÷bb ratio | read first; the legible record |
+| `launcher.log` | idle-wait + run progress; `BENCH_DONE` line at the end | ops trail |
+
+**Re-run:** `BENCH_OUT=~/bench-0_5-results/$(date +%F) bash scripts/bench-0_5.sh`
+(or `scripts/bench-0_5-launcher.sh` to idle-wait first). **Compare two
+runs:** diff their `manifest.json` first (same machine/threads/commit?),
+then their `results.csv`/`RESULTS.md`. **Never** compare timings across
+runs whose manifests differ on cores, thread cap, or bb/nargo vintage
+without saying so. The CSV schema is stable; new phases/configs append
+columns-worth of rows, never renumber.
+
 ## 6. Build constraints (Artifacts runtime)
 
 Self-contained single HTML (strict CSP: no external CDN/scripts/fonts):

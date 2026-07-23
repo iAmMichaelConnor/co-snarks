@@ -41,11 +41,25 @@ def main():
         v = buckets.get((circuit, proto, zk, phase))
         return round(statistics.median(v), 4) if v else None
 
+    # Fold in the run manifest (provenance) if present beside the CSV — this
+    # is what makes a run comparable to another; a dataset without it is a
+    # one-off.
+    import os
+    manifest = {}
+    mpath = os.path.join(os.path.dirname(src) or ".", "manifest.json")
+    if os.path.exists(mpath):
+        try:
+            with open(mpath) as mf:
+                manifest = json.load(mf)
+        except (ValueError, OSError):
+            manifest = {}
+
     circuits = sorted({k[0] for k in buckets})
     data = {
         "provenance": "measured",
         "contended": contended,   # site must badge these NOT-clean if true
         "source": src,
+        "manifest": manifest,     # machine / versions / commit / thread cap
         "note": "medians across reps of rc==0 rows; loopback only; "
                 "null => keep modeling that cell",
         "circuits": {},
@@ -75,6 +89,16 @@ def main():
     if contended:
         lines += ["> ⚠ **CONTENDED run** — the box was busy (10 h idle-wait "
                   "cap hit); treat these as upper bounds, not clean numbers.", ""]
+    if manifest:
+        lines += ["**Run provenance** (what produced these numbers — required "
+                  "to compare against another run):", ""]
+        for k in ("started_utc", "host", "cpu_cores_total",
+                  "rayon_threads_per_party", "co_snarks_commit",
+                  "co_snarks_branch", "co_snarks_worktree", "bb_oracle_path",
+                  "bb_version_pin", "nargo_version", "network"):
+            if k in manifest:
+                lines.append(f"- **{k}**: {manifest[k]}")
+        lines.append("")
     lines += [f"Source: `{src}`  ·  medians across reps of successful rows  ·  "
               "loopback only  ·  `—` = not measured (stays modeled in the site).", ""]
     def cell(v): return f"{v:.3f}s" if isinstance(v, (int, float)) else "—"
