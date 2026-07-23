@@ -65,7 +65,42 @@ def main():
 
     with open(out, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"wrote {out}: {len(circuits)} circuits"
+
+    # Also emit a human-readable RESULTS.md next to the JSON, so the record
+    # is legible without tooling (the overnight run must leave something a
+    # person can read on waking, independent of any downstream bake step).
+    import os
+    md_path = os.path.join(os.path.dirname(out) or ".", "RESULTS.md")
+    lines = ["# PLAN 0.5 benchmark — results", ""]
+    if contended:
+        lines += ["> ⚠ **CONTENDED run** — the box was busy (10 h idle-wait "
+                  "cap hit); treat these as upper bounds, not clean numbers.", ""]
+    lines += [f"Source: `{src}`  ·  medians across reps of successful rows  ·  "
+              "loopback only  ·  `—` = not measured (stays modeled in the site).", ""]
+    def cell(v): return f"{v:.3f}s" if isinstance(v, (int, float)) else "—"
+    for c in circuits:
+        d = data["circuits"][c]
+        lines += [f"## {c}", "",
+                  "| config | split | witext | prove | verify | prove (non-ZK) |",
+                  "|---|---|---|---|---|---|",
+                  f"| bb (1 prover) | — | — | {cell(d['bb']['prove_zk'])} | — | {cell(d['bb']['prove_nonzk'])} |",
+                  f"| plaindriver (co-noir, no MPC) | — | — | {cell(d['plaindriver']['prove_zk'])} | — | — |",
+                  f"| REP3 3-party (ZK) | {cell(d['rep3']['zk']['split'])} | {cell(d['rep3']['zk']['witext'])} | {cell(d['rep3']['zk']['prove'])} | {cell(d['rep3']['zk']['verify'])} | {cell(d['rep3']['nonzk']['prove'])} |",
+                  f"| Shamir 3-party (ZK) | {cell(d['shamir']['zk']['split'])} | {cell(d['shamir']['zk']['witext'])} | {cell(d['shamir']['zk']['prove'])} | {cell(d['shamir']['zk']['verify'])} | {cell(d['shamir']['nonzk']['prove'])} |"]
+        bb = d['bb']['prove_zk']; rep3 = d['rep3']['zk']['prove']
+        if isinstance(bb, (int, float)) and isinstance(rep3, (int, float)) and bb > 0:
+            lines += ["", f"REP3-prove ÷ bb-prove (ZK): **{rep3/bb:.1f}×** (loopback compute only).", ""]
+        else:
+            lines += [""]
+    lines += ["---", "",
+              "Correctness (measured, not here): proofs byte-identical to bb — "
+              "`compare_mpc.sh`, VK byte-KATs. This file times the honest path only.",
+              "", "Next: bake `site-anchors.json` into the co-SNARK explorer "
+              "(project-docs ch.22 V7) and redeploy the same artifact URL."]
+    with open(md_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    print(f"wrote {out} + {md_path}: {len(circuits)} circuits"
           + (" [CONTENDED — flag these in the site]" if contended else ""))
 
 if __name__ == "__main__":
