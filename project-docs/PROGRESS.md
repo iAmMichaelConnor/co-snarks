@@ -1531,3 +1531,45 @@ benchmark overnight after explaining its worth + a WAN-latency estimate.
 - Still open: M3 (ch. 17 status pass, waits on review), M7/C6/X1 (commits —
   Mike's word), X3 (memory refresh at session end), review results, bench
   results.
+
+## Session 13 (cont. 3) — 2026-07-23 night — R1 committed; overnight 0.5 bench armed with self-documenting output (Mike → bed)
+
+- **R1 fix committed** (`672ade11`): non-canonical basefield limb encodings
+  now rejected at the parse boundary (transcript + VK loaders) in RELEASE
+  builds — closes the co-snarks-review finding. Red-validated; security_
+  regression 10→11; VK byte-KATs unchanged (honest parity intact);
+  fast-check --all-fast PASS. Transplanted from the agent worktree, worktree
+  removed. **All this-session work is committed on both branches; nothing
+  pushed. Trees clean (only .claude/ untracked, now gitignored).**
+- **Overnight PLAN 0.5 benchmark ARMED** (Mike going to bed; must
+  self-document). Detached launcher (`nohup`, survives logout):
+  `scripts/bench-0_5-launcher.sh` → waits for a genuinely idle box (2×5-min
+  quiet checks, load<25 + no heavy procs; 10 h cap then runs flagged
+  CONTENDED) → `scripts/bench-0_5.sh`.
+  - **What it collects (the data the explorer needs):** per-phase wall-clock
+    (split / witext / prove / verify) × {poseidon, sha256_compression,
+    recursion_zk} × {bb, plaindriver, REP3, Shamir} × {ZK, non-ZK} × 3 reps,
+    16 threads/party, loopback. That fixes the site's COMPUTE anchors and
+    the REP3-vs-bb ratio + ZK overhead at 3 real circuit sizes. Distance/
+    latency and comms-rounds R stay MODELED by construction (can't place
+    nodes across the planet locally; bench v2 = netem + mpc-net
+    ConnectionStats would measure them).
+  - **Where results land:** `~/bench-0_5-results/2026-07-23/` —
+    `launcher.log` (progress), `results.csv` (raw), `site-anchors.json`
+    (medians for the site; nulls where unmeasured, never fabricated),
+    **`RESULTS.md`** (human-readable per-circuit tables — read this first).
+    A CONTENDED run is banner-flagged in both.
+  - **Overnight/next-session plan (for whoever the completion notification
+    wakes):** on `BENCH_DONE`, (1) read `RESULTS.md`/`site-anchors.json`,
+    (2) append a results entry HERE, (3) bake `site-anchors.json` into the
+    explorer's ANCHOR/CIRCUITS block + flip those cells' badges to measured
+    (ch.22 V7), (4) redeploy the SAME artifact file path to keep the URL
+    (https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa).
+    Redeploy of a private artifact is autonomous-safe.
+- **Explorer link** recorded in `ARTIFACTS.md` (gitignored, top-level) and
+  ch.22 V6. tmux clipboard help in ARTIFACTS.md; MacBook→ssh→tmux specifics
+  added this session (mouse-off toggle / iTerm2 ⌥-select+⌘-click /
+  Terminal.app Fn-select).
+- **STILL OPEN for Mike:** F1 (cross-deployment seed reuse — VK/ABI-breaking,
+  design in ch.17 §7) awaiting greenlight; F3/F6; the small stale-doc pass;
+  5.1d TS port (ch.20, fresh session). None blocking.
