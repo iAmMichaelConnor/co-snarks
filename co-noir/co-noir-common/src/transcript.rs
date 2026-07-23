@@ -31,6 +31,12 @@ pub trait TranscriptHasher<F: PrimeField> {
     fn convert_point<P: HonkCurve<F>>(element: &P::Affine) -> Vec<Self::DataType>;
     fn convert_scalarfield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::ScalarField;
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField;
+    /// Validate the raw limbs of a base-field coordinate at the untrusted parse
+    /// boundary, BEFORE [`Self::convert_basefield_back`] recombines them. See
+    /// [`HonkCurve::validate_basefield_limbs`].
+    fn validate_basefield_limbs<P: HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()>;
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2];
     fn convert_challenge_into<P: HonkCurve<F>>(challenge: &F) -> Self::DataType;
     fn convert_destinationfield_to_scalarfield<P: HonkCurve<F>>(
@@ -74,6 +80,12 @@ impl<F: PrimeField, const T: usize, const R: usize, H: FieldHash<F, T> + Default
 
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField {
         P::convert_basefield_back(elements)
+    }
+
+    fn validate_basefield_limbs<P: HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()> {
+        P::validate_basefield_limbs(elements)
     }
 
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2] {
@@ -315,6 +327,17 @@ where
         label: String,
     ) -> HonkProofResult<P::Affine> {
         let elements = self.receive_n_from_prover(label, H::NUM_BASEFIELD_ELEMENTS * 2)?;
+
+        // Untrusted input: reject non-canonical base-field limb encodings before
+        // recombining. `convert_basefield_back` only `debug_assert!`s the limb
+        // bounds (compiled out in release) and reduces an out-of-range value mod
+        // the modulus, whereas bb rejects these in every build. Doing this here
+        // also makes the `is_zero` infinity test below bb-equivalent: a point is
+        // infinity iff the RAW frs are all zero (an encoding of the modulus,
+        // which reduces to 0, is now rejected rather than read as infinity).
+        for chunk in elements.chunks_exact(H::NUM_BASEFIELD_ELEMENTS) {
+            H::validate_basefield_limbs::<P>(chunk)?;
+        }
 
         let coords = elements
             .chunks_exact(H::NUM_BASEFIELD_ELEMENTS)

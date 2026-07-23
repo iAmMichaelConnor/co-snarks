@@ -8,7 +8,9 @@
 use crate::proof_tests::CRS_PATH_G1;
 use crate::proof_tests::CRS_PATH_G2;
 use ark_bn254::Bn254;
+use ark_ff::PrimeField;
 use ark_ff::Zero;
+use num_bigint::BigUint;
 use co_acvm::PlainAcvmSolver;
 use co_builder::prelude::constraint_system_from_reader;
 use co_builder::prelude::HonkRecursion;
@@ -486,6 +488,117 @@ fn zk_proof_ssipa_evaluation_tamper_rejected() {
         assert!(
             !accepted,
             "ZK verifier ACCEPTED a proof with SSIPA field {label} (idx {pos}/{n}) tampered"
+        );
+    }
+}
+
+/// Read a 32-byte big-endian field-element slot as a `BigUint`.
+fn read_be_u256(buf: &[u8], offset: usize) -> BigUint {
+    BigUint::from_bytes_be(&buf[offset..offset + 32])
+}
+
+/// Write a `BigUint` (< 2^256) into a 32-byte big-endian field-element slot.
+fn write_be_u256(buf: &mut [u8], offset: usize, value: &BigUint) {
+    let bytes = value.to_bytes_be();
+    assert!(bytes.len() <= 32, "value does not fit in 32 bytes");
+    let dst = &mut buf[offset..offset + 32];
+    dst.fill(0);
+    dst[32 - bytes.len()..].copy_from_slice(&bytes);
+}
+
+/// Non-canonical base-field limb encoding, VK side (backlog §6 R1).
+///
+/// A base-field (Fq) coordinate of a G1 commitment is transmitted as two
+/// `bb::fr` limbs: `res0` (low 2*68 = 136 bits) and `res1` (upper 254-136 = 118
+/// bits), recombined as `value = res0 + res1 * 2^136` and then mapped into Fq
+/// (which reduces mod the Fq modulus q). bb asserts `res0 < 2^136`,
+/// `res1 < 2^118`, and `value < q` in EVERY build (`field_conversion.hpp`).
+/// co-noir's recombination (`bn254_fq_to_fr_rev`) only `debug_assert!`d the two
+/// limb bounds — compiled OUT in release, which is exactly how the KAT/oracle
+/// suites run — and never checked `value < q` (the final `Fq::from` silently
+/// reduces). So a release-build verifier would ACCEPT a non-canonical encoding
+/// that recombines to a genuine on-curve point but that bb REJECTS: no forgery
+/// (the point is still on-curve), but a verifier-set divergence and a loss of
+/// encoding uniqueness.
+///
+/// This is a NEGATIVE test at the VK `from_buffer` boundary, which — unlike a
+/// proof transcript point — is NOT Fiat-Shamir bound, so rewriting a
+/// commitment's limbs in place does not desynchronize any downstream challenge
+/// and the accept/reject verdict isolates exactly this check. Two encodings are
+/// exercised, each recombining to the SAME on-curve commitment the honest VK
+/// carries:
+///
+///   (a) limb out of range, IDENTICAL recombined value: `res0' = res0 + 2^136`,
+///       `res1' = res1 - 1` leaves `res0' + res1'*2^136` bit-for-bit unchanged
+///       but pushes `res0'` past its 2^136 bound (the check the release build
+///       dropped);
+///   (b) value >= modulus, CONGRUENT recombined value: add q to the recombined
+///       value (`value' = value + q ≡ value (mod q)`), which reduces to the
+///       identical Fq coordinate but makes `value' >= q` (the alias check that
+///       never existed).
+///
+/// Both must be rejected cleanly with `NonCanonicalFieldEncoding`. Before the
+/// fix, `from_buffer` accepted both (they recombine/reduce to the honest,
+/// on-curve commitment, so the on-curve guard passes).
+#[test]
+fn noncanonical_vk_coordinate_limbs_rejected() {
+    let (_proof, _public_inputs, vk) = build_artifacts();
+
+    // Field-encoded VK layout: 3 header field elements (32 B each) = 96 B, then
+    // 128 B per precomputed commitment as [x0, x1, y0, y1]. Target the first
+    // commitment's x coordinate: x0 (low limb) at 96, x1 (high limb) at 128.
+    const X0_OFF: usize = 96;
+    const X1_OFF: usize = 128;
+    let two_pow_136: BigUint = BigUint::from(1u8) << 136u32;
+    let q: BigUint = BigUint::from(ark_bn254::Fq::MODULUS);
+
+    let base = vk.inner_vk.to_buffer();
+    let res0 = read_be_u256(&base, X0_OFF);
+    let res1 = read_be_u256(&base, X1_OFF);
+    let value = &res0 + (&res1 << 136u32);
+
+    // Preconditions on the honest encoding: canonical, and high limb non-zero so
+    // construction (a) can borrow from it. A real ~254-bit commitment coordinate
+    // satisfies both; assert so a future layout change surfaces here.
+    assert!(res0 < two_pow_136, "honest x0 must be a canonical low limb");
+    assert!(
+        res1 >= BigUint::from(1u8),
+        "honest x1 (high limb) must be non-zero for this construction"
+    );
+    assert!(value < q, "honest recombined coordinate must be canonical (< q)");
+
+    // (a) IDENTICAL recombined value, low limb pushed out of range.
+    let a_res0 = &res0 + &two_pow_136;
+    let a_res1 = &res1 - BigUint::from(1u8);
+    debug_assert_eq!(
+        &a_res0 + (&a_res1 << 136u32),
+        value,
+        "construction (a) must leave the recombined value unchanged"
+    );
+
+    // (b) CONGRUENT recombined value (== value + q), so it reduces to the same
+    // Fq coordinate but is >= q. Re-split into limbs.
+    let b_value = &value + &q;
+    let b_res0 = &b_value & (&two_pow_136 - BigUint::from(1u8));
+    let b_res1 = &b_value >> 136u32;
+    debug_assert_eq!(
+        ark_bn254::Fq::from(b_value.clone()),
+        ark_bn254::Fq::from(value.clone()),
+        "construction (b) must reduce to the same Fq coordinate"
+    );
+
+    for (label, new_x0, new_x1) in [
+        ("(a) low limb >= 2^136, identical value", &a_res0, &a_res1),
+        ("(b) recombined value >= q", &b_res0, &b_res1),
+    ] {
+        let mut buf = base.clone();
+        write_be_u256(&mut buf, X0_OFF, new_x0);
+        write_be_u256(&mut buf, X1_OFF, new_x1);
+
+        let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+        assert!(
+            matches!(res, Err(HonkProofError::NonCanonicalFieldEncoding)),
+            "from_buffer accepted a non-canonical VK coordinate encoding {label}: {res:?}"
         );
     }
 }

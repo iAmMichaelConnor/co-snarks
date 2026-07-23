@@ -22,6 +22,11 @@ pub enum HonkProofError {
     /// A deserialized group element is not a valid curve point
     #[error("Point is not on the curve")]
     PointNotOnCurve,
+    /// A serialized base-field coordinate uses a non-canonical limb encoding
+    /// (a limb exceeds its bit bound, or the recombined value is >= the
+    /// base-field modulus). bb rejects these in every build; co-noir must too.
+    #[error("Non-canonical base-field limb encoding")]
+    NonCanonicalFieldEncoding,
     /// The proof buffer was not fully consumed by the verifier (trailing data)
     #[error("Proof not fully consumed: {read} of {total} field elements read")]
     ProofNotFullyConsumed { read: usize, total: usize },

@@ -68,6 +68,16 @@ impl<F: PrimeField> TranscriptHasher<F> for Keccak256 {
         P::BaseField::from_be_bytes_mod_order(&bytes)
     }
 
+    fn validate_basefield_limbs<P: crate::honk_curve::HonkCurve<F>>(
+        _elements: &[Self::DataType],
+    ) -> crate::honk_proof::HonkProofResult<()> {
+        // The Keccak transcript encodes each coordinate as a single 32-byte
+        // value reduced mod the base-field modulus (`from_be_bytes_mod_order`) —
+        // there is no multi-limb structure, and this reduce-not-reject behaviour
+        // matches bb's keccak path. Nothing to validate here.
+        Ok(())
+    }
+
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2] {
         // Match barretenberg field_conversion::split_challenge:
         // split a 254-bit challenge into two 127-bit limbs.

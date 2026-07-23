@@ -229,6 +229,11 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             let x1 = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             let y0 = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             let y1 = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
+            // Untrusted input: reject non-canonical base-field limb encodings
+            // before recombining (release builds skip convert_basefield_back's
+            // debug_assert!s; bb rejects these in every build).
+            C::validate_basefield_limbs(&[x0, x1])?;
+            C::validate_basefield_limbs(&[y0, y1])?;
             let x = C::convert_basefield_back(&[x0, x1]);
             let y = C::convert_basefield_back(&[y0, y1]);
             // Untrusted input: reject off-curve VK commitments cleanly.

@@ -428,7 +428,28 @@ bb source (full cleared-list in the review transcript). Three follow-ups,
 all code-verified this session:
 
 - **R1 — non-canonical basefield limb encodings accepted in RELEASE builds
-  [security, low–med; the predicted "4th parse site"].** VERIFIED:
+  [security, low–med; the predicted "4th parse site"]. ✅ FIXED 2026-07-23**
+  (red-validated; +208 lines / 6 files). Validation added at the untrusted
+  parse boundary (keeps the `HonkCurve` trait infallible, no ripple): new
+  `HonkProofError::NonCanonicalFieldEncoding`; a defaulted
+  `HonkCurve::validate_basefield_limbs` (no-op for identity curves,
+  overridden for BN254 G1 → `validate_bn254_fq_limbs` enforcing bb's three
+  `field_conversion.hpp` bounds limb0<2^136 / limb1<2^118 / value<Fq::MODULUS)
+  invoked in `transcript.rs::receive_point_from_prover` (Poseidon) and
+  `verification_key.rs::from_buffer` on each coordinate's raw limbs BEFORE
+  recombination. Keccak paths + single-field `convert_scalarfield_back` are
+  single-value `from_be_bytes_mod_order` (no limb structure) and correctly
+  left to reduce (matches bb + backlog item 3). Infinity sub-issue fixed as
+  a consequence (rejecting value≥q before the post-reduction is_zero test
+  means is_zero can only hold for all-zero raw limbs = bb's rule). Test
+  `noncanonical_vk_coordinate_limbs_rejected` (VK boundary, not FS-bound):
+  two encodings recombining to the honest on-curve commitment (low limb
+  +2^136 with high limb −1; and value+q) both reject; neutralizing the
+  check makes it accept (red-check passed). Gates: security_regression
+  10→11, VK byte-KATs unchanged (honest parity intact), bb cross-verify
+  byte-identical. ORIGINAL FINDING FOLLOWS.
+
+  VERIFIED (original):
   `co-noir-common/src/honk_curve.rs:293-305` `bn254_fq_to_fr_rev` gates the
   two limb ranges only with `debug_assert!` (compiled OUT in release) and
   never checks `value < q` (the `Fq::from(BigUint)` silently reduces mod
