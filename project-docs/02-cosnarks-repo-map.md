@@ -219,6 +219,18 @@ contributor and reviewed by two Taceo engineers. Version pins live in 5
 places: root `Cargo.toml` (Noir tags), `compare.sh`, `compare_mpc.sh`, two
 `compile.sh` — plus Readmes.
 
+> **✅ UPDATED 2026-07-23:** two things below have moved on since this was
+> written (2026-07-08) — kept as historical record, not edited. (i) The
+> target pin is no longer `v5.0.0-nightly.20260708`; it moved to `v5.0.1`
+> during the resync documented in ch. 19 (the artifacts are byte-identical,
+> so nothing broke, but don't check out the old tag expecting it to be
+> current). (ii) "`bbup` can install the reference binary" turned out to be
+> an oracle-safety trap, not a shortcut: ch. 14 §17.1 found the prebuilt
+> release binary for this exact tag line (`rc.2`) silently predates a VK
+> layout change, i.e. `bbup`/prebuilt releases must be byte-compared
+> against a source build before being trusted as an oracle — never assumed
+> safe just because a public release exists.
+
 **Reusable for our (local, no-push) sync**: the compare.sh oracle pattern and
 compile.sh KAT regeneration, verbatim — our target (v5-next ≡ public
 `v5.0.0-nightly.20260708`) has a public bb release, so `bbup` can install the

@@ -363,6 +363,17 @@ chapter's A-items as the behavioral spec, ch. 09 §1 (WASM-compiled REP3
 split — the same wasm-bindgen question arises here), ch. 02 §5.3 (CLI
 config surface).
 
+**→ The design this stub deferred now exists: ch. 20 (2026-07-23).**
+Status of this item's two halves: the *user-side flows* half was already
+built in TS during 5.1c (`e2e/driver.mjs` — deploy, per-round orchestrator
+calls, capsule staging, nonce mining); ch. 20 covers the remaining half,
+the orchestrator service itself, with a frozen API contract so the driver
+and both e2e suites act as the acceptance gates unchanged. The ch. 09 §1
+WASM-REP3-split question is deliberately OUT of 5.1d scope (it belongs to
+5.0/5.2). The §5.1a note above about the orchestrator's log-only
+verify-failure was fixed in the Rust implementation itself (502 since
+session 6); ch. 20 §1.5 pins that behavior as a parity requirement.
+
 ## 8. Open questions — Q1/Q2/Q4 ANSWERED (Mike / verified, 2026-07-13)
 
 - **Q1 ✅ (Mike)**: scope = `init` + ONE state-transition round

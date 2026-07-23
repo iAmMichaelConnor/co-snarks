@@ -361,6 +361,20 @@ make drift fail loudly and locally. More of the same:
    numbers are identifiers; chapter/section numbers are locations; logs
    quote PLAN numbers. Zero code impact, prevents the next
    archaeology session.
+9a. **Parallelize the acceptance sweeps (`compare.sh` / `compare_mpc.sh`).**
+   [M / M] (Mike, 2026-07-23: "shouldn't there be more parallelism
+   possible?") Both scripts `rm -f` and write `vk`/`proof`/`public_inputs`
+   into the SAME `test_vectors/<circuit>/` dirs, so today they must run
+   strictly serially (the ~30–50 min D-tier wall time is their sum). Fix:
+   (i) a `CIRCUIT_FILTER` env so a run covers a subset — shards covering
+   DISJOINT circuits never touch the same dirs and can run concurrently
+   with reduced per-shard `RAYON_NUM_THREADS`; (ii) or per-run output dirs
+   (`OUT_DIR=$TMP`), which also lets compare.sh ∥ compare_mpc.sh on the
+   same circuit. Either cuts acceptance wall time to ≈ the slow-set
+   duration. Model: the per-suite identity knobs added to monty-hall's
+   `mpc/e2e.sh`/`e2e/run.sh` on 2026-07-23 (same motivation, validated by
+   B ∥ C ∥ D1 running concurrently that night).
+
 9. **Differential-fuzz harness vs bb (ch. 13 §6.1) as the Phase-4
    centerpiece.** [L / H]
    Already planned (PLAN 4.1/4.3); recorded here because several §1 VERIFY
@@ -369,3 +383,91 @@ make drift fail loudly and locally. More of the same:
    the negative-test seed set grows over time as new soundness invariants
    are identified from code review, differential findings, and upstream bb
    changes.
+
+## 5. TODO triage (2026-07-23)
+
+*Ch. 21 §2 C1 (pre-5.1d tidying pass). Scope: `grep -rn "TODO" co-noir/
+--include=*.rs` → 163 hits total (72 tagged `TACEO TODO`, 51 tagged `AZTEC
+TODO` — TACEO's own comments ported verbatim from the bb C++ source during
+their Rust port, 6 tagged `0xThemis TODO`, 34 untagged plain `TODO`s).
+Provenance method per hit: compare the hit's exact comment text against
+`git show 36da0ea8:<path>` (`36da0ea8` = this branch's fork point from
+TACEO upstream — `build(deps): bump tokio from 1.52.1 to 1.52.3 (#544)`,
+an upstream dependabot commit). Present verbatim in the base blob ⇒
+**upstream** (TACEO's own — leave alone, per the diff-minimization policy,
+ch. 12 §1 rule 2); absent from the base blob ⇒ **introduced by one of our
+72 sync commits**, needs a disposition. Cross-checked against files that
+diverged heavily from base (up to 700 changed lines in `ultra_builder.rs`)
+to make sure a heavily-edited file didn't hide a genuinely-new TODO under
+a coincidental text match — it didn't; the method correctly isolated the
+one true positive below out of all 163 hits.*
+
+**Result: 162/163 TODOs are upstream TACEO's (leave alone, no action).
+Exactly 1 was introduced by our sync work:**
+
+| file:line | text | proposed disposition |
+|---|---|---|
+| `co-noir/co-builder/src/ultra_builder.rs:4626` | `// TODO(phase2-2.6): The is_infinite inputs were removed with Noir v1.0.0-beta.22 (the point at infinity is now encoded as (0, 0)); re-verify gate-count parity of the EcAdd/MSM constraints against bb (ec_operations.cpp, multi_scalar_mul.cpp).` | **Fix-now trivial (stale comment — safe to delete).** Introduced in commit `4e7abb95` ("feat: bump Noir deps to v1.0.0-beta.22 (Phase 2 step 1)"). The re-verification it asks for was already performed and recorded DONE in ch. 14 §17.1 ("`embedded_curve_add` ✓ ((0,0) path)") and §19.2 item 3 ("`embedded_curve_add` ✓ (EC gate counts settled — no extra work needed beyond step ①'s serde)"), with the explicit gate-count numbers (EC_ADD 80→76, MSM 3559→3557) recorded in §17.2/§19.3. The comment was simply never deleted once the work landed — it is not a live open item. This tidy pass cannot edit code under `co-noir/`; flagged for the orchestrator/next session touching this file to delete the comment (or replace it with a one-line "verified, see ch. 14 §19" pointer). |
+
+The other 162 (72 `TACEO TODO` + 51 `AZTEC TODO` + 6 `0xThemis TODO` + 33
+untagged) all pre-date this branch's fork point byte-for-byte and are
+TACEO's own — several of the higher-value ones are already catalogued as
+optional future work in §3 above (batching MPC multiplications, lazy
+plookup table init, etc.); no new action needed here.
+
+## 6. Adversarial correctness-review findings (2026-07-23)
+
+Full-strength read-only review of the entire sync diff (36da0ea8..HEAD,
+~8.9k lines) cross-checked file-by-file against bb C++ at ~/ap-next v5.0.1
+(PROGRESS session 13 cont.2). **Verdict: the port is FAITHFUL** — no MPC
+shortcuts, no soundness holes, no vacuous tests; the permutation-3
+CRAND-factor, alpha re-slice (29 subrelations), entity reorder, padding→
+uniform-virtual-rounds, 5th-SSIPA-claim, ROM/RAM double-pin, and the
+Shamir randomness accounting were each verified correct against the cited
+bb source (full cleared-list in the review transcript). Three follow-ups,
+all code-verified this session:
+
+- **R1 — non-canonical basefield limb encodings accepted in RELEASE builds
+  [security, low–med; the predicted "4th parse site"].** VERIFIED:
+  `co-noir-common/src/honk_curve.rs:293-305` `bn254_fq_to_fr_rev` gates the
+  two limb ranges only with `debug_assert!` (compiled OUT in release) and
+  never checks `value < q` (the `Fq::from(BigUint)` silently reduces mod
+  p). bb hard-rejects all three in EVERY build (`field_conversion.hpp:65-85`
+  BB_ASSERT_LT limb0<2^136, limb1<2^118, value<fq::modulus — BB_ASSERT
+  aborts in release too). Same three parse sites as the already-fixed
+  off-curve checks (transcript receive_point + both VK from_buffer), one
+  layer down. Sub-issue: infinity is detected as `x.is_zero()&&y.is_zero()`
+  AFTER reduction, so limbs encoding exactly p read as infinity; bb accepts
+  only literally all-zero limbs. Attack: no forgery (point still must be
+  on-curve, FS binds the sent frs) BUT a malicious prover can craft one
+  proof a RELEASE co-noir verifier accepts and bb REJECTS → verifier-set
+  divergence + loss of encoding uniqueness. Fix (mechanical): promote both
+  `debug_assert!`s to real range checks returning `HonkProofError`, add the
+  `value < q` alias check, and require all-zero RAW frs (pre-reduction) for
+  the infinity branch. Add a regression test in the security_regression
+  family (tamper a limb to a non-canonical-but-reducing encoding; release
+  build must reject). NOTE: co-noir's own default build profile for the
+  test/oracle runs — confirm whether the KAT/compare suites run release
+  (they do: `--release`), so this gap is live in exactly the config we
+  validate parity in; the parity held only because honest bb-built proofs
+  are canonical.
+- **R2 — shared-value `to_radix` truncates silently on the (Shared,Public)
+  branch [correctness, low].** `co-brillig/src/mpc/rep3.rs` ~1569: the
+  "input fully consumed after N limbs" residue check that beta.22 + the
+  plain path + the (Public,Shared) path enforce is MISSING on the
+  (Shared val, Public radix) + pow-of-two branches — they fill output_size
+  limbs and drop the remainder. Shamir (`shamir.rs:341`) correctly bails on
+  shared input. Only reachable if a circuit's Brillig calls to_radix with
+  too-small output_size (constrained side normally catches it) → robustness,
+  not soundness; mirror the plain path's residue check.
+- **R3 — recursion proof-length check is a panic, not a Result [robustness].**
+  `co-builder/src/types/honk_recursion_constraint.rs:135-140`
+  `assert_eq!(input.proof.len(), expected)` on ACIR-supplied size — added
+  hardening (bb errors here too) but panics rather than returning cleanly;
+  matches surrounding panic style, flag only for Result-consistency.
+
+**Disposition (Mike to decide):** R1 is the one worth fixing before any
+context where a co-noir verifier and bb gate the same artifact (and before
+holding co-noir out as a drop-in verifier) — mechanical, ~half day incl.
+the regression test, no parity risk (honest proofs unaffected). R2/R3 are
+low-priority robustness. None affect the byte-parity results or block 5.1d.

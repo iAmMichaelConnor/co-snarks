@@ -234,7 +234,21 @@ negative is coded but gated on `EXPECT_REAL_PROOFS=1`
 (PROVER_REAL_PROOFS on the network + `proverEnabled` in the wallet's
 PXE).
 
-**⚠ REAL-PROVING MODE FAILS AT THIS TAG — and NOT because of co-noir
+> **✅ RESOLVED 2026-07-20 (read before the block below, which is kept as
+> the historical record):** the real-proving failure was a **toolchain
+> vintage-mismatch confound** — the contract had been silently compiled
+> against the drifting `~/ap-next` mirror and run against an older
+> network. At a consistently-pinned `v5.0.1` toolchain the full real game
+> passes 3/3 incl. the tamper-reject negative (the definitive soundness
+> gate → PASSED). Fresh real proving could not reproduce the bb bug at
+> ANY v5 version (34/34 at the pin below); only the frozen captured
+> fixture still fails — an open upstream question, not our blocker.
+> Authoritative record: monty-hall
+> `upstream-issues/pinned-recompile-retest-finding.md` (+ the two
+> bisection RESULTS files). Deps re-pinned to release-tag git deps
+> 2026-07-23. PLAN 5.1 status has the full sequence.
+
+**⚠ REAL-PROVING MODE FAILS AT THIS TAG (historical, superseded above) — and NOT because of co-noir
 (probed 2026-07-13 night).** With `EXPECT_REAL_PROOFS=1`: the plain
 deploy tx PROVES AND MINES fine (ClientIVC pipeline works), but the
 first tx containing `verify_proof_with_type(..., HONK_ZK)` — init_game —
@@ -303,7 +317,9 @@ maintainer-ready report + deterministic repro in the monty-hall repo
   `bb prove --scheme chonk --ivc_inputs_path …` on the matching 0703
   bb.js binary. Capture technique (bb-prover dump hook, bb.js native
   logger) documented in the report.
-CONSEQUENCE: the definitive tamper-reject soundness gate stays blocked
+CONSEQUENCE (historical — superseded by the 2026-07-20 banner above: the
+gate PASSED at a consistent v5.0.1 pin): the definitive tamper-reject
+soundness gate stays blocked
 until the bb team fixes this; everything up to real client proving is
 green (TXE 10/10, MPC full game, local-network e2e in simulated mode).
 Also: ch. 04 §5's in-contract recipe was verified at the

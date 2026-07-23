@@ -1402,3 +1402,132 @@ superseded by the newer reports; monty-hall `versions.env` still names the
 old oracle path (harmless — binaries proven byte-identical). NEXT: that
 reconciliation pass, then one real-proving e2e re-run, then 5.1d (TS
 orchestration port).
+
+## Session 13 (cont.) — 2026-07-23 evening — next stages kicked off: docs reconciled, ch. 20 + ch. 21 written, full sweep run with parallel-isolated suites
+
+Command-level record: ch. 14 §27. Mike's steers this stretch: kick off the
+plan's next stages; full test sweep via a Sonnet agent; then (after the
+serial sweep stalled and history repeated the unnoticed-completion problem)
+**parallelize testing** — suites as main-session background tasks with
+isolated resources, never one serial mega-agent (memory:
+[[parallel-test-orchestration]]); be meticulous that script changes don't
+drop any gate; keep PROGRESS + ch. 14 current; write a pre-TS tidying plan.
+
+- **Docs reconciliation landed** (the items the morning entry flagged):
+  PLAN 5.1 RESOLUTION block (final story: vintage-mismatch confound → 3/3
+  real-proving PASS at consistent v5.0.1 → release-tag git deps; upstream
+  frozen-fixture contradiction open but not ours) + Phase-3 moot note;
+  status-correction banner on the committed clientivc bug report; ch. 18 §6
+  banner'd resolved/historical; monty-hall `versions.env` oracle pointer
+  aligned to `~/.bb-target-src-v5.0.1/bb` (byte-identical binary — label
+  alignment only); README index gained the missing ch. 19 row.
+- **Ch. 20 written** (5.1d TS orchestration workplan; grounded in a full
+  read of the Rust orchestrator + protos + driver): only the orchestrator
+  ports (nodes stay Rust; driver already TS); frozen HTTP/error contract so
+  driver + e2e suites are the acceptance gates unchanged; bb.js-verify
+  spike T1 (bb-CLI fallback); the ark-LE vs JSON-BE field-codec trap;
+  T0–T6 ≈ 2 sessions. ch. 16 §7 stub now points at it. **Decision (Mike):
+  5.1d executes in a FRESH session** — ch. 20 is written to be cold-start
+  self-contained.
+- **e2e scripts made parallel-safe** (mpc/e2e.sh + e2e/run.sh): env knobs
+  MPC_GRPC_BASE_PORT / MESH_BASE_PORT (suite-local party*.toml generated on
+  offset, with a 10001/10002 cascade guard) / PG_BASE_PORT / PG_PREFIX /
+  ORCH_PORT; cleanup traps converted from pattern-pkill to PID-scoped kills
+  (pattern kills would take down a concurrent suite); run.sh's anvil/network
+  sweep additionally cwd-scoped (the 2026-07-20 collateral-kill hazard,
+  fixed BEFORE any e2e was launched tonight). Meticulousness audit: full
+  diffs reviewed; defaults identical to the old literals; suite-B log shows
+  all 9 gate sections executed (4 bb cross-verifies + tamper + chained-value
+  sanity); no leftover processes/containers after runs.
+- **Sweep results (fresh, tonight)**: A1 check.sh PASS ×2; A2 TXE 10/10 ×2;
+  A3 mpc cargo 4/4 ×2; **B mpc/e2e.sh PASS** on isolated ports (its first
+  attempt FAILED only because the default gRPC port 8000 is squatted by an
+  unrelated python http.server — node0 EADDRINUSE; do-not-kill rule
+  respected, isolation knobs are the fix); **C real-proving on-chain e2e
+  PASS** — 7 genuine multi-second ClientIVC proofs, exactly 1 deliberate
+  tamper rejection, GAME COMPLETE — the FIRST full real-proving run since
+  the git-dep re-pin, closing that loop end-to-end. B ∥ C ∥ D1 ran
+  concurrently without interference (the redesign validated in anger).
+  D1 (fast-check --full) + D2 (compare.sh) still in flight at this entry;
+  results to be appended.
+- **Fresh MPC proof timings** (suite C, driver-side, contended box):
+  sample_rand 0.51 s; init_game 3.76 s; open_door 3.97 s; finish_game
+  3.84 s — same order as the client's own ClientIVC tx proving (3.4–5.4 s)
+  in the same run. Uncontended per-party record remains ch. 14 §26 / A4
+  (witext 0.85 s + pk 0.15 s + ZK prove 1.74 s).
+- **Why D-tier is slow + serial** (Mike asked): compare.sh/compare_mpc.sh
+  write into the same test_vectors/<circuit>/ paths (verified — both rm -f
+  the same files), so they can't overlap today; the acceptance matrix is
+  128 cells (32 circuits × 2 hashers × 2 zk-modes) each with a 3-party MPC
+  prove. Sharding fix filed as ch. 15 §4.9a.
+- **Ch. 21 written**: pre-5.1d tidying plan (M1–M7 monty-hall incl. the
+  now-stale README pins paragraph; C1–C6 co-snarks incl. TODO triage and
+  the deferred SSIPA A(1)=0 test as the one real engineering item; X1–X3
+  cross-repo). Decision recorded: tidy the tree, not the git log (branches
+  never push, history = audit trail).
+- All of tonight's work is UNCOMMITTED pending Mike's word (X1).
+
+## Session 13 (cont. 2) — 2026-07-23 night — tidying executed in parallel; D-tier sharded (~2.2×); SSIPA test closed; reviews + overnight bench launched
+
+Mike's steers: stop/parallelize D1/D2 (D1 finished on its own first — full
+serial PASS: 106/106 cargo + 128/128 compare_mpc cells, rc=0, ~27 min);
+implement ch. 21 in parallel; be meticulous that no gate is lost; spawn
+adversarial correctness reviews of both codebases; schedule the 0.5
+benchmark overnight after explaining its worth + a WAN-latency estimate.
+
+- **D-tier parallelization (ch. 15 §4.9a) DONE + validated**: compare.sh +
+  compare_mpc.sh gained `CIRCUIT_FILTER` (unknown-name = hard error),
+  `CONFIG_DIR` (per-shard REP3 mesh ports), and per-circuit
+  `cleanup_circuit` replacing the global cleanup.sh (which would have let
+  concurrent shards wipe each other). New `scripts/acceptance-parallel.sh`
+  extracts the circuit lists FROM the scripts, weight-packs into shards,
+  and hard-asserts shard-union == full matrix (the assertion caught its
+  own first bug — an empty-element artifact — by refusing to run).
+  **Validated: full 33-circuit plain+MPC matrix PASS in 1003 s (~17 min)
+  vs ~36 min serial for the same coverage (~2.2×), with perfectly balanced
+  shard weights (20/20/20/20).** `fast-check.sh --full` now routes through
+  it (and thus now includes the plain compare.sh matrix it never ran).
+- **Ch. 21 tidying: all items except M3/M7/C6-commit DONE** (two Sonnet
+  agents + orchestrator; per-item annotations in ch. 21). Highlights:
+  monty-hall README/pins truth pass; stale 20260708 labels fixed; 4 repro
+  drivers → `upstream-issues/repro-tools/`; cargo fmt/clippy + nargo fmt
+  clean; gates re-run green. co-snarks: TODO triage (162/163 upstream,
+  the 1 ours deleted with an as-verified replacement note); debris sweep
+  CLEAN (no 2.9 instrumentation leaked — all tracing/allows byte-identical
+  to upstream base); 4 truth banners (ch. 02/04×2/05). Open for Mike:
+  delete tracked dead dev-certs `noir_logic/network/data/*.der`? Also
+  killed our own orphaned 2026-07-13 `oracle_stub.py` (port 5599).
+- **C4 / ch. 13 §3a#8 CLOSED — the last deferred security regression**:
+  new `zk_proof_ssipa_evaluation_tamper_rejected` (tampers each of the 4
+  transmitted Libra/SSIPA evaluation fields; clean reject, no panic),
+  implemented in an isolated worktree with red-mutation validation and
+  transplanted; main-tree suite now 10/10. **Bonus finding: co-noir binds
+  the SSIPA evaluations twice independently (Shplemini/KZG batched opening
+  AND the consistency identity) — defense-in-depth; the test only goes red
+  with BOTH backstops neutralized.** The historical "kernel-perturbation"
+  framing is a prover-side forgery not reachable by byte-tampering (evals
+  are absorbed pre-Shplonk-challenges); the byte-tamper form is the right
+  regression. PLAN 2.7 + ch. 13 updated.
+- **Adversarial correctness reviews launched** (Mike's ask, full-strength
+  model, read-only): (1) co-snarks sync diff — verifier laxity vs bb, MPC
+  shortcuts, swallowed errors, test integrity; (2) monty-hall — contract
+  binding layer, circuit soundness, operator replay/proof-swap, ch. 17
+  §6.8 claims vs code. Results to be appended when they land (M3's ch. 17
+  status pass deliberately waits on the monty-hall one).
+- **PLAN 0.5 benchmark SCHEDULED overnight**: `scripts/bench-0_5.sh`
+  (3 circuits × REP3/Shamir-best-effort × zk/non-zk × 3 reps, per-phase
+  timings vs bb + plaindriver baselines, 16 threads/party) +
+  `bench-0_5-launcher.sh` (waits for a genuinely quiet box — 2×5-min
+  checks — 10 h cap then runs flagged CONTENDED). Results →
+  `~/bench-0_5-results/2026-07-23/results.csv`. WAN estimate recorded for
+  Mike: cost model T ≈ compute + R×latency with R ≈ 1–3k sequential rounds
+  (Poseidon2-depth-dominated witext) → same-DC ~1.2×, same-region ~3–15×,
+  equidistant-planet (RTT 200–350 ms) **~2–9 min/proof (~30–150×)** —
+  latency-bound, bandwidth irrelevant; pinning R exactly (mpc-net
+  ConnectionStats) is the natural bench v2.
+- Fresh monty-hall proof timings re-confirmed for Mike (suite C driver-side,
+  contended): 0.51/3.76/3.97/3.84 s per round vs client's own ClientIVC tx
+  proving 3.4–5.4 s in the same run.
+- Still open: M3 (ch. 17 status pass, waits on review), M7/C6/X1 (commits —
+  Mike's word), X3 (memory refresh at session end), review results, bench
+  results.

@@ -38,8 +38,13 @@ property/fuzz coverage; (6) no MPC privacy check.
 **Status 2026-07-09:** (1)+(2) covered by the 2.7 sweep runs of
 `compare*.sh` against the source-built oracle (live bidirectional
 cross-verify incl. ZK); (3) partially closed — ch. 13 §3a set + verifier
-hardening + byte-level transcript-consumption sweep landed (§3a #8 SSIPA
-kernel-perturbation still deferred); **(4) CLOSED**: VK byte-KATs +
+hardening + byte-level transcript-consumption sweep landed (§3a #8 SSIPA:
+CLOSED 2026-07-23 — `zk_proof_ssipa_evaluation_tamper_rejected`, tampering
+each of the 4 transmitted Libra/SSIPA evaluation fields, red-mutation
+validated; the byte-tamper form is the right test — the original
+"kernel-perturbation" forgery needs prover internals and is not
+byte-reachable, and the verifier was found to bind these evals twice
+independently, Shplemini/KZG + the consistency identity); **(4) CLOSED**: VK byte-KATs +
 `plain_test` assertions for the two KAT circuits (both hashers, both zk
 modes), always-on `recursion{,_zk}_vk_kat` tests, and `compare.sh` now
 byte-diffs `vk` vs `vk_plaindriver` for EVERY circuit. The recursion VK

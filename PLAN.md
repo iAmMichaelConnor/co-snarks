@@ -90,7 +90,10 @@ no pasting project code into external services. When in doubt, don't.
   09 PXE secret sharer, 10 PXE/wallet architecture, 11 Phase-2 sync workplan
   (status lives HERE in PLAN.md; ch. 11 is the file-by-file HOW, annotated
   AS BUILT), 12 sync runbook + agent prompts, 13 parity/soundness test plan,
-  14 Phase 0+2 command log, 15 improvement backlog.
+  14 Phase 0+2 command log, 15 improvement backlog, 16 Phase-5.1 monty-hall
+  workplan, 17 monty-hall quality backlog, 18 note-compat + local-network
+  spec, 19 v5.0.1 resync gap analysis (supersedes 03 as current baseline),
+  20 Phase-5.1d TS orchestration workplan.
 - **`project-docs/PROGRESS.md`** — append-only session log. Every session
   starts by reading PLAN.md + README.md + PROGRESS.md, and ends by appending.
 
@@ -207,8 +210,12 @@ Work items map 1:1 to the breaking changes in `project-docs/03-bb-diff-analysis.
       compile-time asserts). ch.13 §3a security regressions: #9 ROM/RAM +
       #10 trailing/off-curve DONE; verifier hardening landed. Iteration tool =
       `fast-check.sh` (NEVER circom). **Remaining follow-ups (not blocking):**
-      SSIPA A(1)=0 boundary-claim consistency test (§3a#8, deferred); non-canonical (≥modulus)
-      encoding rejection (§3a#10 residue, ch.15 §1.3).
+      ~~SSIPA A(1)=0 boundary-claim consistency test (§3a#8, deferred)~~ —
+      **CLOSED 2026-07-23** (ch. 21 C4): `zk_proof_ssipa_evaluation_tamper_rejected`
+      landed with red-mutation validation; bonus finding: co-noir binds the
+      SSIPA evals TWICE independently (Shplemini/KZG + consistency identity)
+      — defense-in-depth vs bb's single check. Non-canonical (≥modulus)
+      encoding was RESOLVED as deliberate match-bb behavior (ch.15 §1.3).
 - ~~2.8 Upstream PR(s)~~ — dropped per confidentiality rule; work stays local.
 - [x] 2.9 **Recursion VK/proof parity break — RESOLVED 2026-07-09**
       (found by the overnight backlog run; full record ch. 14 §23, ch. 15
@@ -271,6 +278,10 @@ in-contract UH-verify real-proving bug (Phase 5.1 status) — it bundles
 translator op=0 + shift-size + full-width FS + VK regen. That bb-side fix
 lands via the AZTEC toolchain pin, not this co-noir transcript port; the two
 are independent consumers of the same commit.]**
+**[UPDATE 2026-07-23: the 5.1 real-proving bug turned out to be a toolchain
+vintage-mismatch confound, resolved at a consistent v5.0.1 pin (5.1 status
+block) — so #500/v6 is NOT needed for monty-hall and this contingency stays
+dormant unless the co-noir target itself ever moves to the v6 line.]**
 ROM-via-logup (`d3e42f9d3a`): memory relation 6→8 subrelations,
 `rom_logup_gamma` challenge in oink, builder ROM gate changes.
 
@@ -344,6 +355,27 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       faithful reproduction first (DSL create_honk_recursion_constraints path, or
       real e2e on a next client) before any fix/branch claim. Record: PROGRESS
       session 11.]**
+      **[RESOLUTION 2026-07-20/23 — the real-proving blocker is GONE and moving
+      off v5 is NOT needed. Final sequence: (i) session 11 cont2/3 re-confirmed
+      the frozen captured stack fails on v5 and a real-kernel run passes on
+      v6/next, with a real-stack bisect pinning that fix to #500 full-width FS —
+      that remains true as an upstream fact about the FROZEN FIXTURE. (ii) But
+      2026-07-20's corrected-methodology rerun could not reproduce the bug via
+      FRESH real proving at ANY v5 version — 34/34 GOOD at the previously
+      "confirmed-bad" pin — and traced monty-hall's own 3/3 e2e failures to a
+      contract/toolchain vintage mismatch: the contract had been silently
+      compiled against the drifting ~/ap-next mirror and run against an older
+      network. (iii) At a consistently-pinned v5.0.1 toolchain, the FULL real
+      game passes 3/3 incl. the tamper-reject negative → the ch.04 §5
+      soundness gate is PASSED and 5.1's Rust phase is genuinely COMPLETE.
+      (iv) 2026-07-23: all Noir deps re-pinned to immutable public release-tag
+      git deps (kills the drift-hazard class for good); artifacts proven
+      byte-equivalent; gates re-run green. Whether the source-level bb defect
+      (127-bit-truncated batch-merge hash binding, unchanged in v5.0.1) is
+      reachable by any fresh real app remains an open UPSTREAM question
+      documented in monty-hall upstream-issues/ — it does not block us.
+      Remaining for 5.1: one real-proving e2e re-run post-re-pin (in flight,
+      session 13), then 5.1d = the TS orchestration port (workplan: ch. 20).]**
 - [ ] 5.2 Design+build the user→MPC share submission channel (envelope
       encryption per node; TypeScript tooling; TACEO:Proof is the
       commercial reference shape, ch. 02 §5.4), but if that's not open source, we should look at the ~/monty-hall-aztec repo for inspiration.

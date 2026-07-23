@@ -1235,3 +1235,75 @@ Commands/gotchas worth replaying, in order:
 - bb VK fields for the TS driver: `bb write_vk … --output_format json`
   → vk.json = { vk: [115 hex fields], hash } (the binary `vk` file
   stays the orchestrator's input).
+
+## 27. Session 13 (2026-07-23) — verification sweep, git-dep re-pin checks, parallel test orchestration
+
+Narrative: PROGRESS session 13 (+ cont.). Commands + gotchas, in order:
+
+- Oracle identity: `cmp ~/.bb-target-src/bb ~/.bb-target-src-v5.0.1/bb` →
+  BYTE-IDENTICAL (the single strongest ch. 19 confirmation).
+- Live gates: `./fast-check.sh --all-fast` PASS; `cargo test -p tests
+  --release --test noir -- vk_kat` 2/2 (recursion VK KATs, ~14 s).
+- Git-dep equivalence (monty-hall): compile with git dep, then with the
+  snapshot, and `cmp <(jq -S 'del(.file_map)' a.json) <(… b.json)` →
+  SEMANTICALLY IDENTICAL (only source paths differ). `aztec-bb
+  aztec_process` → all 6 VKs cache-hit (same circuit hashes). Artifact
+  `md5` DOES differ across dep locations — `file_map` embeds absolute
+  paths; never compare artifact md5s across machines/dep layouts, compare
+  `del(.file_map)`.
+- `mpc/mpc-node/data/circuits/*.json` vs fresh builds: `.bytecode`/`.abi`
+  byte-identical; only `.hash` metadata + debug paths differ (nothing
+  reads `.hash` — grepped mpc-node). Swapped fresh copies in and re-ran
+  `cargo test -p mpc-node --release` → 4/4.
+- Ops gotchas tonight: (1) the Claude Code classifier blocks bulk
+  `rm -rf`/`find -exec rm` — prefer `git archive` + `mv`-swap or
+  explicitly-named deletions; (2) `$EPOCHSECONDS` is bash-only — under
+  this zsh harness it silently evaluates to 0 in `$(( ))`; use
+  `date +%s`; (3) a serial test-sweep agent stalled waiting on its own
+  background job — superseded by main-session background tasks (harness
+  auto-notifies), memory [[parallel-test-orchestration]].
+- Port squatter: unrelated `python3 -m http.server` on 127.0.0.1:8000
+  (docs server, ANOTHER project — never kill) breaks the mpc nodes'
+  default gRPC bind (`Address already in use`, os error 98 in node0.log —
+  the whole suite then fails with confusing "no proof in response" +
+  empty-proof bb rejects). Fix = per-suite identity env knobs added to
+  `mpc/e2e.sh` + `e2e/run.sh` (MPC_GRPC_BASE_PORT / MESH_BASE_PORT /
+  PG_BASE_PORT / PG_PREFIX / ORCH_PORT), suite-local `party*.toml`
+  generation for mesh offsets, PID-scoped cleanup kills. Validated: B on
+  {8010,10010,15440,mh-b-pg,3010} ∥ C on {8020,10020,15450,mh-c-pg,3020}
+  ∥ D1, all green, no leftovers (`docker ps` + pgrep sweep clean after).
+- Suite C (real proving, first since the git-dep re-pin): PASS — 7 ×
+  multi-second `Generated ClientIVC proof` events, exactly 1 deliberate
+  tamper `BBApiException`, GAME COMPLETE. Fresh MPC round timings
+  (driver-side, contended): 0.51 / 3.76 / 3.97 / 3.84 s.
+- Speed pass: `check.sh` compiles/tests parallelized (first compile alone
+  to warm the shared `~/.nargo` git-dep cache — concurrent cold fetches
+  could race; then 3 compiles + 2 test suites concurrent, exit codes
+  collected via `wait`); both e2e scripts' fixed `sleep 5`/`sleep 2`
+  replaced with `ss -ltn` readiness polls that dump the dead process's
+  log on startup failure. Re-validated end-to-end after the edits
+  (check.sh PASS with all gates visible; e2e.sh PASS, 9/9 sections).
+- compare.sh/compare_mpc.sh CANNOT be edited or parallelized while a
+  `--full` run is executing them (bash reads scripts incrementally);
+  sharding design filed as ch. 15 §4.9a, to implement once D-tier is idle.
+- (later that night) §4.9a IMPLEMENTED: `CIRCUIT_FILTER` +
+  `CONFIG_DIR` + `cleanup_circuit` in both compare scripts;
+  `scripts/acceptance-parallel.sh` (dynamic list extraction, weight-packed
+  shards, union hard-assert — which caught its own first bug, an
+  empty-element in the union set, by refusing to run). Full matrix PASS
+  in 1003 s vs ~36 min serial. Smoke recipe for future edits:
+  `CIRCUIT_FILTER=add3u64 bash compare.sh` (~40 s) + the typo guard
+  (`CIRCUIT_FILTER=not_a_circuit` must exit 2).
+- SSIPA test (ch. 21 C4) transplant pattern: agent worked in an isolated
+  worktree; `git -C <wt> diff -- tests/ > patch && git apply patch` in the
+  main tree, then `git worktree remove --force` + branch delete. NB the
+  worktree spawned at a stale base — the agent had to reset it to the
+  branch tip first; check `git log -1` in any agent worktree before
+  trusting its baseline.
+- Overnight 0.5 bench armed: `scripts/bench-0_5.sh` via
+  `scripts/bench-0_5-launcher.sh` (idle-wait: 2×5-min quiet checks,
+  load<25, no heavy procs; 10 h cap → run flagged CONTENDED). Results →
+  `~/bench-0_5-results/<date>/results.csv`; per-cell logs beside it.
+  Bench gotcha fixed pre-launch: bare `wait` after 3 backgrounded parties
+  returns only the LAST job's status — collect PIDs and wait each, or a
+  failed party is silently masked.

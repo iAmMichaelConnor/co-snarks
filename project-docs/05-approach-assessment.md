@@ -131,6 +131,13 @@ the decided state. PLAN.md is authoritative for phase status.)*
 
 ## 6. Open questions for Mike — ANSWERED 2026-07-08
 
+> **✅ UPDATED 2026-07-23:** item 1's tag is stale — kept as historical
+> record of the decision as made, not edited. The `origin/v5-next` /
+> "public v5 line" TARGET CHOICE is still correct and unchanged; only the
+> specific tag has since moved from `v5.0.0-nightly.20260708` forward to
+> `v5.0.1` (ch. 19 resync). Don't check out the literal string below
+> expecting it to be the current pin — see `versions.env`/PLAN.md for that.
+
 1. **Target line** → `origin/v5-next` of aztec-packages-private. Verified
    equal to public tag `v5.0.0-nightly.20260708` in its barretenberg tree, and
    the two v6-only breaking commits are NOT in it. Consequence: the effective

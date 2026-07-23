@@ -564,3 +564,91 @@ exactly this envelope pattern. KEEP ae/dh (tested, KAT-pinned) for that;
 consider Grumpkin-point recipient keys for MPC nodes rather than Aztec
 address points (nodes are not Aztec accounts — smallest of ch. 15-style
 follow-ups).
+
+## §7 — Adversarial correctness-review findings (2026-07-23)
+
+Full-strength read-only review (PROGRESS session 13 cont.2), aimed at
+corners the green tests cannot see — the binding layer, circuit soundness,
+operator replay/proof-swap, cross-game reuse — filtered against §6.8's
+documented tradeoffs. **Verdict: within one deployment the system is sound
+— every one of the four rounds' proof public inputs traces to a chain-read,
+chain-pushed, or contract-state value; no unbound input, no free-witness
+nullifier, no intra-deployment replay/swap path. Two genuine gaps live at
+edges the tests never visit; both code-verified this session.** NOT
+fixed — recorded for Mike's decision (no-commits rule + these change
+KAT-pinned outcomes / DB schema / circuit publics).
+
+- **F1 — cross-deployment seed/root reuse [SECURITY-fairness; the one to
+  fix before calling §6.8 delivered].** Rounds 1–2 circuit publics
+  (`taceo_commit`, `monty_hall_init`) carry `storage_slot`+`owner` but
+  **no `contract_address`** (rounds 3–4 do — verified). And the node DB
+  stores root randomness + game state in hardcoded singleton rows
+  (`data_store.rs` `WHERE id = 1`, unconditional `ON CONFLICT DO UPDATE`,
+  no deployment key — verified). So after game 1 finishes (its reveal
+  fully determines the winning door, which is a deterministic function of
+  the seed), the untrusted operator can deploy a SECOND MontyHall, replay
+  the stored round-1 commit proof (its publics bind no contract, so the
+  capsule re-verifies at the new address), re-call node `init_game` →
+  honest nodes reload the same persisted `root_rand` and re-derive the
+  same winning door for game 2, known to the operator in advance. **Fails
+  with 3 honest nodes and zero collusion** — the operator just skips
+  round 1 — so it is NOT §6.8's "fairness needs ≥1 honest node at round 1"
+  tradeoff; it's a new gap (single-game scope was never a stated boundary).
+  Fix shape: key the DB rows by a deployment context (hash of
+  contract_address+owner); consume root once / delete on finish; bind
+  rounds 1–2 publics to `contract_address` like 3–4. Corollary
+  (robustness): re-calling `sample_rand`/`init_game` mid-game overwrites
+  shares and bricks the live game.
+- **F2 — winning-door draw is modulo-biased [correctness, low magnitude;
+  sibling of the A1 biased-bit fix].** `monty_hall/src/game_state.nr:62`
+  `prng.get_field() as u8 % 3`: the Field→u8 truncation is uniform over
+  256, and 256 mod 3 = 1 → door 0 wins 86/256 vs 85/256 for doors 1/2, a
+  1/256 skew, permanent, in a provable-fairness demo. (The `%2` coin flip
+  at line 94 is fine — 256 is even; the ch. 16 A1 fix caught `%2`, missed
+  `%3`.) Fix: cast to u32/u64 before `% 3` (bias → 2⁻³²/2⁻⁶⁴). One line;
+  changes KAT-pinned game outcomes so it must land with a fixture regen.
+- **F3 — `init_game` is front-runnable [robustness / low security].** No
+  sender restriction; the first caller supplies operator/player/mpc_owner
+  + all four vk hashes and owns the (immutable-config) deployment. A
+  mempool watcher can pin arbitrary circuits on a fresh address before the
+  real operator. Deliberately not a protocol `#[initializer]` (comment
+  explains the capsule-before-deploy reason but only re double-invocation).
+  Fix: derive address from config (salted deploy the driver checks), or
+  player-side config verification (F4).
+- **F4 — vk pin is only as strong as player-side config verification,
+  which nothing in the repo does [informational/doc].** §6.8's "semantics
+  are exactly the four circuits'" holds *relative to* the vk hashes the
+  deployer chose; a real player must check `config.{operator, mpc_owner,
+  *_vk_hash}` against known-good values before `choose_door`. The e2e
+  driver plays both roles so the obligation is invisible. Add a paragraph
+  to the README trust model + a player-side assert in any real client.
+- **F5 — node DB read-modify-write is outside the session lock
+  [robustness/DoS].** `mpc.rs` loads root/state before `run_mpc_session`
+  takes `session_lock` and stores after release; two concurrent `open_door`
+  requests both load pre-open state, serialize on the lock, both prove, the
+  second overwrites → node store desyncs from chain anchor → game bricked
+  (on-chain safety holds via nullifier dedup; DoS only). Hold the lock
+  across load→prove→store, or CAS on a state version.
+- **F6 — real in-circuit verify runs only under `EXPECT_REAL_PROOFS=1`
+  [test-coverage].** `verify_proof_with_type` is a no-op in TXE AND in the
+  default e2e (simulated). Given the recent upstream in-app-verify bug
+  history, the real-proving e2e should be an explicit RELEASE GATE, not an
+  opt-in. Everything else the negatives claim IS genuinely exercised
+  (per-round vk-pin assert runs even simulated; wrong-nonce = real
+  tree-lookup fail; replay = real duplicate-nullifier; orchestrator +
+  LocalNetwork tests verify real proofs).
+
+Cleared on inspection (not findings): full binding trace of all 4 rounds;
+no intra-deployment proof swap/replay (distinct per-round vk pins + public
+arities 3/6/9/8 + deterministic nullifiers + once-only phase machine);
+nullifier under committed nhk; keyless ChoiceNote immutability argument;
+orchestrator byte-identity covers the whole message; prng/ae/dh warts all
+in dormant code; public-call revert atomicity. Coverage map in the review
+transcript.
+
+**Disposition (Mike to decide):** F1 + F2 are the two I'd fix before the
+next milestone (F1 = real fairness hole beyond documented scope; F2 = a
+one-liner in a fairness demo). F3/F4 fold into a "real-client hardening"
+item (relevant to PLAN 5.1c/on-chain + 5.0). F5 is a node-robustness fix.
+F6 is a CI-policy change (make the real-proving e2e a required gate). None
+block 5.1d (TS orchestration port), which touches the orchestrator only.

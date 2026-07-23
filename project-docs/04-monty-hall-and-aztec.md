@@ -3,6 +3,20 @@
 *Facts verified 2026-07-08 against `~/monty-hall-aztec` (Taceo demo, README:
 "small demo … not yet finished"). Read chapters 01–02 first.*
 
+> **✅ UPDATED 2026-07-23 (read before §1/§3/§4 below, which are kept as the
+> historical record of the demo's state as first surveyed on 2026-07-08 —
+> nothing in them is edited):** monty-hall-aztec is no longer "unfinished
+> and pinned to a mid-2025 stack." Phase 5.1 (ch. 16) fully modernized it:
+> Noir/bb/aztec-nr repinned off the mid-2025 versions in §3 up through the
+> v5.0.1-era toolchain (immutable git+tag release deps as of 2026-07-23,
+> ch. 19), the concrete defects catalogued in §4 were fixed during that
+> rework, and the full private-shared-state game (all 3 phases, real MPC
+> co-SNARK proofs, real client-side proving) passes end-to-end on a
+> consistently-pinned toolchain, tamper-reject negative included — see the
+> §5 addendum's own 2026-07-23 update below and PLAN.md's 5.1 RESOLUTION
+> block for the exact sequence. Treat §1/§3/§4 as "what we started from,"
+> not the current state of the repo.
+
 ## 1. What it is
 
 A proof-of-concept of **"Private Shared State" (PSS) on Aztec**, using the
@@ -216,6 +230,23 @@ keeping in our design.
    PXE-integrated share-submission channel is genuinely new work.
 
 ---
+
+> **✅ RESOLVED 2026-07-20/23 (read before the §5 CAVEAT below, which is
+> kept as the historical record — nothing in it is edited):** the
+> real-proving failure described below was a **toolchain vintage-mismatch
+> confound**, not a live blocker. Corrected-methodology reruns could not
+> reproduce the bug via fresh real proving at ANY v5 bb version; the 3/3
+> e2e failures traced to the contract having been compiled against a
+> drifting `~/ap-next` mirror and run against a stale network. At a
+> consistently-pinned v5.0.1 toolchain (deps re-pinned to immutable
+> git+tag releases 2026-07-23, ch. 19) the FULL real game passes 3/3,
+> **including the tamper-reject negative** — the definitive soundness gate
+> §5 was waiting on has PASSED, and 5.1's Rust phase is complete. The
+> underlying bb-side defect this caveat diagnosed (127-bit-truncated
+> batch-merge hash binding) is unchanged in v5.0.1 and remains an open
+> upstream question (monty-hall `upstream-issues/`), but it is not
+> reachable by any fresh real app and does not block us. Full sequence:
+> PLAN.md's 5.1 RESOLUTION block; ch. 18 §6's matching update.
 
 **⚠ §5 CAVEAT (added 2026-07-13, session 9):** the in-contract
 verification recipe in §5 was verified at the constants/artifact level
