@@ -302,6 +302,7 @@ estimated; no axis that hides the latency-dominated regime.
 - [x] V4 — the six views (§4), SVG, theme-aware, dataviz-compliant.
 - [x] V5 — honesty layer: badges, assumptions panel, reproduce command.
 - [x] V6 — published (private): https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa  (redeploy same file path to keep the URL).
+- [x] V8 — **DONE 2026-07-25** v2 bake: family-split sweep, censored ▲ floor, measured-R default 385, RSS tile, verify_bb banner, provenance → 89666ce5 (same URL).
 - [x] V7 — **DONE 2026-07-24** (bench ran clean overnight 2026-07-23
       22:11–22:46 UTC): measured medians baked into CIRCUITS (all 3 circuits
       × bb/plaindriver/REP3 × zk/non-zk + REP3 split/witext/verify);

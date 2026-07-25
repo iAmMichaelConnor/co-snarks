@@ -2063,3 +2063,18 @@ T2-proper floors from these netstats, ch. 24 L4/L2, sha 2e17 under the
 cap. v1-sanity: bb + REP3 reproduce v1 within noise (sha 140.5 s vs
 ~158 s incl. local-work speedups); plaindriver faster as expected
 (witness-fed + C-series).
+
+- **Explorer BAKED + republished (same URL)** with the v2 dataset:
+  12 circuits, family-split sweep lines (poseidon solid / sha dashed —
+  never joined across families), REP3 sha timeout as a censored ▲
+  "≥600 s" floor (never a point; ladder shows a dashed ghost bar),
+  R-slider default 385 = measured (caveat in assumptions), peak-RSS
+  tile, verify_bb 12/12 in the correctness banner, 18-row assumptions
+  table, all provenance strings → 2026-07-25/89666ce5,
+  bb_sha256_compression label corrected 2^15→dyadic 2^16. Source HTML
+  in session scratchpad; artifact
+  https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa
+  (redeploy: pass this url to the Artifact tool from any session).
+  Runbook items 1–4 done; remaining next-session leads: T2-proper
+  floors from v2 netstats, ch. 24 L4/L2 + REP3 serial-inversion audit,
+  logical-round counter, sha 2e17 REP3 under the cap after a lever.
