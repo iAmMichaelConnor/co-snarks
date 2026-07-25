@@ -76,20 +76,75 @@ impl Network for () {
         ConnectionStats {
             my_id: 0,
             stats: BTreeMap::new(),
+            msgs: BTreeMap::new(),
         }
     }
 }
 
-/// Statistics about the number of bytes sent over the network.
+/// Per-direction traffic counters for one peer connection: application payload bytes
+/// and framed message count (one `send`/`recv` call = one message). Updated with
+/// `Relaxed` atomics so the per-message overhead is negligible.
+#[cfg(any(
+    feature = "tcp",
+    feature = "tls",
+    feature = "quic",
+    feature = "tcp-session",
+    feature = "local"
+))]
+#[derive(Debug, Default)]
+pub(crate) struct TrafficCounters {
+    bytes: std::sync::atomic::AtomicUsize,
+    msgs: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(any(
+    feature = "tcp",
+    feature = "tls",
+    feature = "quic",
+    feature = "tcp-session",
+    feature = "local"
+))]
+impl TrafficCounters {
+    /// Record one message of `len` payload bytes.
+    pub(crate) fn record(&self, len: usize) {
+        self.bytes
+            .fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+        self.msgs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Load the current (bytes, messages) counts.
+    pub(crate) fn load(&self) -> (usize, usize) {
+        (
+            self.bytes.load(std::sync::atomic::Ordering::Relaxed),
+            self.msgs.load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+}
+
+/// Statistics about the number of bytes and framed messages sent over the network.
 pub struct ConnectionStats {
     my_id: usize,
     stats: BTreeMap<usize, (usize, usize)>,
+    msgs: BTreeMap<usize, (usize, usize)>,
 }
 
 impl ConnectionStats {
-    /// Create new `ConnectionStats`
+    /// Create new `ConnectionStats` from per-peer (sent_bytes, recv_bytes) counts.
+    /// Message counts are reported as zero; backends that track them should use
+    /// [`ConnectionStats::new_with_msgs`] instead.
     pub fn new(my_id: usize, stats: BTreeMap<usize, (usize, usize)>) -> Self {
-        Self { my_id, stats }
+        let msgs = stats.keys().map(|&id| (id, (0, 0))).collect();
+        Self { my_id, stats, msgs }
+    }
+
+    /// Create new `ConnectionStats` from per-peer (sent_bytes, recv_bytes) and
+    /// (sent_msgs, recv_msgs) counts.
+    pub fn new_with_msgs(
+        my_id: usize,
+        stats: BTreeMap<usize, (usize, usize)>,
+        msgs: BTreeMap<usize, (usize, usize)>,
+    ) -> Self {
+        Self { my_id, stats, msgs }
     }
     /// Get connection statistics for a specific party.
     /// Returns a tuple of (sent_bytes, received_bytes) if the party_id exists, otherwise returns None.
@@ -101,6 +156,25 @@ impl ConnectionStats {
     /// Iterates over the parties in ascending order of their IDs.
     pub fn iter(&self) -> impl Iterator<Item = (usize, (usize, usize))> {
         self.stats.iter().map(|(&id, &stats)| (id, stats))
+    }
+
+    /// Get per-party message counts as a tuple of (sent_msgs, received_msgs), or None if
+    /// the party_id does not exist. One framed message corresponds to one `send`/`recv`
+    /// call on the network; backends that do not track messages report zeros.
+    ///
+    /// The received-message count doubles as a proxy for the number of sequential MPC
+    /// rounds: the protocols are synchronous, so every received message was waited on,
+    /// and the count of messages received from a fixed peer (e.g. the REP3 ring
+    /// predecessor) bounds the length of the sequential round chain executed with that
+    /// peer.
+    pub fn get_msgs(&self, party_id: usize) -> Option<(usize, usize)> {
+        self.msgs.get(&party_id).cloned()
+    }
+
+    /// Get an iterator over the per-party message counts (sent_msgs, received_msgs).
+    /// Iterates over the parties in ascending order of their IDs.
+    pub fn iter_msgs(&self) -> impl Iterator<Item = (usize, (usize, usize))> {
+        self.msgs.iter().map(|(&id, &msgs)| (id, msgs))
     }
 
     /// Get connection statistics for a given time period by calculating the difference between two ConnectionStats instances.
@@ -120,9 +194,10 @@ impl ConnectionStats {
 impl std::fmt::Display for ConnectionStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (id, (sent, recv)) in self.iter() {
+            let (sent_msgs, recv_msgs) = self.get_msgs(id).unwrap_or((0, 0));
             writeln!(
                 f,
-                "Party {my_id} <-> {id}: SENT {sent} bytes, RECV {recv} bytes",
+                "Party {my_id} <-> {id}: SENT {sent} bytes ({sent_msgs} msgs), RECV {recv} bytes ({recv_msgs} msgs)",
                 my_id = self.my_id
             )?;
         }

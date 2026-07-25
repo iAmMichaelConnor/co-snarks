@@ -4,17 +4,17 @@ use bytes::Bytes;
 use crossbeam_channel::{Receiver, Sender};
 use eyre::ContextCompat;
 use intmap::IntMap;
-use std::{sync::atomic::AtomicUsize, time::Duration};
+use std::time::Duration;
 
-use crate::{ConnectionStats, Network};
+use crate::{ConnectionStats, Network, TrafficCounters};
 
 /// A MPC network using channels. Used for testing.
 #[derive(Debug)]
 pub struct LocalNetwork {
     id: usize,
     timeout: Option<Duration>,
-    send: IntMap<usize, (Sender<Bytes>, AtomicUsize)>,
-    recv: IntMap<usize, (Receiver<Bytes>, AtomicUsize)>,
+    send: IntMap<usize, (Sender<Bytes>, TrafficCounters)>,
+    recv: IntMap<usize, (Receiver<Bytes>, TrafficCounters)>,
 }
 
 impl LocalNetwork {
@@ -39,8 +39,8 @@ impl LocalNetwork {
             for j in 0..num_parties {
                 if i != j {
                     let (tx, rx) = crossbeam_channel::bounded(32);
-                    senders[i].insert(j, (tx, AtomicUsize::default()));
-                    receivers[j].insert(i, (rx, AtomicUsize::default()));
+                    senders[i].insert(j, (tx, TrafficCounters::default()));
+                    receivers[j].insert(i, (rx, TrafficCounters::default()));
                 }
             }
         }
@@ -69,8 +69,8 @@ impl Network for LocalNetwork {
     }
 
     fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
-        let (sender, sent_bytes) = self.send.get(to).context("party id out-of-bounds")?;
-        sent_bytes.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+        let (sender, sent) = self.send.get(to).context("party id out-of-bounds")?;
+        sent.record(data.len());
         if let Some(timeout) = self.timeout {
             sender
                 .send_timeout(data, timeout)
@@ -82,7 +82,7 @@ impl Network for LocalNetwork {
     }
 
     fn recv(&self, from: usize) -> eyre::Result<Bytes> {
-        let (receiver, recv_bytes) = self.recv.get(from).context("party id out-of-bounds")?;
+        let (receiver, recv) = self.recv.get(from).context("party id out-of-bounds")?;
         let data = if let Some(timeout) = self.timeout {
             receiver
                 .recv_timeout(timeout)
@@ -90,25 +90,20 @@ impl Network for LocalNetwork {
         } else {
             receiver.recv()?
         };
-        recv_bytes.fetch_add(data.len(), std::sync::atomic::Ordering::Relaxed);
+        recv.record(data.len());
         Ok(data)
     }
 
     fn get_connection_stats(&self) -> ConnectionStats {
         let mut stats = std::collections::BTreeMap::new();
-        for (id, (_, sent_bytes)) in self.send.iter() {
-            let recv_bytes = &self.recv.get(id).expect("was in send so must be in recv").1;
-            stats.insert(
-                id,
-                (
-                    sent_bytes.load(std::sync::atomic::Ordering::Relaxed),
-                    recv_bytes.load(std::sync::atomic::Ordering::Relaxed),
-                ),
-            );
+        let mut msgs = std::collections::BTreeMap::new();
+        for (id, (_, sent)) in self.send.iter() {
+            let recv = &self.recv.get(id).expect("was in send so must be in recv").1;
+            let (sent_bytes, sent_msgs) = sent.load();
+            let (recv_bytes, recv_msgs) = recv.load();
+            stats.insert(id, (sent_bytes, recv_bytes));
+            msgs.insert(id, (sent_msgs, recv_msgs));
         }
-        ConnectionStats {
-            my_id: self.id,
-            stats,
-        }
+        ConnectionStats::new_with_msgs(self.id, stats, msgs)
     }
 }
