@@ -1,0 +1,6 @@
+Scheme is: ultra_honk, num threads: 32 (mem: 4.57 MiB)
+CircuitProve: Proving key computed in 319 ms (mem: 144.57 MiB)
+Public inputs saved to "test_vectors/poseidon_2e17/public_inputs" (mem: 194.09 MiB)
+Proof saved to "test_vectors/poseidon_2e17/proof" (mem: 194.09 MiB)
+Scheme is: ultra_honk, num threads: 32 (mem: 4.55 MiB)
+Proof verified successfully (mem: 7.61 MiB)

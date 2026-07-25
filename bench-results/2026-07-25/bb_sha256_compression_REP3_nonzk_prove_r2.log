@@ -1,0 +1,22 @@
+[2m2026-07-25T11:37:20.861885Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:37:20.861896Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:37:20.861908Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:39:36.004835Z[0m [32m INFO[0m Build proving key took 135142.819 ms
+[2m2026-07-25T11:39:36.004895Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:39:36.005135Z[0m [32m INFO[0m Build proving key took 135143.114 ms
+[2m2026-07-25T11:39:36.005171Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:39:36.005173Z[0m [32m INFO[0m Build proving key took 135143.159 ms
+[2m2026-07-25T11:39:36.005189Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:39:39.495493Z[0m [32m INFO[0m Generate proof took 3490.29 ms
+[2m2026-07-25T11:39:39.495809Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_prove_nonzk_r2_p1.json
+[2m2026-07-25T11:39:39.496417Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof.1.proof
+[2m2026-07-25T11:39:39.496529Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:39:39.506849Z[0m [32m INFO[0m Generate proof took 3501.941 ms
+[2m2026-07-25T11:39:39.507094Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_prove_nonzk_r2_p2.json
+[2m2026-07-25T11:39:39.507405Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof.2.proof
+[2m2026-07-25T11:39:39.507529Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:39:39.511297Z[0m [32m INFO[0m Generate proof took 3506.019 ms
+[2m2026-07-25T11:39:39.511543Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_prove_nonzk_r2_p0.json
+[2m2026-07-25T11:39:39.511701Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof
+[2m2026-07-25T11:39:39.511810Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/bb_sha256_compression/cosnark_public_input
+[2m2026-07-25T11:39:39.511862Z[0m [32m INFO[0m Proof generation finished successfully

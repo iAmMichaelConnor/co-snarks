@@ -173,10 +173,15 @@ today; ⏳ = designed, not yet implemented.
 | **host load at cell start** | 1-min loadavg (HOST-wide, incl. other mainframe tenants) | `/proc/loadavg` stamped per row — the noise context for the absolute seconds | ✅ |
 
 **Phases timed** (each its own cell): bb `vkgen`; bb `prove` (zk + non-zk,
-VK pre-supplied via `-k` so prove is pure prove); plaindriver `prove`
+VK pre-supplied via `-k` so prove is pure prove); bb `verify` (zk + non-zk
+— verifier-time baseline, added 2026-07-25); plaindriver `prove`
 (witness-fed, zk + non-zk<2^18) + `solveprove` (base circuits — quantifies
-the witness-solving boundary); REP3 `split`, `witext` (3 parties parallel),
-`prove` (zk + non-zk, 3 parties parallel), `verify`.
+the witness-solving boundary) + `verify_bb` (bb cross-verifies the
+plaindriver zk proof: rc=0 is the verifier-side parity invariant, in-run);
+REP3 `split`, `witext` (3 parties parallel), `prove` (zk + non-zk,
+3 parties parallel), `verify`. **v2 RAN 2026-07-25** →
+`bench-results/2026-07-25/` (65 min, 314 rows, clean; findings in
+ch. 24 §3a + PROGRESS session 15).
 
 **Per MPC phase × party** (files, not CSV rows):
 

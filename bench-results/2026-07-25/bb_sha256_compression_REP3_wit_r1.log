@@ -1,0 +1,12 @@
+[2m2026-07-25T11:32:38.079645Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-25T11:32:38.079747Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-25T11:32:38.079860Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-25T11:32:38.183309Z[0m [32m INFO[0m Generate witness took 103.619 ms
+[2m2026-07-25T11:32:38.183441Z[0m [32m INFO[0m Generate witness took 103.665 ms
+[2m2026-07-25T11:32:38.183520Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_witext_r1_p0.json
+[2m2026-07-25T11:32:38.183631Z[0m [32m INFO[0m Generate witness took 103.746 ms
+[2m2026-07-25T11:32:38.183679Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.0.shared
+[2m2026-07-25T11:32:38.183694Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_witext_r1_p1.json
+[2m2026-07-25T11:32:38.183780Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/bb_sha256_compression_REP3_witext_r1_p2.json
+[2m2026-07-25T11:32:38.183813Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.1.shared
+[2m2026-07-25T11:32:38.183856Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.2.shared

@@ -1,0 +1,22 @@
+[2m2026-07-25T11:15:46.517474Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:46.517632Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:46.517707Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:46.528578Z[0m [32m INFO[0m Build proving key took 10.465 ms
+[2m2026-07-25T11:15:46.528593Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:46.528653Z[0m [32m INFO[0m Build proving key took 10.414 ms
+[2m2026-07-25T11:15:46.528670Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:46.528688Z[0m [32m INFO[0m Build proving key took 10.372 ms
+[2m2026-07-25T11:15:46.528725Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:46.853716Z[0m [32m INFO[0m Generate proof took 325.105 ms
+[2m2026-07-25T11:15:46.853939Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r3_p0.json
+[2m2026-07-25T11:15:46.854075Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof
+[2m2026-07-25T11:15:46.854201Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon/cosnark_public_input
+[2m2026-07-25T11:15:46.854250Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:15:46.855309Z[0m [32m INFO[0m Generate proof took 326.569 ms
+[2m2026-07-25T11:15:46.855486Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r3_p2.json
+[2m2026-07-25T11:15:46.855636Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.2.proof
+[2m2026-07-25T11:15:46.855749Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:15:46.856461Z[0m [32m INFO[0m Generate proof took 327.781 ms
+[2m2026-07-25T11:15:46.856613Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r3_p1.json
+[2m2026-07-25T11:15:46.856719Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.1.proof
+[2m2026-07-25T11:15:46.856782Z[0m [32m INFO[0m Proof generation finished successfully

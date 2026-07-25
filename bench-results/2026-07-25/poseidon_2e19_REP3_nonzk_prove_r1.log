@@ -1,0 +1,22 @@
+[2m2026-07-25T11:20:24.811667Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:20:24.869072Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:20:24.891686Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:20:28.421431Z[0m [32m INFO[0m Build proving key took 3284.546 ms
+[2m2026-07-25T11:20:28.421482Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:20:28.464722Z[0m [32m INFO[0m Build proving key took 3432.88 ms
+[2m2026-07-25T11:20:28.464758Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:20:28.473178Z[0m [32m INFO[0m Build proving key took 3356.22 ms
+[2m2026-07-25T11:20:28.473219Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:21:11.137756Z[0m [32m INFO[0m Generate proof took 42716.251 ms
+[2m2026-07-25T11:21:11.138060Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_2e19_REP3_prove_nonzk_r1_p2.json
+[2m2026-07-25T11:21:11.138309Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e19/cosnark_proof.2.proof
+[2m2026-07-25T11:21:11.138322Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:21:11.244660Z[0m [32m INFO[0m Generate proof took 42779.877 ms
+[2m2026-07-25T11:21:11.244958Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_2e19_REP3_prove_nonzk_r1_p0.json
+[2m2026-07-25T11:21:11.245062Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e19/cosnark_proof
+[2m2026-07-25T11:21:11.245107Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon_2e19/cosnark_public_input
+[2m2026-07-25T11:21:11.245124Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:21:11.288261Z[0m [32m INFO[0m Generate proof took 42815.017 ms
+[2m2026-07-25T11:21:11.288597Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_2e19_REP3_prove_nonzk_r1_p1.json
+[2m2026-07-25T11:21:11.288715Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e19/cosnark_proof.1.proof
+[2m2026-07-25T11:21:11.288727Z[0m [32m INFO[0m Proof generation finished successfully

@@ -1,0 +1,22 @@
+[2m2026-07-25T11:15:44.385074Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:44.385449Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:44.385586Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T11:15:44.395959Z[0m [32m INFO[0m Build proving key took 9.914 ms
+[2m2026-07-25T11:15:44.395974Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:44.396644Z[0m [32m INFO[0m Build proving key took 10.43 ms
+[2m2026-07-25T11:15:44.396664Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:44.396804Z[0m [32m INFO[0m Build proving key took 11.116 ms
+[2m2026-07-25T11:15:44.396814Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T11:15:44.720098Z[0m [32m INFO[0m Generate proof took 323.269 ms
+[2m2026-07-25T11:15:44.720151Z[0m [32m INFO[0m Generate proof took 324.159 ms
+[2m2026-07-25T11:15:44.720159Z[0m [32m INFO[0m Generate proof took 323.479 ms
+[2m2026-07-25T11:15:44.720349Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r1_p0.json
+[2m2026-07-25T11:15:44.720445Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r1_p2.json
+[2m2026-07-25T11:15:44.720466Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof
+[2m2026-07-25T11:15:44.720586Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.2.proof
+[2m2026-07-25T11:15:44.720588Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/poseidon_REP3_prove_zk_r1_p1.json
+[2m2026-07-25T11:15:44.720657Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon/cosnark_public_input
+[2m2026-07-25T11:15:44.720689Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.1.proof
+[2m2026-07-25T11:15:44.720693Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:15:44.720734Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T11:15:44.720779Z[0m [32m INFO[0m Proof generation finished successfully

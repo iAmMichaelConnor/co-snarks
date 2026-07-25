@@ -96,7 +96,26 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
   Explains the headline: sha256 is ~70% lookup gates + 33,944 table rows;
   poseidon is pure arithmetic; the sha 2e16→2e20 sweep scales lookup gates
   17× at constant table rows — a natural experiment for the cost model.
-- **v2 full run: NOT YET EXECUTED** (armed 2026-07-24, disarmed by Mike
-  pending a run window — the old quiet-gate is dead, see shared-mainframe
-  rule). First v2 run gives: R vs size, memory, CPU%, party skew,
-  artifact sizes, and the features join.
+- **v2 full run 2026-07-25** (`2026-07-25/`, commit 89666ce5, clean tree,
+  post-optimisation C1–C3+L1, host load ~15–25 throughout, 65 min): all
+  12 circuits, 314 rows; only failures = expected 600 s timeout pruning
+  (sha256_2e16 REP3 prove → family pruned ≥2e17). Headlines: REP3÷bb
+  (zk) = 3.1× poseidon 2^11 → plateaus ~13× across the poseidon sweep;
+  bb_sha256_compression 473× (140.5 s); sha256_2e16 >1,140× (timeout).
+  **Lookup GATES, not table rows, drive MPC cost** (same dyadic 2^16,
+  same 12 tables/33,944 rows, 15× lookup gates → >4.3× REP3 prove).
+  verify_bb rc=0 on all 12 (verifier-side parity is now a measured
+  invariant). L1's −8 rounds confirmed exactly (poseidon prove R
+  319→311 nonzk, 393→385 zk). REP3 prove CPU ~260%/1600% (vs bb
+  ~1450%) — the MPC path is serial/comms-bound locally, ch. 24 L4.
+- **⚠ R-column caveat (learned from this run):** `recv_msgs` from the
+  ring predecessor equals sequential rounds only for SMALL circuits
+  (poseidon 2^11 matches the relation×round theory exactly). At scale,
+  message counts grow ~linearly with data volume (application-level
+  batching splits work into many frames per logical round; mpc-net does
+  NOT chunk sends — verified): poseidon prove "R" ≈ 11.3k (2e17) →
+  90k (2e20) at a suspiciously constant ~37 KB/msg. Treat large-circuit
+  msg counts as an UPPER bound on round depth; a logical-round counter
+  is the ch. 24 backlog fix. Genuinely round-deep by contrast: poseidon
+  witext (sequential hash chain — 39 B/msg, 270k real dependency rounds
+  at 2e20; a WAN latency killer that no bandwidth fixes).

@@ -1,0 +1,22 @@
+[2m2026-07-25T12:11:01.919321Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T12:11:01.973344Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T12:11:01.992840Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-25T12:11:08.560087Z[0m [32m INFO[0m Build proving key took 6640.378 ms
+[2m2026-07-25T12:11:08.560117Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T12:11:08.790994Z[0m [32m INFO[0m Build proving key took 6797.765 ms
+[2m2026-07-25T12:11:08.791035Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T12:11:08.796737Z[0m [32m INFO[0m Build proving key took 6823.02 ms
+[2m2026-07-25T12:11:08.796780Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-25T12:12:31.081993Z[0m [32m INFO[0m Generate proof took 82285.185 ms
+[2m2026-07-25T12:12:31.082298Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/recursion_zk_REP3_prove_nonzk_r1_p1.json
+[2m2026-07-25T12:12:31.082413Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof.1.proof
+[2m2026-07-25T12:12:31.082424Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T12:12:31.215483Z[0m [32m INFO[0m Generate proof took 82655.341 ms
+[2m2026-07-25T12:12:31.215730Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/recursion_zk_REP3_prove_nonzk_r1_p0.json
+[2m2026-07-25T12:12:31.215845Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof
+[2m2026-07-25T12:12:31.215886Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/recursion_zk/cosnark_public_input
+[2m2026-07-25T12:12:31.215901Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-25T12:12:31.303828Z[0m [32m INFO[0m Generate proof took 82512.753 ms
+[2m2026-07-25T12:12:31.304125Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-25/netstats/recursion_zk_REP3_prove_nonzk_r1_p2.json
+[2m2026-07-25T12:12:31.304248Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof.2.proof
+[2m2026-07-25T12:12:31.304260Z[0m [32m INFO[0m Proof generation finished successfully

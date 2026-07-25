@@ -148,6 +148,56 @@ The bit-heavy work happened at witext, and sha's witext was FAST (0.215 s),
 which is itself evidence the blackbox → lookup-table compilation is doing
 its job. The prove-side pain must come from the lookup machinery.)*
 
+### §3a. What bench v2 measured (2026-07-25 run — the discrimination)
+
+- **Lookup GATES, not table rows, drive the MPC overhead.** The clean
+  natural experiment: bb_sha256_compression vs sha256_2e16 share dyadic
+  size (2^16), table count (12) and table rows (33,944); lookup gates
+  differ 15× (2,896 vs 43,440). REP3 prove: 140.5 s vs >600 s timeout
+  (>4.3×); REP3÷bb (zk): 473× vs >1,140×. H2's "table-length domains"
+  variant can't explain that split (identical tables) — the per-lookup-
+  GATE machinery can. The sha 2e17→2e20 sweep (lookup gates to 767k at
+  constant table rows) is waiting to size the exponent once a lever
+  lands that gets 2e17 under the timeout.
+- **The MPC path is locally SERIAL: REP3 prove runs at ~260% CPU of a
+  1600% (16-thread) budget while bb prove uses ~1,450%.** Party skew
+  negligible (101.20–101.35 s at 2e20). So wall-clock is dominated by
+  serial local compute and/or comms waiting, not by any party lagging —
+  H2-flavoured, and it says L4 (thread the local polynomial passes; the
+  ch. 23 C-series only touched the PLAIN driver's code paths) plus the
+  serial-inversion audit of REP3 local ops are the highest-value levers.
+- **Poseidon (pure-arithmetic) overhead: REP3÷bb (zk) = 3.1× at 2^11,
+  rising to a ~13× plateau across 2^17–2^20** (11.0/12.3/13.3/12.8×).
+  REP3÷plaindriver ≈ 5.2× at 2^20 (101 s vs 19.3 s). Down from v1's
+  6.0× at base size — the C2/C3 elementwise-rayon work helps all
+  drivers' local ops.
+- **L1 independently confirmed by the wire**: poseidon 2^11 prove R
+  319→311 (nonzk), 393→385 (zk) — exactly the −8 rounds L1 removed.
+- **R-proxy caveat at scale** (recorded in bench-results/README.md):
+  prove msg counts grow ~linearly with size (11.3k at 2e17 → 90k at
+  2e20, ~37 KB/msg constant) — application-level batching emits many
+  frames per logical round (mpc-net itself never chunks sends;
+  verified). recv_msgs is exact as a message count but only an upper
+  bound on sequential-round depth for big circuits. Backlog: a logical
+  round counter (increment once per synchronisation point, not per
+  frame) so the WAN model gets true depth. H3 note: 90k frames at
+  loopback cost little, but per-frame overhead × 90k is a real WAN/TLS
+  concern — L5 stays live.
+- **Witext of sequential-hash circuits is genuinely round-DEEP**:
+  poseidon variants show witext R ≈ 33k (2e17) → 270k (2e20) at
+  ~39 B/msg — real dependency chains (the hash-chain circuit), not
+  batching artifacts. At 140 ms WAN one-way that's a ~10-hour witext
+  floor for 2e20: circuit DEPTH, not size, sets the WAN feasibility of
+  witness extension, and no bandwidth or batching lever fixes an
+  inherently sequential circuit. (recursion_zk witext R≈3 — the other
+  extreme.) Worth its own explorer view.
+- **Memory: REP3 prove peak RSS ≈ 13× bb** (20.2 GB/party vs 1.5 GB at
+  2e20; 3 parties co-hosted = ~60 GB). H4 (alloc/copy churn) has a lot
+  of surface; also directly constrains per-party hardware sizing.
+- Verifier side: REP3/bb verify ≈ 20 ms, size-independent; verify_bb
+  rc=0 across all 12 circuits — verifier-parity is now a per-run
+  measured invariant.
+
 ## 4. Optimisation levers (all parity-preserving, ranked)
 
 - **L1 — batch the marked TODOs**: grand-product quartet → 1 round;

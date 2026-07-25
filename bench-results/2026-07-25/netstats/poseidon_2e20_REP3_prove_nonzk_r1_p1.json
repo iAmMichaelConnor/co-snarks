@@ -1,0 +1,18 @@
+{
+  "my_id": 1,
+  "peers": {
+    "0": {
+      "recv_bytes": 3209949416,
+      "recv_msgs": 90093,
+      "sent_bytes": 201175648,
+      "sent_msgs": 4
+    },
+    "2": {
+      "recv_bytes": 201175648,
+      "recv_msgs": 4,
+      "sent_bytes": 3209949480,
+      "sent_msgs": 90093
+    }
+  },
+  "phase": "build-and-generate-proof"
+}

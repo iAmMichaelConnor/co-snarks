@@ -2034,3 +2034,32 @@ site-anchors into the explorer (same artifact URL, ch. 22 V6/V7);
 5) T2-proper floors from the netstats medians; 6) ch. 24 H2–H4
 discrimination from the sha sweep. Post-run leads: serial-inversion
 audit of REP3 local paths, L1-followup −1 round, C2 residuals.
+
+**BENCH v2 RAN CLEAN 2026-07-25 11:15–12:20 UTC (65 min, rc=0) →
+`bench-results/2026-07-25/` (committed).** Host load 15–25 throughout
+(a genuinely quiet window, luck); manifest stamps commit 89666ce5,
+clean tree. 314 rows; only failures = designed timeout pruning
+(sha256_2e16 REP3 prove > 600 s → sha ≥2e17 REP3 skipped, rows kept
+honest). Aggregates: RESULTS.md + site-anchors.json in the run dir;
+bench.sqlite rebuilt from all runs (v1 + v2). Findings written to
+ch. 24 §3a + bench-results/README.md; headlines:
+- **Lookup gates, NOT table rows, drive MPC cost** (bb_sha256_compression
+  vs sha256_2e16: same dyadic/tables/rows, 15× lookup gates → >4.3×
+  REP3 prove; 473× vs >1,140× vs bb).
+- **REP3 prove is locally serial: ~260% CPU of 1600% budget** (bb:
+  ~1,450%) — L4 + REP3 serial-inversion audit = top levers. Party skew
+  nil. Peak RSS 20 GB/party at 2^20 (~13× bb).
+- Poseidon REP3÷bb: 3.1× (2^11) → ~13× plateau (2^17–2^20).
+- **L1's −8 rounds confirmed on the wire** (prove R 319→311/393→385).
+- **R-proxy caveat**: prove msg counts scale ~linearly (~37 KB/msg) —
+  application batching emits many frames per logical round; upper bound
+  only at scale. Witext of hash-chain circuits is genuinely round-deep
+  (270k rounds at 2e20, 39 B/msg) — circuit DEPTH sets WAN witext
+  feasibility. Backlog: logical-round counter.
+- verify_bb rc=0 all 12 circuits (verifier parity measured per-run);
+  verify ≈ 20 ms size-independent everywhere.
+Next per runbook: bake site-anchors into the explorer (same URL), then
+T2-proper floors from these netstats, ch. 24 L4/L2, sha 2e17 under the
+cap. v1-sanity: bb + REP3 reproduce v1 within noise (sha 140.5 s vs
+~158 s incl. local-work speedups); plaindriver faster as expected
+(witness-fed + C-series).
