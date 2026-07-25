@@ -141,6 +141,17 @@ fn install_tracing() {
         .init();
 }
 
+/// Print one coarse wall-clock phase-timing line (stderr) if
+/// `CO_NOIR_PHASE_TIMINGS=1`. Timing only; never affects outputs.
+fn phase_timing(name: &str, start: std::time::Instant) {
+    if std::env::var("CO_NOIR_PHASE_TIMINGS").as_deref() == Ok("1") {
+        eprintln!(
+            "[phase-timing] {name}: {:.6}s",
+            start.elapsed().as_secs_f64()
+        );
+    }
+}
+
 fn witness_map_to_witness_vector<F: PrimeField>(witness_map: WitnessMap<F>) -> Vec<F> {
     let mut wv = Vec::new();
     let mut index = 0;
@@ -181,12 +192,17 @@ fn main() -> color_eyre::Result<ExitCode> {
     let witness_file = config.witness;
     let has_zk = ZeroKnowledge::from(config.zk);
 
+    let main_start = std::time::Instant::now();
+
     // Read circuit
+    let phase_start = std::time::Instant::now();
     let program_artifact = co_noir::program_artifact_from_reader(File::open(&circuit_path)?)
         .context("while parsing program artifact")?;
     let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    phase_timing("read_circuit", phase_start);
 
     // Create witness
+    let phase_start = std::time::Instant::now();
     let witness = if let Some(witness_path) = witness_file {
         co_noir::witness_from_reader(File::open(&witness_path)?).expect("failed to parse witness")
     } else {
@@ -195,8 +211,10 @@ fn main() -> color_eyre::Result<ExitCode> {
         let witness = solver.solve().context("while solving")?;
         convert_witness(witness)
     };
+    phase_timing("witness", phase_start);
 
     // Build the circuit
+    let phase_start = std::time::Instant::now();
     let mut driver = PlainAcvmSolver::new();
 
     let recursion_crs_size = constraint_system.get_honk_recursion_public_inputs_size::<ark_ec::short_weierstrass::Projective<ark_bn254::g1::Config>>();
@@ -219,17 +237,22 @@ fn main() -> color_eyre::Result<ExitCode> {
         &mut driver,
     )
     .context("while creating the circuit")?;
+    phase_timing("build_circuit", phase_start);
     // Read the Crs
+    let phase_start = std::time::Instant::now();
     let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
     let crs =
         CrsParser::<<ark_ec::bn::Bn<ark_bn254::Config> as ark_ec::pairing::Pairing>::G1>::get_crs::<
             Bn254,
         >(&prover_crs_path, &verifier_crs_path, crs_size, has_zk)?;
     let (prover_crs, verifier_crs) = crs.split();
+    phase_timing("read_crs", phase_start);
     // Create the proving key and the barretenberg-compatible verifying key
+    let phase_start = std::time::Instant::now();
     let (proving_key, vk_barretenberg) =
         proving_key::create_keys_barretenberg(0, builder, &prover_crs, &mut driver)
             .context("While creating keys")?;
+    phase_timing("create_proving_key", phase_start);
 
     // Write the vk to a file
     let out_path = out_dir.join("vk_plaindriver");
@@ -248,6 +271,7 @@ fn main() -> color_eyre::Result<ExitCode> {
     // Create the proof
     let is_valid = match hasher {
         TranscriptHash::POSEIDON2 => {
+            let phase_start = std::time::Instant::now();
             let (proof, public_inputs) =
                 CoUltraHonk::<PlainUltraHonkDriver, _, Poseidon2Sponge>::prove(
                     proving_key,
@@ -256,6 +280,7 @@ fn main() -> color_eyre::Result<ExitCode> {
                     &vk_barretenberg,
                 )
                 .context("While creating proof")?;
+            phase_timing("prove_total", phase_start);
             // Write the proof to a file
             let out_path = out_dir.join("proof_plaindriver");
             let mut out_file = BufWriter::new(
@@ -282,10 +307,15 @@ fn main() -> color_eyre::Result<ExitCode> {
 
             // Verify the proof
             tracing::info!("Wrote public inputs to file {}", out_path.display());
-            UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &verifying_key, has_zk)
-                .context("While verifying proof")?
+            let phase_start = std::time::Instant::now();
+            let is_valid =
+                UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &verifying_key, has_zk)
+                    .context("While verifying proof")?;
+            phase_timing("verify", phase_start);
+            is_valid
         }
         TranscriptHash::KECCAK => {
+            let phase_start = std::time::Instant::now();
             let (proof, public_inputs) = CoUltraHonk::<PlainUltraHonkDriver, _, Keccak256>::prove(
                 proving_key,
                 &prover_crs,
@@ -293,6 +323,7 @@ fn main() -> color_eyre::Result<ExitCode> {
                 &vk_barretenberg,
             )
             .context("While creating proof")?;
+            phase_timing("prove_total", phase_start);
             // Write the proof to a file
             let out_path = out_dir.join("proof_plaindriver");
             let mut out_file = BufWriter::new(
@@ -319,10 +350,15 @@ fn main() -> color_eyre::Result<ExitCode> {
 
             // Verify the proof
             tracing::info!("Wrote public inputs to file {}", out_path.display());
-            UltraHonk::<_, Keccak256>::verify(proof, &public_inputs, &verifying_key, has_zk)
-                .context("While verifying proof")?
+            let phase_start = std::time::Instant::now();
+            let is_valid =
+                UltraHonk::<_, Keccak256>::verify(proof, &public_inputs, &verifying_key, has_zk)
+                    .context("While verifying proof")?;
+            phase_timing("verify", phase_start);
+            is_valid
         }
     };
+    phase_timing("main_total", main_start);
 
     if is_valid {
         tracing::info!("Proof verified successfully");

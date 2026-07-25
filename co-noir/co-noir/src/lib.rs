@@ -196,6 +196,27 @@ pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
     )
 }
 
+/// Build and finalize the plain UltraHonk circuit for read-only inspection (no witness,
+/// no CRS file, no network, no proving). This is the same construction as
+/// [`compute_circuit_size`], but returns the finalized builder so callers can report
+/// structural statistics (per-block trace rows, lookup tables, dyadic size, ...).
+pub fn build_finalized_circuit_plain<P: HonkCurve<TranscriptFieldType>>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+) -> Result<UltraCircuitBuilder<P>> {
+    let mut driver = PlainAcvmSolver::new();
+    // An empty witness puts the builder into write-vk mode, exactly like the
+    // vk-generation path: the circuit structure is built and finalized without
+    // requiring witness values.
+    Ok(UltraCircuitBuilder::<P>::create_circuit(
+        constraint_system,
+        0,
+        vec![],
+        HonkRecursion::UltraHonk,
+        &ProverCrs::<P>::default(),
+        &mut driver,
+    )?)
+}
+
 /// Generate a REP3 shared proving key
 pub fn generate_proving_key_rep3<N: Network>(
     constraint_system: &AcirFormat<ark_bn254::Fr>,

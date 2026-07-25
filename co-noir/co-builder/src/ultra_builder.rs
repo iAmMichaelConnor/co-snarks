@@ -1004,13 +1004,21 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.num_gates
     }
 
-    pub(crate) fn get_tables_size(&self) -> usize {
+    /// Total number of rows occupied by the lookup table data of all tables used by
+    /// the circuit.
+    pub fn get_tables_size(&self) -> usize {
         let mut tables_size = 0;
         for table in self.lookup_tables.iter() {
             tables_size += table.len();
         }
 
         tables_size
+    }
+
+    /// Number of distinct plookup tables used by the circuit. Read-only; intended for
+    /// reporting/inspection.
+    pub fn num_lookup_tables(&self) -> usize {
+        self.lookup_tables.len()
     }
 
     fn get_lookups_size(&self) -> usize {

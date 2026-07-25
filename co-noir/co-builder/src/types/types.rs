@@ -200,6 +200,22 @@ impl<T: Default> UltraTraceBlocks<T> {
     pub fn get_pub_inputs(&self) -> &T {
         &self.pub_inputs
     }
+
+    /// The blocks in trace order, paired with their names. Read-only; intended for
+    /// reporting/inspection (e.g. per-block row counts).
+    pub fn get_named(&self) -> [(&'static str, &T); 9] {
+        [
+            ("pub_inputs", &self.pub_inputs),
+            ("lookup", &self.lookup),
+            ("arithmetic", &self.arithmetic),
+            ("delta_range", &self.delta_range),
+            ("elliptic", &self.elliptic),
+            ("memory", &self.memory),
+            ("nnf", &self.nnf),
+            ("poseidon2_external", &self.poseidon2_external),
+            ("poseidon2_internal", &self.poseidon2_internal),
+        ]
+    }
 }
 
 pub type UltraTraceBlock<F> = ExecutionTraceBlock<F, NUM_WIRES, NUM_SELECTORS>;
@@ -270,7 +286,9 @@ impl<F: PrimeField> UltraTraceBlocks<UltraTraceBlock<F>> {
         offset
     }
 
-    pub(crate) fn get_total_content_size(&self) -> usize {
+    /// Total number of populated trace rows across all blocks (excludes the trace
+    /// offset head rows and the zero row).
+    pub fn get_total_content_size(&self) -> usize {
         let mut total_size = 0;
         for block in self.get() {
             total_size += block.len();
