@@ -338,18 +338,32 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
 - [~] 6.2 **MPC-path (co-snarkification) optimisation** — ch. 24 written
       + first lever LANDED: L1 grand-product round batching 16 → 8 comms
       rounds (committed 2026-07-25). First measured R (poseidon 2^11):
-      prove 319 nonzk / 393 zk. Remaining levers: L1-followup (−1 round
-      in array_prod_inner_mul_many, shared with co-acvm is_zero), L2
-      per-row shared-op vectorisation, L4–L6, serial-inversion audit of
-      REP3 local paths (C2's finding class). sha-overhead hypotheses
-      H2–H4 discrimination + T2-proper floors: blocked on bench v2 data.
+      prove 319 nonzk / 393 zk.
+      **[UPDATE 2026-07-25 session 16: the sha-overhead question is
+      RESOLVED — it's pk-gen, specifically ~369 small per-call-overhead
+      Yao sub-protocols in the builder's sha gadget (~1,240× vs plain;
+      ch. 24 §3a, lever L0). The v2 "lookup gates drive cost" finding is
+      RETRACTED as a confound; REP3 prove-proper is size-driven and
+      content-independent (retro phase-split, phase-split.csv). Full
+      REP3 batching/serial-op audit DONE → levers L2b (post-open serial
+      inversions), L2c (mul_many→local_mul_vec), L1-followup (−1 round),
+      L0 (sha gadget), L2 (demoted), L4 residue — sequencing + evidence
+      in ch. 24 §4. Optimisation research (TACEO/upstream/academic) +
+      seedable-ZK-blinding fence in flight. UNCOMMITTED work pending
+      Mike's word.]**
 - [~] 6.3 **Property-preservation tests** — T3 share re-randomization
       DONE; T2-lite comms-message fence DONE 2026-07-25 (exact per-party
       msg counts pinned for rep3 poseidon, fast tier); thread-invariance
-      + batched-inversion reference tests landed alongside. Remaining:
-      T2-proper (full-matrix floors from bench v2 netstats), T4 view
-      scan, slow-tier thread-invariance on a relation-rich circuit
-      (recursion). Specs in ch. 24 §5.
+      + batched-inversion reference tests landed alongside.
+      **[UPDATE 2026-07-25 session 16: T2-PROPER LANDED (uncommitted) —
+      exact-pin fences for blackbox_and + add3u64 + poseidon-ZK (ZK
+      counts proved deterministic), #[ignore] band test on
+      bb_sha256_compression, floor table from v2 netstats, fast-check
+      wired (+0.12 s), red-validated. In-process-vs-TCP frame-count
+      anomaly (~100× on big circuits) documented in the floor table.
+      Seedable ZK blinding byte-fence (plaindriver ≡ REP3, Mike's ask)
+      in flight. Remaining: T4 view scan, slow-tier thread-invariance
+      on recursion. Specs in ch. 24 §5.]**
 - [x] 6.4 Bench v2 run: LAUNCHED 2026-07-25 after 6.1+L1 landed — the
       run measures the post-optimisation baseline. Rerun-per-lever
       (formerly the rest of 6.4) continues as levers land.

@@ -3,6 +3,9 @@
 Append-only, newest session last. Each entry: date, what was done, decisions,
 open questions, next steps.
 
+**Quick link — benchmark explorer (live site, v2 dataset 2026-07-25):**
+<https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>
+
 ## Session 1 — 2026-07-08
 
 **Done:**
@@ -1557,7 +1560,7 @@ benchmark overnight after explaining its worth + a WAN-latency estimate.
   - **Where results land:** `~/bench-0_5-results/2026-07-23/` —
     `launcher.log` (progress), `results.csv` (raw), `site-anchors.json`
     (medians for the site; nulls where unmeasured, never fabricated),
-    **`RESULTS.md`** (human-readable per-circuit tables — read this first).
+    **`RESULTS.md`** (human-readable per-circuit tables — the entry point for that run's data).
     A CONTENDED run is banner-flagged in both.
   - **Overnight/next-session plan (for whoever the completion notification
     wakes):** on `BENCH_DONE`, (1) read `RESULTS.md`/`site-anchors.json`,
@@ -2011,7 +2014,7 @@ rc,max_rss_kb,cpu_pct,host_load1m — rc=124 = 600 s timeout, failures
 kept), `netstats/*.json` (per MPC phase × party bytes + msg counts → R),
 `mem/*.time` (per-party wall/RSS/CPU% — party skew), `features/*`
 (circuit-info/bbgates/nargo-info/artifact-sizes per circuit),
-`RESULTS.md` (human-readable — READ THIS FIRST), `site-anchors.json`
+`RESULTS.md` (human-readable — the entry point for that run's data), `site-anchors.json`
 (explorer bake), `launcher.log` (live progress + per-circuit ETA;
 `BENCH_DONE rc=… out=…` sentinel line when finished), `*_r*.log`
 (per-cell command logs). Runner: `scripts/bench-0_5-launcher.sh`
@@ -2078,3 +2081,280 @@ cap. v1-sanity: bb + REP3 reproduce v1 within noise (sha 140.5 s vs
   Runbook items 1–4 done; remaining next-session leads: T2-proper
   floors from v2 netstats, ch. 24 L4/L2 + REP3 serial-inversion audit,
   logical-round counter, sha 2e17 REP3 under the cap after a lever.
+
+## Session 16 — 2026-07-25 (afternoon/evening) — bench-v2 methodology fixes; the sha-overhead attribution saga (wrong→wrong→RESOLVED: per-Yao-call tax in the builder's sha gadget); T2-proper fences landed; ZK blinding fence + optimisation research in flight
+
+Picked up the session-15 queue (T2-proper, L4/L2, serial-inversion
+audit). Mike challenged the bench-v2 methodology mid-session — every
+challenge was right, and the resulting dig ended somewhere nobody
+expected. Full technical record in ch. 24 §3a/§4 (updated in place);
+this entry is the narrative + state.
+
+### The attribution saga (read this before trusting any older sha claim)
+
+1. **v2's recorded finding** ("lookup GATES drive MPC cost", §3a) was a
+   NATURAL experiment (bb_sha256_compression vs sha256_2e16) and Mike
+   correctly called it confounded: the pair also differs 6.8× in
+   arithmetic gates. It was also doubly weakened: the REP3 "prove" cell
+   conflated pk-gen+prove, and the sha256_2e16 cell was CENSORED
+   (600 s timeout, rc=124) — a lower bound, not a measurement.
+2. **Retro-split fixed the conflation without rerunning**: both phases
+   are logged per party → `scripts/bench-retro-phase-split.py` →
+   `bench-results/2026-07-25/phase-split.csv` (108 party-rows; both
+   uncommitted). Results: REP3 prove-PROPER scales with dyadic size,
+   nearly content-independent (recursion_zk vs poseidon_2e20: same 2^20,
+   3.3× different arithmetic gates → pk-gen within 8%, prove within 5%
+   — arithmetic-gate driver REFUTED with in-data controlled comparison);
+   ALL of sha's excess is pk-gen (136.7 s vs ~0.45 s size-baseline at
+   2^16; prove is 3.5 s, BELOW the size-scaled poseidon line).
+3. **First mechanism attribution (mine, code-read): WRONG.** Blamed the
+   serial per-gate OHV pipeline in `construct_lookup_read_counts`;
+   rate+traffic arithmetic "cross-checked" — by CONFOUND (every
+   per-sha-content mechanism predicts the same 15×). Instrumented
+   profile: that function is 8.0 s = 5.8% of pk-gen. Lesson recorded in
+   ch. 24: code-reading finds A mechanism; only measurement ranks it.
+4. **Profiler's first attribution: ALSO WRONG** (Yao sha256_from_bristol
+   re-solve in the builder) — refuted by the witext cell running the
+   same opcode in 0.10–0.21 s.
+5. **RESOLVED by the second call-counted profile (94.6% of pk-gen
+   accounted):** `create_circuit` never re-runs the ACVM solver
+   (0 calls). The ~130 s is the BUILDER's sha gate-construction gadget
+   (`co-builder/src/types/sha_compression.rs::sha256_block`) deriving
+   every sparse-form round intermediate via plookup reads with shared
+   keys → **369 separate SMALL Yao garbled-circuit sub-protocols**
+   (`yao::get_sparse_normalization_values_many` 176 × 575 ms = 101.3 s
+   = 73% of pk-gen alone; `get_sparse_table_with_rotation_values_many`
+   193 × 147 ms = 28.4 s). Same gadget code under the plain driver:
+   0.106 s → **~1,240× tax = per-invocation FIXED overhead** (fresh
+   garbling setup, joint input sharing, circuit transmission + SHA3
+   consistency check, output reconstruction), round-trip-bound; all 3
+   parties flat ~60% CPU (REP3-Yao is genuinely 3-party — asymmetry
+   hypothesis refuted); `get_from_public_luts_internal` 0 calls (ruled
+   out). Ceiling proof: witext does the WHOLE compression as ONE
+   buffered Yao circuit in ~0.1 s. Fix directions (all
+   transcript-preserving; gate layout/wire values are deterministic):
+   batch within/across rounds, amortize per-call fixed costs, or
+   one-shot Yao with intermediate wires as outputs; alternative
+   non-Yao module (a2b+OHV/LUT path ≈ 2 ms/op measured, or GMW-style
+   boolean batching) also viable — Mike's "swap the module" question
+   answered YES in principle. sha256_2e16 prediction: 15 compression
+   calls ≈ 1,950 s pk-gen (uncapped confirmation run still queued).
+   ch. 24 §4: new lever L0 (top), L2 demoted to real-but-minor.
+6. **Explorer corrected + extended (same URL)**: dated correction
+   banner (no silent rewrite), 3 stale "lookup gates" strings fixed,
+   NEW Raw-data section (4 datasets: timed cells w/ honest timeout
+   flags, recovered phase split, per-phase comms, circuit features;
+   summary tables + verbatim CSV blocks). Mike also asked for
+   per-ROUND traffic accounting + distance-tier transfer-time estimates
+   → spec'd in ch. 24 §3a (logical-round counter + per-round byte
+   histogram + Σ max(RTT, bytes/bw) tier model, netem-validated in v3).
+
+### Audit + fences (session-15 queue items, DONE)
+
+- **Full REP3 batching/serial-op audit** (ch. 24 §4 updated): L2b
+  serial post-open `y.inverse()` loops (co-noir-common rep3.rs:226/244,
+  shamir.rs, mpc-core inv_vec — ~4.2M serial inversions per 2^20 prove,
+  coordinator code-verified); L2c driver mul_many routed to serial
+  mul_vec while parallel local_mul_vec exists (~13.6M serial muls +
+  ChaCha draws at 2^20); L1-followup −1 round in
+  array_prod_inner_mul_many (independence code-verified; blast-radius
+  CORRECTION: co-acvm is_zero does NOT share it, sole caller is
+  co_oink_prover.rs:517); L4 residue = permutation-lagrange TODO
+  (plain_proving_key.rs:297). Prove-side profile (poseidon_2e17):
+  oink 34% / sumcheck 58% / pcs 6%; sumcheck's relation batch is
+  STRUCTURALLY single-threaded (net/state confined to caller thread) —
+  the real L4 redesign; poseidon s^5 = 3 inherent mul_many rounds ×
+  relation × sumcheck round (L7 territory); gp/array_prod 1.6 s at
+  ~101% CPU (L2b/L2c target). Sequencing: L2b → L2c → L1-followup →
+  L0 (after research) → L2 → L4 residue.
+- **T2-proper comms fences LANDED (uncommitted)**: exact per-party
+  (sent,recv) pins for blackbox_and (lookup path) + add3u64
+  (delta-range path) + poseidon ZK (counts proved exactly
+  deterministic: prove (273,273)×3 vs nonzk (199,199)×3);
+  `#[ignore]` band test on bb_sha256_compression ([0.5×,2×]);
+  committed floor table rep3_comms_floor_table.json from v2 netstats
+  (nulls explicit for censored cells); wired into fast-check tier 3
+  (+0.12 s); red-validated; --all-fast PASS. ANOMALY documented in the
+  table's provenance: in-process LocalNetwork measures ~100× fewer
+  frames than the cross-process TCP bench on the big circuit
+  (byte-identical proofs; small circuits unaffected) — methodology gap,
+  root cause not isolated.
+
+### In flight at session end (3 background agents)
+
+- **Seedable ZK blinding fence** (Mike's explicit ask): injected
+  masking-value stream at the enumerated ZK draw sites (oink
+  mask_polynomial rows{1,2,3}, gemini masking poly, libra scalars,
+  SSIPA masking term), REP3 promotes to trivial shares; test asserts
+  plaindriver-ZK ≡ REP3-ZK ≡ all-3-parties bytes, anti-vacuity +
+  red-validation; default path bit-identical (byte-KATs gate it).
+  bb-side note: bb HAS a deterministic debug engine but enabling it for
+  proving requires uncommenting a line in engine.cpp (source edit) →
+  excluded (no-touch-bb); ZK-vs-bb stays covered by bidirectional
+  verification.
+- **Web research**: TACEO blog/talks/papers + upstream GitHub activity
+  + academic co-SNARK optimisation literature; deliverable = ranked
+  transcript-preserving tricks + explicit transcript-ALTERING rejects.
+- **Local research**: co-circom-vs-co-noir technique diff + upstream
+  drift catalogue (git fetch permitted, read-only), specifically
+  whether upstream already attacked yao.rs get_sparse_* /
+  sha_compression.rs.
+
+### Queued next (in order)
+
+1. Agents return → verify their work independently (this session's
+   lesson applies to agent claims too), L2b → L2c → L1-followup as
+   small KAT-gated units.
+2. L0 design from research + profiler evidence; then sha256_2e16
+   UNCAPPED pk-gen run (registered prediction ~1,950 s ± 20%).
+3. Controlled gate-sweep circuits (vary lookup gates at fixed
+   arithmetic & tables, and vice versa) — the designed experiment that
+   replaces the confounded natural one.
+4. Bench v2.1: pk-gen/prove as separate cells + separate netstats
+   phases (bb vkgen was split at design time, co-noir wasn't — design
+   miss, now fixed retroactively via log parsing); logical-round
+   counter + per-round byte histogram + tier model; Shamir via
+   translate-witness; busy-vs-blocked wait split.
+5. Re-run bench after each landed lever; explorer re-bake per run.
+
+NOTE for future sessions: NOTHING from today is committed (Mike's
+hard rule; includes the fences, phase-split script/CSV, docs edits,
+ZK fence when it lands). When Mike gives the word, the commit split
+should follow ch. 24 §4's unit boundaries.
+
+### Session 16 late addendum — all three agents landed, everything verified
+
+- **Seedable ZK blinding fence LANDED (uncommitted) + coordinator-verified**:
+  new `co-noir-common/src/zk_masking.rs` (`SeededZkBlinding`, per-site
+  ChaCha12 streams keyed by site label; doc-marked test-only —
+  destroys ZK in production), explicit
+  `prove_with_seeded_zk_blinding` entry points (CLI cannot reach them;
+  default `prove` passes None, unseeded path bit-identical — the
+  exact-count ZK comms fences and non-ZK byte-KATs prove it).
+  Complete draw-site enumeration (oink 8 mask_polynomial sites +
+  Gemini poly; libra constant/univariates/concat scalars; SSIPA
+  masking term; recursion path passes None). Test
+  `zk_blinding_seeded_plaindriver_rep3_byte_parity_poseidon2sponge`
+  (~1.1 s, fast tier): plaindriver-ZK ≡ all 3 REP3 parties' ZK bytes +
+  determinism + anti-vacuity (different seed → different bytes;
+  seeded ≠ unseeded) + verifies. Red-validated at the exact funnel
+  (REP3 promote_to_trivial_share +1 → fails at the parity assert).
+  Finding: plain and MPC provers correspond 1:1 site-for-site in draw
+  order (plain file's function ordering is misleading but call order
+  matches). Coordinator re-ran: test PASS, fast-check --all-fast PASS
+  incl. bb cross-verify (VK+proof byte-identical to v5.0.1 oracle)
+  with ALL of today's uncommitted work in tree. bb-side ZK byte-parity
+  remains excluded (bb's debug RNG needs an engine.cpp source edit —
+  no-touch-bb).
+- **Both research reports in and distilled to ch. 24 §6a (web) / §6b
+  (local)**. Headlines: the batched GC kernels for the sha hotspot
+  ALREADY EXIST in-tree (get_sparse_*_many, yao.rs:1401/:1452) — the
+  369-call pathology is purely co-noir's call layer, and upstream
+  hasn't fixed it either (8 post-merge-base commits, none touching
+  hotspots) → L0a/b/c specced in §4; NEW lever L0d half-share MSM for
+  immediately-opened commitments (co-groth16 precedent, ~half the
+  commitment MSM CPU, all circuits); TACEO's own published measurement
+  validates batching ("10 or 100 witness extensions in batched form ≈
+  no overhead"); documented transcript-altering REJECTS recorded
+  (logUp swap, packed-sharing GKR, truncation tricks, etc.);
+  per-round-bytes + latency-tier benchmarking would be first-of-kind
+  (nobody publishes it, incl. TACEO).
+- **Implementation begun on the lever queue** (L2b first: batch
+  inversion of post-open values in REP3/Shamir drivers + mpc-core
+  inv_vec + mul_open_vec parallel local pass). Still UNCOMMITTED
+  throughout, per the hard rule.
+
+### Session 16 lever ledger (all uncommitted, each gated + coordinator-verified)
+
+- **L2b LANDED**: batch inversion of post-open values (6 sites: REP3+
+  Shamir drivers inv_many_in_place{,_leaking_zeros}, mpc-core rep3+
+  shamir inv_vec) + mul_open_vec parallel local pass. Zero-handling
+  proved bit-identical (r·0 = zero share). Referee: poseidon_2e17 REP3
+  proofs BYTE-IDENTICAL before/after (md5, 3 parties × 2 reps); comms
+  fences unchanged; fast-check PASS. Measured: 10.5 s → 9.37 s prove
+  at 2^17 (~11%). Patch: scratchpad l2b/l2b.patch.
+- **L2c LANDED**: REP3 + Shamir driver mul_many → local_mul_vec +
+  reshare/degree_reduce (parallel pre-squeezed local multiply; message
+  counts unchanged by construction, fences prove it). 8.8 → 8.5 s at
+  2^17 (~3.4%); proof md5 identical. Patch: l2c-l1f/l2c.patch.
+- **L1-followup LANDED**: array_prod_inner_mul_many (+ unused
+  array_prod_mul for schedule consistency) two independent mul_many
+  merged → one → −1 comms round per grand product. FENCES TRIPPED AS
+  DESIGNED and consciously re-pinned (per-party prove counts, all
+  −1: poseidon nonzk 199→198, zk 273→272, blackbox_and 199→198,
+  add3u64 249→248; pk-gen unchanged; floor-table band test unaffected,
+  JSON provenance text now historical — left untouched). Proof md5
+  still identical to pre-L2c. Full noir test suite 115/115; fast-check
+  PASS. Patch: l2c-l1f/l1-followup.patch.
+- Cumulative poseidon 2^17 REP3 prove today: ~10.5 s → ~8.2-8.5 s
+  (~20%). Explorer R-anchor (385) is now stale by −1 (384) — re-bake
+  rides the next bench rerun (PLAN 6.4).
+- NEXT: L0c (merge the 2 GC input rounds in
+  decompose_circuit_compose_blueprint — mpc-core yao.rs TODOs at
+  :944/:965/:993; −1 RTT × every GC invocation; lookup-circuit pk-gen
+  fence counts will legitimately change → re-pin) launched; then
+  L0a/L0b sha-gadget _many batching + second-channel concurrency, L0d
+  half-share MSM (specs ch. 24 §4).
+
+### Session 16 CLOSE-OUT — oracle re-verified, next steps (read this first next session)
+
+**Oracle provenance RE-VERIFIED on Mike's ask (2026-07-25 late):**
+`~/.bb-target-src-v5.0.1/bb` PROVENANCE.txt says built from public-mirror
+tag v5.0.1 = tag object b97ff8c3e88f... → commit 72666f8d1d6
+"chore(release): v5.0.1 (#24737)"; live `git rev-parse` in ~/ap-next
+confirms both hashes MATCH today. versions.env pins this binary as the
+default oracle and fast-check reads versions.env (ch. 19 fix). Note the
+comparison is NOT a stale KAT: fast-check's cross-verify REGENERATES a
+bb proof with this binary every run and byte-diffs it (ran green ≥5×
+today on the fully-optimised tree). Committed byte-KATs carry their own
+per-dir PROVENANCE (items 2.1/2.10, ch. 19). The ch. 19 §1 tag-name
+trap (same tag name, divergent commits, private vs public) is why this
+check matters — re-verify hashes, not tag names, whenever in doubt.
+
+**IN FLIGHT AT SESSION END: lever L0c agent** (merge 2 GC input rounds
+in mpc-core yao.rs blueprint macro; brief includes: stop-if-dependent,
+poseidon fences as canary (must NOT move), blackbox_and pk-gen fence
+re-pin expected, bb_sha256_compression pk-gen timing before/after,
+patch → scratchpad l0c/). If it landed after this entry: verify per the
+session-16 pattern (skim diff, rerun fast-check --all-fast yourself,
+check fence re-pin table) before queueing the next lever.
+
+**NEXT STEPS, in order (specs all in ch. 24):**
+1. Verify L0c landing (above).
+2. **T4 view-scan + BYTE-level fence pins** (Mike's security asks,
+   §4a/§5): record all frames at one party during a real 3-party
+   prove, assert known witness plaintexts never appear; add exact byte
+   pins beside the msg-count pins (catches leak-by-fatter-frames).
+   Waits on L0c only because both edit tests/rep3.rs.
+3. **L0a/L0b — the sha headline** (~130 s pk-gen): same-table `_many`
+   batching at co-acvm rep3.rs:1738/:1809 call sites + choose∥majority
+   on the second net channel. §4 L0 entry has the full design incl.
+   what CANNOT batch (a/e dependency chain, differing base_bits).
+4. **L0d — half-share MSM** for immediately-opened commitments
+   (co-groth16 pattern; verify the "all commitments opened immediately"
+   audit claim at implementation).
+5. Small: permutation-lagrange rayon TODO (pk-gen); shplemini
+   allocation hygiene (also attacks 20 GB RSS); old-L2 OHV batching.
+6. **Re-run bench v2 on the optimised tree** (PLAN 6.4): quantifies
+   L2b+L2c+L1f+L0*; then re-bake explorer anchors (same URL, R now
+   384 not 385), refresh T2-proper floor table from new netstats.
+7. **Uncapped sha256_2e16 REP3 pk-gen run** — registered prediction
+   ~1,950 s ± 20% (15 × ~130 s post-correction; if L0a/b/c land first,
+   re-derive the prediction from the new per-call cost — state it
+   BEFORE running).
+8. Controlled gate-sweep circuits (designed experiment, §3a open
+   items); bench v2.1 (separate pk-gen/prove cells + netstats phases,
+   logical-round counter + per-round byte histogram + distance-tier
+   model §3a, Shamir cells, busy-vs-blocked); netem v3.
+9. Larger backlog: cross-relation sumcheck stage-batching (L),
+   blocking-TCP transport port (M, breaking config), streaming garbler
+   for batched sha kernels, GC delta-reuse (engine-level, no
+   precedent).
+
+**Standing rules for all of the above**: one lever per gated unit;
+§4a security checklist answered in writing per lever (no new knowledge
+at any node; Network trait is the only cross-party channel); fences
+re-pinned consciously with old→new recorded; fast-check --all-fast +
+bb cross-verify green before a unit counts as landed; NOTHING commits
+without Mike's explicit word (patches per unit live in the session
+scratchpad; ch. 24 §4 unit boundaries define the commit split).

@@ -158,7 +158,67 @@ its job. The prove-side pain must come from the lookup machinery.)*
   variant can't explain that split (identical tables) — the per-lookup-
   GATE machinery can. The sha 2e17→2e20 sweep (lookup gates to 767k at
   constant table rows) is waiting to size the exponent once a lever
-  lands that gets 2e17 under the timeout.
+  lands that gets 2e17 under the timeout. Confounder honesty: this pair
+  alone doesn't isolate lookup gates (arithmetic gates also differ,
+  2,414 vs 16,302) — the poseidon control closes that hole:
+  poseidon_2e17 is ~131k rows of pure arithmetic (≈8× sha256_2e16's
+  arithmetic content at 2× the dyadic size) yet REP3-proves in ~12 s.
+- **SHARPENED 2026-07-25 (same-day log+code dig): the lookup-gate cost
+  lives in PK-GEN, not the prover.** Party logs split the
+  bb_sha256_compression 140.5 s REP3 "prove" cell into **136.7 s build
+  proving key + 3.4 s generate proof**; sha256_2e16's timed-out cell
+  dies still inside pk-gen (last log line "Starting proving key
+  generation..."). Poseidon is the inverse (2^17: 0.7 s pk-gen /
+  10.6 s prove) — so the bench "prove" cell conflates two phases with
+  opposite drivers; interpret lookup-heavy cells as pk-gen-bound.
+  **MECHANISM ATTRIBUTION — corrected same day by the instrumented
+  profile (kept as a cautionary tale).** A code-reading pass first
+  "located" the cost in `construct_lookup_read_counts`
+  (plain_proving_key.rs:369 — serial per-gate oblivious OHV pipeline,
+  O(table_len) traffic/gate), and the rate/traffic arithmetic
+  cross-checked (47 ms/gate × 2,896 ✓; ~3 GB ✓; 0 lookups → 0.7 s ✓).
+  **The profile then REFUTED that at the top level**: that function is
+  8.0 s = 5.8% of the ~138 s pk-gen; **94% (~130 s) is
+  `create_circuit`** — building the gate trace from ACIR over shared
+  witnesses — at a flat ~50% CPU on party 0 (round-trip-bound
+  signature). The cross-checks had been consistent by CONFOUND: in sha
+  circuits lookup gates ∝ compression calls ∝ all other sha content,
+  so ANY per-sha-content mechanism predicts the same 15× scaling.
+  Lesson: code-reading finds *a* mechanism; only measurement ranks it.
+  Within the 8 s the profile confirms the OHV-pipeline shape (76%
+  ohv_from_index: a2b 2.3 s / OHV gadget 1.2 s / bit-inject 2.6 s;
+  21% write_lut; `equal_many` ≈ free — sha tables never take the
+  index-map branch). **RESOLVED same day by the second instrumented
+  pass (call-counted, all buckets accounted to 94.6% of pk-gen):**
+  `create_circuit` does NOT re-run the ACVM blackbox solver (0 calls to
+  the witext path co-acvm rep3.rs:1662 / `yao::sha256_from_bristol`).
+  The ~130 s is the BUILDER's sha gate-construction gadget
+  (`co-builder/src/types/sha_compression.rs::sha256_block`), which
+  derives every internal sparse-form intermediate (choose/majority/
+  message-schedule per round) via plookup reads with SHARED keys —
+  738 `get_lookup_accumulators` calls dispatching **369 separate small
+  Yao garbled-circuit sub-protocols**:
+  `yao::get_sparse_normalization_values_many` 176 calls × 575 ms avg =
+  101.3 s (73% of pk-gen BY ITSELF) +
+  `get_sparse_table_with_rotation_values_many` 193 × 147 ms = 28.4 s.
+  Control buckets: 24 range opcodes 0.06 s; AssertZero ~0; finalize
+  0.16 s. The SAME gadget code under the plain driver: **0.106 s**
+  (measured in-process) → a ~1,240× MPC-vs-plain tax that is per-call
+  FIXED protocol overhead (fresh delta generation, joint input
+  sharing, garbled-circuit transmission + SHA3 consistency check,
+  output reconstruction per invocation), round-trip/serialization
+  bound — NOT raw compute. pidstat on all 3 parties: flat ~58–61%
+  CPU each, refuting garbler/evaluator asymmetry (the rep3 Yao
+  blueprint is genuinely 3-party: ID0 evaluates, ID1 garbles, ID2
+  contributes input sharing). `get_from_public_luts_internal`
+  ("TODO parallelize") measured at 0 calls — ruled out for sha.
+  Witext-vs-builder reconciliation: witext solves the opcode with ONE
+  buffered Bristol-circuit Yao evaluation (~0.1 s); the builder makes
+  369 tiny ones. So the sha MPC story ends at: **fixed per-Yao-call
+  overhead × call count in the builder's sha gadget** — lookup GATES
+  were merely correlated (every per-compression-call quantity is).
+  sha256_2e16 prediction: 15 compression calls ≈ 15 × 130 s ≈ 1,950 s
+  pk-gen (still censored; uncapped run still queued to confirm).
 - **The MPC path is locally SERIAL: REP3 prove runs at ~260% CPU of a
   1600% (16-thread) budget while bb prove uses ~1,450%.** Party skew
   negligible (101.20–101.35 s at 2e20). So wall-clock is dominated by
@@ -166,6 +226,56 @@ its job. The prove-side pain must come from the lookup machinery.)*
   H2-flavoured, and it says L4 (thread the local polynomial passes; the
   ch. 23 C-series only touched the PLAIN driver's code paths) plus the
   serial-inversion audit of REP3 local ops are the highest-value levers.
+  [Caveat added 2026-07-25: the CPU% stamp is CELL-level, i.e. averaged
+  over pk-gen+prove conflated — per-phase attribution needs the
+  profiling run.]
+- **RETRO-SPLIT of every REP3 "prove" cell into pk-gen vs prove
+  (2026-07-25, Mike's methodology challenge → fix):** the cells
+  conflated `Build proving key` + `Generate proof`; both phases are
+  separately logged per party, so the split was recovered from the run
+  logs without rerunning — `scripts/bench-retro-phase-split.py` →
+  `bench-results/2026-07-25/phase-split.csv` (108 party-rows; medians):
+
+  | circuit (zk medians shown as nonzk/zk) | pk-gen s | prove s |
+  |---|---|---|
+  | poseidon 2^11 | 0.011 | 0.27/0.33 |
+  | poseidon 2^17 | 0.72 | 10.6 |
+  | poseidon 2^18 | 1.51 | 21.3/21.6 |
+  | poseidon 2^19 | 3.55 | 42.5/43.1 |
+  | poseidon 2^20 | 7.32 | 86.6/90.2 |
+  | recursion_zk (2^20) | 6.77 | 82.5/85.2 |
+  | bb_sha256_compression (2^16) | **136.7** | 3.5/3.7 |
+
+  Three structural conclusions (much stronger than the conflated view):
+  (1) **REP3 prove-proper scales with dyadic size and is nearly
+  circuit-content-independent** — poseidon doubles cleanly per size
+  step, and at 2^20 recursion_zk (0 lookup gates, 320k arith) lands
+  within 5% of poseidon_2e20 (1.05M arith); sha at 2^16 is ~35% BELOW
+  the size-scaled poseidon line. ZK adds ~3–4%.
+  (2) **REP3 pk-gen = size-linear baseline (~7 s per 2^20 rows) plus
+  the lookup tax**: bb_sha256_compression's 136.7 s sits ~300× above
+  its ~0.45 s size baseline → ~47 ms per lookup gate (2,896 gates).
+  (3) **Arithmetic-gate count is REFUTED as a driver by a controlled
+  in-data comparison**: recursion_zk vs poseidon_2e20 share dyadic size
+  with 3.3× different arithmetic gates — pk-gen within 8%, prove within
+  5%. (This answers the confound in the bb_sha256_compression vs
+  sha256_2e16 natural experiment, which — fair criticism — differs in
+  arithmetic gates 6.8× as well as lookup gates 15×.)
+  Open items to make the lookup-tax claim fully controlled: the
+  47 ms/gate slope rests on ONE circuit (sha256_2e16 is censored at the
+  600 s cap); queued: (a) one UNCAPPED sha256_2e16 REP3 pk-gen
+  measurement — registered prediction ≈ 2,040 s ± 20% (43,440 gates ×
+  47 ms + 0.45 s baseline); (b) a designed sweep: synthetic Noir
+  circuits varying lookup-gate count at fixed table set & fixed
+  arithmetic, and varying arithmetic at fixed lookups — prediction:
+  pk-gen linear in lookup gates (slope set by the per-gate OHV pipeline,
+  itself ∝ table-length component), insensitive to arithmetic count;
+  (c) profiler apportionment of the 47 ms/gate across a2b / OHV /
+  bit-inject / write_lut (agent in flight). Bench v2.1 MUST split
+  pk-gen and prove into separate cells at the launcher level (bb's
+  vkgen was already split at v2 design time; co-noir's wasn't — design
+  miss) and emit separate netstats phases (currently one
+  "build-and-generate-proof" blob).
 - **Poseidon (pure-arithmetic) overhead: REP3÷bb (zk) = 3.1× at 2^11,
   rising to a ~13× plateau across 2^17–2^20** (11.0/12.3/13.3/12.8×).
   REP3÷plaindriver ≈ 5.2× at 2^20 (101 s vs 19.3 s). Down from v1's
@@ -197,6 +307,20 @@ its job. The prove-side pain must come from the lookup machinery.)*
 - Verifier side: REP3/bb verify ≈ 20 ms, size-independent; verify_bb
   rc=0 across all 12 circuits — verifier-parity is now a per-run
   measured invariant.
+- **Measurement backlog elevated to a Mike ask (2026-07-25): per-ROUND
+  traffic accounting + distance-tier time estimates.** The logical-round
+  counter (increment per synchronisation point) gains a per-round BYTE
+  histogram (bytes sent/received between each sync point), so every
+  circuit×phase gets a (rounds, bytes-per-round) profile. From that,
+  compute per-tier transfer-time estimates: same-machine (loopback,
+  ~10 GbE-equivalent, ~0.05 ms RTT), same-rack (10 Gbps / ~0.1 ms),
+  same-DC (1–10 Gbps / ~0.5 ms), same-continent (~1 Gbps / 20–40 ms
+  RTT), cross-continent (~100–300 ms RTT) — tier definitions to align
+  with ch. 22 §5c's netem plan (Scalable-coZK tiers), model =
+  Σ_rounds max(RTT, bytes_r/bandwidth), then VALIDATE against real
+  netem runs (v3). Implementation rides the mpc-net msg-counter
+  infrastructure (already landed); explorer gets the per-tier
+  upload/download columns.
 
 ## 4. Optimisation levers (all parity-preserving, ranked)
 
@@ -217,28 +341,210 @@ its job. The prove-side pain must come from the lookup machinery.)*
   separate unit. Note the port history: first implementation validated on
   upstream main by mistake (worktree base trap, see PROGRESS s14) and was
   re-ported + re-gated on our branch.]**
-- **L2 — vectorise any per-row shared-op loops** found via H1 (oink lookup
-  term / memory record paths are the suspects).
-- **L3 — arkworks `parallel` + `asm` features** (ch. 23 B1, shared lever):
-  currently OFF ⇒ single-threaded Pippenger MSM and generic Montgomery
-  mul for BOTH plaindriver and each REP3 party's local share work.
-- **L4 — thread the polynomial passes** bb multithreads (grand product,
-  relation evals; `plain_proving_key.rs` carries a "Barrettenberg uses
-  multithreading here" TODO) with rayon, under the measured 16-thread cap.
+- **L0 — NEW TOP TARGET (2026-07-25 profile, root cause §3a): the
+  ~130 s of per-call Yao overhead in the builder's sha gadget.**
+  RESOLVED attribution: 369 small GC invocations
+  (get_sparse_normalization 176×575 ms + rotation 193×147 ms) issued
+  ONE PAIR AT A TIME from co-acvm/src/mpc/rep3.rs:1738/:1809 via
+  singular wrappers — **while the batched `_many` kernels ALREADY
+  EXIST in our tree** (mpc-core rep3/yao.rs:1401/:1452: arbitrary
+  batch → one delta, one input-round pair, one circuit send, one
+  output round). Local-research verdict: upstream never fixed this
+  either (0 post-merge-base commits touch the hotspots); the gap is
+  purely co-noir's call layer. Concrete plan (all
+  transcript-preserving; gate/witness ORDER is the one care point,
+  byte-KATs are the referee):
+  **L0a** — same-table `_many` batching at the call sites (e.g. the two
+  Sha256WitnessInput conversions per extend_witness iteration,
+  sha_compression.rs:203/:207; initial sparse-form inits); needs
+  slice-shaped trait variants of `slice_and_get_sparse_*`
+  (co-acvm/src/mpc.rs:367/:384) + plookup dispatch arms.
+  Cross-iteration choose/majority batching is blocked by the real
+  a/e dependency chain; different base_bits can't share a call.
+  **L0b** — run independent GC invocations concurrently on the SECOND
+  net channel the acvm driver already holds (rep3.rs:39-40;
+  mpc_net::join precedent at :1039/:1075/:1476 and all over co-plonk
+  round2/round3): choose(e,f,g) ∥ majority(a,b,c) per iteration →
+  halves the serial GC chain even across differing table params.
+  **L0c** — merge the two GC input rounds inside
+  `decompose_circuit_compose_blueprint!` (mpc-core's OWN TODOs at
+  yao.rs:944/:965/:993) — −1 RTT on EVERY GC invocation, S effort,
+  keeps paying after batching.
+  Ceiling: witext's one-shot Bristol evaluation = 0.1 s for the whole
+  compression. Note: NO cross-invocation garbling-preprocessing
+  (delta reuse) exists in mpc-core — within-call batching is the only
+  amortisation lever short of engine work.
+- **L0d — half-share MSM for immediately-opened commitments (NEW,
+  from co-groth16 precedent; prove-path, all circuits).**
+  `CoUtils::commit` (co-noir-common/src/lib.rs:88-101) runs TWO
+  full-size MSMs (rayon::join over a- and b-share bigints) for every
+  commitment, yet every oink/shplemini/KZG commitment is opened
+  immediately after (co_oink_prover.rs:617/:695/:768,
+  co_shplemini_prover.rs:188/:513, lib.rs:74). co-groth16 instead
+  MSMs the a-half only and opens via 3-way broadcast
+  (msm_public_points_hs + open_half_point, pointshare.rs:150/:117) —
+  byte-identical opened point, HALF the MSM CPU, identical leakage.
+  ~15+ full-size commitments per prove. Effort M, risk low-medium
+  (audit: no commitment share consumed un-opened — agent's audit says
+  all are opened immediately; re-verify at implementation).
+- **L2 — RE-SCOPED (2026-07-25, full audit), demoted same day by the
+  profile from #1 to "real but minor": batch
+  `construct_lookup_read_counts`** (measured 8.0 s = 5.8% of
+  bb_sha256_compression pk-gen; ~×15 that for sha256_2e16, so still
+  ~2 min of its timeout — worth doing after L0, and the batching
+  design below is confirmed accurate in shape by the profile, with
+  measured per-gate splits: a2b 0.8 ms / gadget 0.4 ms / inject
+  0.9 ms / write_lut 0.6 ms).
+  Audited batching design (coordinator code-verified the call-site
+  mechanics; mpc-core gadget internals agent-audited):
+  the per-gate `calculate_table_index` is local (fine); everything else
+  batches across ALL gates and ALL tables:
+  (i) one `a2b_many`/`a2y2b_many` for all gates' index bit-decompositions
+  (default per-gate path today is Yao via `A2BType::default()`; batched
+  Direct a2b pays its extra rounds once and drops bytes to ~64 B/gate);
+  (ii) NEW mpc-core primitive **`ohv_many`** — the OHV recursion
+  (rep3_ring/gadgets/ohv.rs) is level-synchronous, one independent
+  `pack_and` per gate per level → concatenate payloads per level: rounds
+  collapse from Σ_g(k_g−1) to k_max−1 (group gates by k or mask);
+  (iii) one `bit_inject_from_bits_to_field_many` over all gates'
+  concatenated OHV bits (already a `_many`; pure call-site batching);
+  (iv) read counts: local commutative sums — values identical by
+  construction; (v) read TAGS: the current per-gate `write_lut_from_ohv`
+  chain computes t ← t + e·(1−t) = OR (order-independent for 0/1
+  values) → replace with an OR-tree: tag = 1 − Π_g(1 − ohv_g) via
+  `mul_many`, ⌈log₂ g_max⌉ rounds (phase-2 option: OR in the binary
+  domain pre-inject, ~256× fewer tag bytes);
+  (vi) AES-only fast path: `requires_index_map()` is true only for
+  AesSboxMap, and its per-gate `equal_many` result IS already the
+  one-hot vector — use it directly, delete the scalar-index→OHV rebuild.
+  Round formula: from ≈ g·(k+5) sequential round-trips (~45–50k for
+  bb_sha256_compression, ~700k for sha256_2e16 — latency-bound even at
+  loopback) to **~35–40 total, independent of g**. Expected 10–50× on
+  lookup-heavy pk-gen; sha256_2e16 goes from timeout to feasible.
+  Parity: witness values identical (commutative sum; OR reorder);
+  soundness: same primitives, index never opened. Unit boundaries:
+  (1a) batched counts path, (1b) OR-tree tags, (1c) AES equal_many-as-OHV,
+  (1d) binary-domain tags. Needs `ohv_many` in mpc-core + a `_many`
+  trait method on `NoirWitnessExtensionProtocol` (plain impl trivial;
+  Shamir already panics on the singular version — no regression).
+- **L2b — batch-inverse the post-open scalar loops (C2 class, MPC side;
+  code-verified 2026-07-25).** `inv_many_in_place{,_leaking_zeros}`
+  (co-noir-common/src/mpc/rep3.rs:212–253, shamir.rs same pattern) and
+  mpc-core `inv_vec` (rep3 + shamir arithmetic.rs): comms already
+  batched (one `mul_open_many`), but then a serial per-element
+  `y.inverse()` on the OPENED (public) values — the exact pattern C2
+  fixed in the plain driver with `ark_ff::batch_inversion`. ~4n full
+  inversions per REP3 prove (oink logderiv n + batch_invert n +
+  array_prod 2(n+1)) ≈ 4.2M at 2^20 ≈ 10–20 s serial CPU — prime
+  suspect for the 260%-CPU symptom. Fix: batch_inversion + rayon'd
+  multiply. Zero comm change, values identical. Blast radius: mpc-core
+  `inv_vec` is also used by co-circom — value-identical, but run their
+  build (NOT their test suite — testing-discipline rule; compile check
+  only, our own gates are the referee).
+- **L2c — route driver `mul_many` through `local_mul_vec` + `reshare_vec`
+  (code-verified 2026-07-25).** The REP3 driver's `mul_many`
+  (co-noir-common/src/mpc/rep3.rs:118–125) calls `arithmetic::mul_vec`,
+  whose own doc says "for small vecs" — serial local multiply with a
+  per-element ChaCha mask draw. The parallel pre-squeezed
+  `local_mul_vec` sits right above it (mpc-core rep3/arithmetic.rs:133)
+  and the sumcheck path already uses it. Oink's grand product pumps
+  ~13n elements through `mul_many` → ~13.6M serial muls + 13.6M serial
+  ChaCha draws at 2^20. Fix in the DRIVER only (mpc-core `mul_vec`
+  stays — co-acvm/co-brillig/co-circom use it for small vecs);
+  optionally size-gate. Same for `mul_open_vec` (arithmetic.rs:352,
+  used by the inversion paths) — pre-squeeze + par_iter (do with L2b).
+- **L1-followup — merge the two independent `mul_many` in
+  `array_prod_inner_mul_many` (code-verified 2026-07-25):**
+  co-noir-common/src/lib.rs:198 + :202 share no data dependency
+  (chain is inv_many → both muls → mul_open_many) → concatenate into
+  one call, −1 round. Blast-radius CORRECTION vs the earlier note:
+  co-acvm's `is_zero` does NOT use this helper (it uses
+  `eq_public_many`); sole caller is co_oink_prover.rs:517. Generic over
+  T so plain/Shamir get the merged schedule too.
+- **L3 — arkworks `parallel` + `asm` features — DONE/REFUTED** (ch. 23
+  B1: features were already on workspace-wide; kept here for the
+  historical record only).
+- **L4 — thread the remaining local polynomial passes.** Most of the
+  original list landed in ae631122 (oink row loops, grand-product
+  operands, sumcheck accumulation, shplemini, MSM). Audited residue:
+  `compute_honk_style_permutation_lagrange_polynomials_from_mapping`
+  (co-builder/src/keys/plain_proving_key.rs:297 — the explicit
+  "TACEO TODO Barrettenberg uses multithreading here"; 4 wires × n
+  public writes, embarrassingly parallel, ~100–300 ms at 2^20);
+  `get_from_public_luts_internal` b2a loop (mpc-core
+  rep3_ring/lut_field.rs:123 "TODO parallelize" — witext path, flag
+  only); z_perm writeback + reshare_vec packing (cheap, low priority).
 - **L5 — message coalescing / flush discipline** in mpc-net if H3 shows a
   per-message tax (one flush per logical round; the new msg counters make
-  the before/after visible).
+  the before/after visible). Post-v2 note: 90k frames at 37 KB/msg for
+  2^20 prove — loopback-cheap, WAN/TLS-relevant; stays live for v3.
 - **L6 — trim inverse/product domains to active rows** where bb provably
   does the same (byte parity is the referee — if bb pads, we pad).
-- **L7 — literature tricks** (survey in flight): only those that leave the
+- **L7 — literature tricks** (survey: §6): only those that leave the
   transcript untouched qualify (e.g. cheaper correlated randomness,
   round-compression of openings); anything changing proof bytes is opt-out.
 
-Sequencing: measure first where hypotheses disagree (netstats + one
-flamegraph of a sha256 REP3 party at loopback — party 0, `RAYON_NUM_THREADS=16`),
-then L2/L1 (likely dominant for sha), then L3/L4 (helps everything,
-including ch. 23), then L5/L6 as the data dictates. One lever per gated
-change; re-run bench v2 after each committed-shaped unit (PLAN 6.4).
+Sequencing (updated 2026-07-25 post-PROFILE; supersedes the post-audit
+order): **L2b → L2c (incl. mul_open_vec) → L1-followup** (small, safe,
+KAT-gated units; the poseidon-prove profile confirms their targets:
+gp/array_prod runs 1.6 s at ~101% CPU incl. the serial prefix-product
+recombination, batch_invert 0.63 s), **then L0 once its apportionment
+lands** (the sha pk-gen headline), then L2 (1a→1b→1c), then the
+sumcheck round-structure question (see below), then L4 residue;
+L5/L6 as data dictates. Prove-side profile facts to carry (poseidon
+2^17: oink 34% / sumcheck 58% / pcs 6%): sumcheck's
+`accumulate_relation_univariates_batch` is STRUCTURALLY single-threaded
+by design ("no net/state access ever crosses threads") — the relation
+math over the batch happens on the caller thread; splitting local
+relation arithmetic (parallelizable) from the net-touching reshares is
+the L4-class redesign with the biggest prove-side ceiling. Poseidon's
+S-box s^5 costs 3 inherently-sequential mul_many rounds per relation
+per sumcheck round (~100+ round-trips per prove) — round-structure
+reduction there is L7 territory (e.g. correlated power-tuples), NOT a
+call-site fix. MSM commits are the only phases reaching full 16-thread
+CPU (~1026%). One lever per gated change; re-run bench v2 after each
+committed-shaped unit (PLAN 6.4); T2 fences must be green (and
+consciously re-pinned) per lever.
+
+## §4a. Per-lever security review checklist (Mike, 2026-07-25 — MANDATORY
+## for every optimisation, recorded per lever from now on)
+
+Every lever must answer these in its review, in writing:
+1. **No new knowledge at any node**: does any party RECEIVE data beyond
+   what the pre-change protocol sent it (extra share limbs, unmasked
+   intermediates, early opens)? In REP3 each party already holds 2 of
+   the 3 additive summands — receiving the third (or an unmasked
+   function of it) is full reconstruction, so the margin is one
+   message. Everything received must remain masked by fresh correlated
+   randomness exactly as before, or be a value the protocol already
+   opened.
+2. **Separate-entity discipline**: all cross-party data still flows
+   through the `Network` trait (the ONLY channel between parties —
+   separate processes/machines in production, separate states +
+   explicit channel objects in tests); no code path may read another
+   party's state, and no "optimisation" may compute locally what the
+   protocol requires to be computed jointly (T2's cheat-detection
+   target).
+3. Mechanical checks backing 1+2: exact-count message fences (T2) —
+   AND byte-level pins (see T2 addendum below) so a leak that keeps
+   the frame count but fattens payloads (e.g. accidentally shipping
+   both share limbs) also reds the build; T3 share-rerandomization;
+   3-party byte-identity vs plain KAT; T4 view-scan once landed.
+
+Retro-audit of today's levers against 1+2 (all PASS):
+- L2b: touches only values ALREADY OPENED by the pre-existing protocol
+  (blinded y = a·r); zero change to sent data (fences: counts
+  unchanged). ✓
+- L2c: same reshare schedule, same payloads; only the local multiply
+  parallelised and masks pre-squeezed from the SAME correlated
+  zero-sharing generator (uniform masking preserved). ✓
+- L1-followup: identical payloads coalesced into one round; each party
+  receives exactly the same field elements, one frame earlier. ✓
+- Seeded-ZK-blinding fence: DELIBERATELY privacy-destroying by design
+  (all parties know the masking values) — test-only, unreachable from
+  the CLI, doc-marked; the unseeded default is bit-identical (proven
+  by fences/KATs). Listed here so nobody ever "optimises" it into a
+  production path. ✓
 
 ## 5. Property-preservation tests (PLAN 6.3 — "actually doing MPC" fences)
 
@@ -290,6 +596,100 @@ Fences, cheapest first:
   guarding degree/resharing correctness for the Shamir path.
 
 ## 6. Literature survey (2026-07-24; full agent report in PROGRESS s14)
+
+### §6a. 2026-07-25 web survey addendum (post-L0-discovery; Mike's ask)
+
+Focused sweep: TACEO blog/docs/GitHub + academic lineage, filtered by
+the byte-parity constraint. Full cited report in the session-16 agent
+transcript; actionable core:
+
+- **UPSTREAM HAS ALREADY SHIPPED much of what we derived today —
+  port, don't reinvent** (all upstream `TaceoLabs/co-snarks`, likely
+  post-dating our fork point; local drift-check in flight):
+  - Batched share conversions: `y2b_many`/`b2y_many` (PR #530,
+    2026-04-03), `a2y2b_many` (PR #503, 2026-01-13), vectorized `b2a`
+    (PR #393, 2025-07-09) — directly the L0/L2 batching primitives.
+  - **The batching principle is TACEO-measured**: April-2025 release
+    notes — "executing 10 or 100 witness extensions in batched form
+    essentially adds no overhead compared to a single one"; batched
+    ChaCha witext (PR #347); batched Poseidon trace (PR #502).
+  - mpc-net transport overhaul: zero-copy `Bytes`, unified
+    TCP/TLS/QUIC, background reader/writer threads, "post both sends
+    before any receive" broadcast (PR #555, 2026-07-03);
+    single-serialize broadcast fan-out (PR #557, 2026-07-06);
+    ephemeral/blocking TCP session nets (PR #524/#560). Attacks the
+    per-frame/per-call fixed overhead we measured.
+  - MAESTRO-style LUT protocols in mpc-core (PR #307 2025-01-28; curve
+    variant 2025-09-15) — the non-Yao small-domain alternative
+    (eprint 2024/1317; follow-on 2025/2109).
+  - Poseidon2 accelerators incl. pluggable "component accelerators
+    for the MPC VM" (2026-04-03) + permutation dedup (PR #562,
+    2026-07-24 — yesterday); Shamir Poseidon2 accel (PR #554).
+  - Grand-product inactive-region bit-exactness fix vs bb (PR #411,
+    2025-08-11) — CHECK whether our branch has this class of fix;
+    it's the exact edge where parity bugs hide.
+  - PR #472 "compute transcript in MPC" (2025-10-15) — read the diff
+    locally (title squarely in our invariant territory; body
+    unavailable via API).
+- **Techniques confirmed by the literature** (details + cites in the
+  full report): constant-round prefix/grand-product telescoping
+  (Ozdemir–Boneh; TACEO blog 2024-10-31) — we already use the
+  array_prod machinery, L1/L1-followup are refinements; Bar-Ilan–
+  Beaver batch inversion (our L2b is the local-compute half of it);
+  GC delta-reuse + pipelined garbled-table streaming (per-call
+  amortization for L0 — NOT yet shipped upstream, engine-level work);
+  offline/online separation matters ~6× more under WAN (TACEO zkTLS
+  post numbers: 8-party SHA-256 online 115 ms LAN / 185 ms WAN vs
+  total 2 s / 12.6 s).
+- **Documented REJECTS (transcript-altering or wrong-model)**: logUp-
+  style permutation swap (eprint 2025/1388 — different committed
+  polys); zkSaaS / Scalable-coZK packed-sharing GKR (different proof
+  system AND needs n≫3); EOS delegator topology; malicious-security
+  shortcut papers (we're already semi-honest; note eprint 2025/1026's
+  warning: collaborative proofs on INVALID witnesses can leak honest
+  inputs); ML-MPC truncation tricks (approximate arithmetic = fatal).
+- **Benchmarking**: no formal netem tier standard exists in the
+  literature (Scalable-coZK's repo uses coarse tc-based LAN/WAN only);
+  TACEO:Proof's production table (2025-07-23: e.g. sha256 2^16
+  delegated 0.672 s vs laptop 0.878 s) is the best public co-SNARK
+  latency data — our per-round byte histogram + tier model (§3a)
+  would still be first-of-kind.
+
+### §6b. 2026-07-25 LOCAL survey addendum (co-circom diff + upstream drift)
+
+- **Upstream drift verdict**: merge-base with origin/main = 36da0ea8
+  (2026-07-06); only 8 upstream commits since, NONE touching mpc-core
+  protocols / co-noir / the sha-yao-LUT hotspots. Everything the web
+  survey found (y2b_many 5454c3e0, transport overhaul, broadcast
+  single-serialize 4bef6f8f, MAESTRO LUTs, accelerators) is ALREADY on
+  our branch — the batching gap is purely in co-noir's CALL LAYER, and
+  upstream hasn't fixed it either. Post-base pickables: blocking TCP
+  session net 696a720d (2026-07-15, M effort, comes with a breaking
+  config refactor — bench first); rest is housekeeping/circom-only.
+- **co-circom techniques co-noir lacks** (file:line evidence in the
+  session-16 agent report): dual-channel concurrency via
+  mpc_net::join{,8} (co-plonk round2.rs:163 num∥den, round3.rs:31
+  8-way; co-groth16 groth16.rs:299 open∥scalar_mul) → L0b/L8-class;
+  half-share MSM + open_half_point (→ NEW lever L0d);
+  local_mul_vec+reshare_vec used everywhere (co-noir's driver
+  mul_many doesn't → L2c); mem::take/in-place buffer hygiene
+  (shplemini clones at co_shplemini_prover.rs:180/:344/:297/:639 →
+  L4-class polish).
+- **Unused mpc-core inventory relevant to us**: batched GC kernels
+  (get_sparse_*_many, slice_and_many, decompose_arithmetic_many,
+  input_two_field_id2_many); STREAMING garbler/evaluator (used only by
+  a2y_streaming conversion routes — alternative latency/throughput
+  trade for large batched GC calls); cmux_vec/eq_public_many;
+  get_from_public_lut_no_b2a_conversion. No cross-invocation GC
+  preprocessing exists — batching is the amortisation lever.
+- **Cross-relation sumcheck stage-batching** (new, L-effort lever,
+  logged as L7-adjacent): the 9 relations run sequentially per
+  sumcheck round, each with 1–3 own mul_many rounds (≈10–15 net
+  rounds/sumcheck round × log n); stage-batching all relations'
+  independent first-stage muls into one mul_many → ~3–4
+  rounds/sumcheck round. Values unchanged (Fiat–Shamir barrier is the
+  per-round open, untouched). Highest payoff at WAN latency;
+  bench-gate.
 
 What the field knows, filtered by our parity constraint:
 
