@@ -17,7 +17,7 @@
 */
 // clang-format on
 
-use super::types::ProverMemory;
+use super::types::{Challenges, ProverMemory};
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
@@ -28,15 +28,16 @@ use co_noir_common::{
     keys::{proving_key::ProvingKey, verification_key::VerifyingKeyBarretenberg},
     mpc::NoirUltraHonkProver,
     polynomials::{
+        entities::Polynomials,
         polynomial::{NUM_MASKED_ROWS, Polynomial},
         shared_polynomial::SharedPolynomial,
     },
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
 };
-use itertools::izip;
 use mpc_core::MpcState as _;
 use mpc_net::Network;
+use rayon::prelude::*;
 use std::marker::PhantomData;
 use ultrahonk::NUM_ALPHAS;
 
@@ -158,35 +159,34 @@ impl<
     }
 
     fn compute_lookup_term(
-        &mut self,
-        proving_key: &ProvingKey<T, C>,
+        challenges: &Challenges<C::ScalarField>,
+        id: <T::State as mpc_core::MpcState>::PartyID,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
         i: usize,
     ) -> T::ArithmeticShare {
         tracing::trace!("compute lookup term");
 
-        let gamma = self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
+        let gamma = challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
 
-        let w_1 = proving_key.polynomials.witness.w_l()[i];
-        let w_2 = proving_key.polynomials.witness.w_r()[i];
-        let w_3 = proving_key.polynomials.witness.w_o()[i];
+        let w_1 = polynomials.witness.w_l()[i];
+        let w_2 = polynomials.witness.w_r()[i];
+        let w_3 = polynomials.witness.w_o()[i];
 
-        let w_1_shift = proving_key.polynomials.witness.w_l().shifted()[i];
-        let w_2_shift = proving_key.polynomials.witness.w_r().shifted()[i];
-        let w_3_shift = proving_key.polynomials.witness.w_o().shifted()[i];
+        let w_1_shift = polynomials.witness.w_l().shifted()[i];
+        let w_2_shift = polynomials.witness.w_r().shifted()[i];
+        let w_3_shift = polynomials.witness.w_o().shifted()[i];
 
-        let table_index = proving_key.polynomials.precomputed.q_o()[i];
-        let negative_column_1_step_size = proving_key.polynomials.precomputed.q_r()[i];
-        let negative_column_2_step_size = proving_key.polynomials.precomputed.q_m()[i];
-        let negative_column_3_step_size = proving_key.polynomials.precomputed.q_c()[i];
+        let table_index = polynomials.precomputed.q_o()[i];
+        let negative_column_1_step_size = polynomials.precomputed.q_r()[i];
+        let negative_column_2_step_size = polynomials.precomputed.q_m()[i];
+        let negative_column_3_step_size = polynomials.precomputed.q_c()[i];
 
         // The wire values for lookup gates are accumulators structured in such a way that the differences w_i -
         // step_size*w_i_shift result in values present in column i of a corresponding table. See the documentation in
         // method get_lookup_accumulators() in  for a detailed explanation.
-        let id = self.state.id();
-
         let mul = T::mul_with_public(negative_column_1_step_size, w_1_shift);
         let add = T::add_with_public(gamma, mul, id);
         let derived_table_entry_1 = T::add(w_1, add);
@@ -209,17 +209,21 @@ impl<
     }
 
     // Compute table_1 + gamma + table_2 * beta + table_3 * beta^2 + table_4 * beta^3
-    fn compute_table_term(&self, proving_key: &ProvingKey<T, C>, i: usize) -> C::ScalarField {
+    fn compute_table_term(
+        challenges: &Challenges<C::ScalarField>,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
+        i: usize,
+    ) -> C::ScalarField {
         tracing::trace!("compute table term");
 
-        let gamma = &self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
-        let table_1 = &proving_key.polynomials.precomputed.table_1()[i];
-        let table_2 = &proving_key.polynomials.precomputed.table_2()[i];
-        let table_3 = &proving_key.polynomials.precomputed.table_3()[i];
-        let table_4 = &proving_key.polynomials.precomputed.table_4()[i];
+        let gamma = &challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
+        let table_1 = &polynomials.precomputed.table_1()[i];
+        let table_2 = &polynomials.precomputed.table_2()[i];
+        let table_3 = &polynomials.precomputed.table_3()[i];
+        let table_4 = &polynomials.precomputed.table_4()[i];
 
         *table_1 + gamma + *table_2 * beta + *table_3 * beta_sqr + *table_4 * beta_cube
     }
@@ -239,61 +243,68 @@ impl<
             proving_key.circuit_size as usize
         );
 
-        self.memory
-            .lookup_inverses
-            .resize(proving_key.circuit_size as usize, Default::default());
-
         // const READ_TERMS: usize = 1;
         // const WRITE_TERMS: usize = 1;
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
 
-        let mut q_lookup_mul_read_tag = Vec::with_capacity(proving_key.circuit_size as usize);
-        for (i, (q_lookup, lookup_read_tag)) in izip!(
-            proving_key.polynomials.precomputed.q_lookup().iter(),
-            proving_key.polynomials.witness.lookup_read_tags().iter(),
-        )
-        .enumerate()
-        {
-            // Skip the disabled head region: for ZK, the read tags there hold masking randomness,
-            // which must not contribute to the inverses (the head rows of lookup_inverses receive
-            // their own masking when the polynomial is committed).
-            if i < TRACE_OFFSET {
-                q_lookup_mul_read_tag.push(T::ArithmeticShare::default());
-                continue;
-            }
-            // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
-            // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
-            //     continue;
-            // }
-            debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
-            let mul =
-                T::mul_with_public(C::ScalarField::one() - q_lookup, lookup_read_tag.to_owned());
-            q_lookup_mul_read_tag.push(T::add_with_public(
-                q_lookup.to_owned(),
-                mul,
-                self.state.id(),
-            ));
+        let timer = std::time::Instant::now();
+        // Every row is a pure, local (communication-free) computation for all drivers, so the
+        // rows are computed in parallel and collected in row order; the per-row values are
+        // exactly the ones the serial loop computed.
+        let id = self.state.id();
+        let challenges = &self.memory.challenges;
+        let polynomials = &proving_key.polynomials;
+        let q_lookup_poly = proving_key.polynomials.precomputed.q_lookup();
+        let lookup_read_tags = proving_key.polynomials.witness.lookup_read_tags();
+        let (lookup_inverses, q_lookup_mul_read_tag): (Vec<_>, Vec<_>) =
+            (0..proving_key.circuit_size as usize)
+                .into_par_iter()
+                .map(|i| {
+                    // Skip the disabled head region: for ZK, the read tags there hold masking
+                    // randomness, which must not contribute to the inverses (the head rows of
+                    // lookup_inverses receive their own masking when the polynomial is committed).
+                    if i < TRACE_OFFSET {
+                        return (T::ArithmeticShare::default(), T::ArithmeticShare::default());
+                    }
+                    let q_lookup = &q_lookup_poly[i];
+                    let lookup_read_tag = &lookup_read_tags[i];
+                    // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
+                    // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
+                    //     continue;
+                    // }
+                    debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
+                    let mul = T::mul_with_public(
+                        C::ScalarField::one() - q_lookup,
+                        lookup_read_tag.to_owned(),
+                    );
+                    let q_mul_read_tag = T::add_with_public(q_lookup.to_owned(), mul, id);
 
-            // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
-            let read_term = self.compute_lookup_term(proving_key, i);
-            let write_term = self.compute_table_term(proving_key, i);
-            self.memory.lookup_inverses[i] = T::mul_with_public(write_term, read_term);
-        }
+                    // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
+                    let read_term = Self::compute_lookup_term(challenges, id, polynomials, i);
+                    let write_term = Self::compute_table_term(challenges, polynomials, i);
+                    (T::mul_with_public(write_term, read_term), q_mul_read_tag)
+                })
+                .unzip();
+        crate::phase_timing("oink/logderiv/row_loop", timer);
+        let timer = std::time::Instant::now();
         self.memory.lookup_inverses = Polynomial::new(T::mul_many(
-            self.memory.lookup_inverses.as_ref(),
+            &lookup_inverses,
             &q_lookup_mul_read_tag,
             self.net,
             self.state,
         )?);
+        crate::phase_timing("oink/logderiv/mul_many", timer);
 
         // Compute inverse polynomial I in place by inverting the product at each row
         // Note: zeroes are ignored as they are not used anyway
+        let timer = std::time::Instant::now();
         CoUtils::batch_invert_leaking_zeros::<T, C, N>(
             self.memory.lookup_inverses.as_mut(),
             self.net,
             self.state,
         )?;
+        crate::phase_timing("oink/logderiv/batch_invert", timer);
         Ok(())
     }
 
@@ -345,10 +356,15 @@ impl<
         num / denom
     }
 
+    /// Computes the (local, communication-free) linear terms
+    /// `(shared1[i] + beta*pub1[i] + gamma, shared2[i] + beta*pub2[i] + gamma)`
+    /// of one grand-product numerator/denominator factor pair and appends them
+    /// to `lhs`/`rhs`. The element-wise products `lhs[i] * rhs[i]` of several
+    /// such pairs are then computed by the caller in a single batched
+    /// `mul_many` round.
     #[expect(clippy::too_many_arguments)]
-    fn batched_grand_product_num_denom(
-        net: &N,
-        state: &mut T::State,
+    fn grand_product_num_denom_operands(
+        state: &T::State,
         shared1: &Polynomial<T::ArithmeticShare>,
         shared2: &Polynomial<T::ArithmeticShare>,
         pub1: &Polynomial<C::ScalarField>,
@@ -357,26 +373,33 @@ impl<
         gamma: &C::ScalarField,
         start_idx: usize,
         output_len: usize,
-    ) -> HonkProofResult<Vec<T::ArithmeticShare>> {
+        lhs: &mut Vec<T::ArithmeticShare>,
+        rhs: &mut Vec<T::ArithmeticShare>,
+    ) {
         debug_assert!(shared1.len() >= start_idx + output_len);
         debug_assert!(shared2.len() >= start_idx + output_len);
         debug_assert!(pub1.len() >= start_idx + output_len);
         debug_assert!(pub2.len() >= start_idx + output_len);
 
         // We drop the last element since it is not needed for the grand product
-        let mut mul1 = Vec::with_capacity(output_len);
-        let mut mul2 = Vec::with_capacity(output_len);
+        lhs.reserve(output_len);
+        rhs.reserve(output_len);
 
-        for i in 0..output_len {
-            let idx = i + start_idx;
-            let id = state.id();
-            let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
-            let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
-            mul1.push(m1);
-            mul2.push(m2);
-        }
-
-        Ok(T::mul_many(&mul1, &mul2, net, state)?)
+        // Every row is a pure, local (communication-free) computation for all drivers, so the
+        // rows are computed in parallel; the indexed unzip collects them in row order, so
+        // lhs/rhs receive exactly the values (and order) the serial loop pushed.
+        let id = state.id();
+        let (m1s, m2s): (Vec<_>, Vec<_>) = (0..output_len)
+            .into_par_iter()
+            .map(|i| {
+                let idx = i + start_idx;
+                let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
+                let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
+                (m1, m2)
+            })
+            .unzip();
+        lhs.extend(m1s);
+        rhs.extend(m2s);
     }
 
     fn compute_grand_product(&mut self, proving_key: &ProvingKey<T, C>) -> HonkProofResult<()> {
@@ -397,9 +420,17 @@ impl<
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
 
-        // TACEO TODO could batch those 4 as well
-        let denom1 = Self::batched_grand_product_num_denom(
-            self.net,
+        // The four num/denom factor pairs (denom1, denom2, num1, num2) are
+        // independent of each other, so their element-wise multiplications are
+        // batched into a single mul_many round: the operands are concatenated,
+        // multiplied in one round and the result is split up again. This only
+        // changes the communication schedule (4 rounds -> 1); the computed
+        // values are identical.
+        let out_len = active_size - 1;
+        let timer = std::time::Instant::now();
+        let mut lhs = Vec::with_capacity(4 * out_len);
+        let mut rhs = Vec::with_capacity(4 * out_len);
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_l(),
             proving_key.polynomials.witness.w_r(),
@@ -408,10 +439,11 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             gp_start,
-            active_size - 1,
-        )?;
-        let denom2 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_o(),
             &self.memory.w_4,
@@ -420,10 +452,11 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             gp_start,
-            active_size - 1,
-        )?;
-        let num1 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_l(),
             proving_key.polynomials.witness.w_r(),
@@ -432,10 +465,11 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             gp_start,
-            active_size - 1,
-        )?;
-        let num2 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_o(),
             &self.memory.w_4,
@@ -444,31 +478,70 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             gp_start,
-            active_size - 1,
-        )?;
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
 
-        // TACEO TODO could batch here as well
-        let numerator = T::mul_many(&num1, &num2, self.net, self.state)?;
-        let denominator = T::mul_many(&denom1, &denom2, self.net, self.state)?;
+        crate::phase_timing("oink/gp/operands", timer);
+
+        let timer = std::time::Instant::now();
+        let mut products = T::mul_many(&lhs, &rhs, self.net, self.state)?;
+        crate::phase_timing("oink/gp/mul_many_pairs", timer);
+        debug_assert_eq!(products.len(), 4 * out_len);
+        let num2 = products.split_off(3 * out_len);
+        let num1 = products.split_off(2 * out_len);
+        let denom2 = products.split_off(out_len);
+        let denom1 = products;
+
+        // numerator = num1 * num2 and denominator = denom1 * denom2 are
+        // independent, so they are batched into a single mul_many round as well
+        // (2 rounds -> 1).
+        let timer = std::time::Instant::now();
+        let mut lhs = num1;
+        lhs.extend(denom1);
+        let mut rhs = num2;
+        rhs.extend(denom2);
+        let mut products = T::mul_many(&lhs, &rhs, self.net, self.state)?;
+        let denominator = products.split_off(out_len);
+        let numerator = products;
+        crate::phase_timing("oink/gp/mul_many_numden", timer);
 
         // Step (2)
         // Compute the accumulating product of the numerator and denominator terms.
 
-        // TACEO TODO could batch here as well
-        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds
-        let numerator = CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?;
-        let mut denominator =
-            CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &denominator)?;
+        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds.
+        // The two prefix products are independent, so they share the rounds of a
+        // single batched invocation instead of running sequentially.
+        let timer = std::time::Instant::now();
+        let mut prefix_products = CoUtils::array_prod_inner_mul_many::<T, C, N>(
+            self.net,
+            self.state,
+            &[numerator, denominator],
+        )?
+        .into_iter();
+        let numerator = prefix_products
+            .next()
+            .expect("two prefix products were requested");
+        let mut denominator = prefix_products
+            .next()
+            .expect("two prefix products were requested");
+        crate::phase_timing("oink/gp/array_prod", timer);
 
         // invert denominator
+        let timer = std::time::Instant::now();
         CoUtils::batch_invert::<T, C, N>(&mut denominator, self.net, self.state)?;
+        crate::phase_timing("oink/gp/batch_invert", timer);
 
         // Step (3) Compute z_perm[i] = numerator[i] / denominator[i]
+        let timer = std::time::Instant::now();
         let mul = T::mul_many(&numerator, &denominator, self.net, self.state)?;
+        crate::phase_timing("oink/gp/final_mul", timer);
 
         // z_perm remains 0 at rows 0..=gp_start (row gp_start hosts lagrange_first, where the
         // permutation relation reads z_perm + lagrange_first); for ZK, the masking values at rows
         // {1, 2, 3} are added later when committing.
+        let timer = std::time::Instant::now();
         self.memory.z_perm.resize(
             proving_key.circuit_size as usize,
             T::ArithmeticShare::default(),
@@ -477,6 +550,7 @@ impl<
         for (i, mul) in mul.into_iter().enumerate() {
             self.memory.z_perm[gp_start + i + 1] = mul
         }
+        crate::phase_timing("oink/gp/z_perm_writeback", timer);
 
         Ok(())
     }
@@ -686,11 +760,13 @@ impl<
         };
 
         // This is from the previous round, but we open it here with z_perm
+        let timer = std::time::Instant::now();
         let lookup_inverses = CoUtils::commit::<T, C>(self.memory.lookup_inverses.as_ref(), crs);
 
         let z_perm = CoUtils::commit::<T, C>(self.memory.z_perm.as_ref(), crs);
 
         let open = T::open_point_many(&[lookup_inverses, z_perm], self.net, self.state)?;
+        crate::phase_timing("oink/z_perm/commit_open", timer);
 
         let lookup_inverses: C::Affine = open[0].into();
         let z_perm: C::Affine = open[1].into();
@@ -709,17 +785,29 @@ impl<
         tracing::trace!("Oink prove");
 
         // Add circuit size public input size and public inputs to transcript
+        let timer = std::time::Instant::now();
         Self::send_vk_hash_and_public_inputs(transcript, proving_key, verifying_key)?;
+        crate::phase_timing("oink/vk_and_public_inputs", timer);
+        let timer = std::time::Instant::now();
         self.commit_to_masking_poly(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/masking_poly", timer);
         // Compute first three wire commitments
+        let timer = std::time::Instant::now();
         self.commit_to_wires(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/wires_commit", timer);
         // Compute sorted list accumulator and commitment
+        let timer = std::time::Instant::now();
         self.commit_to_lookup_counts_and_w4(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/lookup_w4_commit", timer);
 
         // Fiat-Shamir: beta & gamma
+        let timer = std::time::Instant::now();
         self.commit_to_logderiv_inverses(transcript, proving_key)?;
+        crate::phase_timing("oink/logderiv_round_total", timer);
         // Compute grand product(s) and commitments.
+        let timer = std::time::Instant::now();
         self.commit_to_z_perm(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/z_perm_round_total", timer);
 
         // Generate relation separators alphas for sumcheck/combiner computation
         self.generate_alphas_round(transcript);

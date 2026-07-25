@@ -1,4 +1,5 @@
 use ark_ec::{CurveGroup, PrimeGroup};
+use rayon::prelude::*;
 use co_noir_common::{
     honk_curve::HonkCurve,
     honk_proof::TranscriptFieldType,
@@ -81,6 +82,45 @@ where
             scaling_factors: vec![],
         }
     }
+
+    /// Concatenate per-chunk relation data in chunk order. The result is exactly what a single
+    /// sequential pass over the same edges (in the same order) would have produced: `Vec::append`
+    /// preserves element order, and `can_skip` stays true only if every chunk was skippable.
+    fn concat(parts: Vec<Self>) -> Self {
+        let mut parts = parts.into_iter();
+        let Some(mut out) = parts.next() else {
+            return Self::new();
+        };
+        for mut part in parts {
+            out.can_skip &= part.can_skip;
+            for (des, src) in out
+                .all_entities
+                .witness
+                .iter_mut()
+                .zip(part.all_entities.witness.iter_mut())
+            {
+                des.append(src);
+            }
+            for (des, src) in out
+                .all_entities
+                .precomputed
+                .iter_mut()
+                .zip(part.all_entities.precomputed.iter_mut())
+            {
+                des.append(src);
+            }
+            for (des, src) in out
+                .all_entities
+                .shifted_witness
+                .iter_mut()
+                .zip(part.all_entities.shifted_witness.iter_mut())
+            {
+                des.append(src);
+            }
+            out.scaling_factors.append(&mut part.scaling_factors);
+        }
+        out
+    }
 }
 
 impl<T, P> AllEntitiesBatchRelations<T, P>
@@ -99,6 +139,63 @@ where
             nnf: SumCheckDataForRelation::new(),
             poseidon_ext: SumCheckDataForRelation::new(),
             poseidon_int: SumCheckDataForRelation::new(),
+        }
+    }
+
+    /// Concatenate per-chunk batches in chunk order, yielding the same batch a sequential pass
+    /// over all edges would have built (same operand order, same lengths, same skip flags) —
+    /// independent of how many chunks/threads produced the parts. The nine relations are merged
+    /// in parallel; within a relation the merge is a sequential, order-preserving append.
+    pub fn concat(parts: Vec<Self>) -> Self {
+        const NUM_RELATION_BATCHES: usize = 9;
+        let mut per_relation: [Vec<SumCheckDataForRelation<T, P>>; NUM_RELATION_BATCHES] =
+            std::array::from_fn(|_| Vec::with_capacity(parts.len()));
+        for part in parts {
+            let Self {
+                ultra_arith,
+                ultra_perm,
+                delta_range,
+                elliptic,
+                memory,
+                nnf,
+                log_lookup,
+                poseidon_ext,
+                poseidon_int,
+            } = part;
+            per_relation[0].push(ultra_arith);
+            per_relation[1].push(ultra_perm);
+            per_relation[2].push(delta_range);
+            per_relation[3].push(elliptic);
+            per_relation[4].push(memory);
+            per_relation[5].push(nnf);
+            per_relation[6].push(log_lookup);
+            per_relation[7].push(poseidon_ext);
+            per_relation[8].push(poseidon_int);
+        }
+        let mut merged: Vec<SumCheckDataForRelation<T, P>> = per_relation
+            .into_par_iter()
+            .map(SumCheckDataForRelation::concat)
+            .collect();
+        // collect() preserves order; pop in reverse field order.
+        let poseidon_int = merged.pop().expect("nine merged relation batches");
+        let poseidon_ext = merged.pop().expect("nine merged relation batches");
+        let log_lookup = merged.pop().expect("nine merged relation batches");
+        let nnf = merged.pop().expect("nine merged relation batches");
+        let memory = merged.pop().expect("nine merged relation batches");
+        let elliptic = merged.pop().expect("nine merged relation batches");
+        let delta_range = merged.pop().expect("nine merged relation batches");
+        let ultra_perm = merged.pop().expect("nine merged relation batches");
+        let ultra_arith = merged.pop().expect("nine merged relation batches");
+        Self {
+            ultra_arith,
+            ultra_perm,
+            delta_range,
+            elliptic,
+            memory,
+            nnf,
+            log_lookup,
+            poseidon_ext,
+            poseidon_int,
         }
     }
 

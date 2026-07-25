@@ -2,7 +2,6 @@ use super::NoirUltraHonkProver;
 use crate::HonkCurve;
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
-use ark_ff::Field;
 use ark_ff::One;
 use ark_ff::PrimeField;
 use ark_ff::UniformRand;
@@ -116,7 +115,12 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _state: &mut Self::State,
     ) -> Vec<P::ScalarField> {
         debug_assert_eq!(a.len(), b.len());
-        a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect()
+        // Element-wise and thus order-independent: the parallel map computes exactly the same
+        // products as the serial one.
+        a.par_iter()
+            .zip(b.par_iter())
+            .map(|(a, b)| *a * b)
+            .collect()
     }
 
     fn reshare<N: Network>(
@@ -143,7 +147,12 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
         debug_assert_eq!(a.len(), b.len());
-        Ok(a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect())
+        // Element-wise and thus order-independent: the parallel map computes exactly the same
+        // products as the serial one.
+        Ok(a.par_iter()
+            .zip(b.par_iter())
+            .map(|(a, b)| *a * b)
+            .collect())
     }
 
     fn add_with_public(
@@ -217,7 +226,12 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<P::ScalarField>> {
         debug_assert_eq!(a.len(), b.len());
-        Ok(a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect())
+        // Element-wise and thus order-independent: the parallel map computes exactly the same
+        // products as the serial one.
+        Ok(a.par_iter()
+            .zip(b.par_iter())
+            .map(|(a, b)| *a * b)
+            .collect())
     }
 
     fn inv_many<N: Network>(
@@ -225,15 +239,15 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        let mut res = Vec::with_capacity(a.len());
-
-        for a in a {
-            if a.is_zero() {
-                eyre::bail!("Cannot invert zero");
-            }
-            res.push(a.inverse().unwrap());
+        if a.par_iter().any(|a| a.is_zero()) {
+            eyre::bail!("Cannot invert zero");
         }
-
+        let mut res = a.to_vec();
+        // Montgomery batch inversion (parallelized over chunks via ark's `parallel` feature).
+        // Each element's inverse is uniquely determined by the field, so the chunking/grouping
+        // of the Montgomery trick cannot change the outputs: they are exactly the per-element
+        // inverses the previous serial loop computed, just cheaper.
+        ark_ff::batch_inversion(&mut res);
         Ok(res)
     }
 
@@ -242,12 +256,12 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<()> {
-        for a in a.iter_mut() {
-            if a.is_zero() {
-                eyre::bail!("Cannot invert zero");
-            }
-            a.inverse_in_place().unwrap();
+        if a.par_iter().any(|a| a.is_zero()) {
+            eyre::bail!("Cannot invert zero");
         }
+        // See `inv_many`: batch inversion is exact, outputs are identical to per-element
+        // inversion.
+        ark_ff::batch_inversion(a);
         Ok(())
     }
 
@@ -256,11 +270,10 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<()> {
-        for a in a.iter_mut() {
-            if !a.is_zero() {
-                a.inverse_in_place().unwrap();
-            }
-        }
+        // `ark_ff::batch_inversion` skips zero elements (they stay zero), which is exactly the
+        // "leaking zeros" semantics of the previous serial loop; nonzero elements get their
+        // exact field inverse.
+        ark_ff::batch_inversion(a);
         Ok(())
     }
 
@@ -367,5 +380,72 @@ impl<P: CurveGroup> NoirUltraHonkProver<P> for PlainUltraHonkDriver {
                 [res0_0, res0_1, res1_0, res1_1]
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlainUltraHonkDriver;
+    use crate::mpc::NoirUltraHonkProver;
+    use ark_ff::{Field, UniformRand};
+    use num_traits::Zero;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    type Driver = PlainUltraHonkDriver;
+    type P = ark_bn254::G1Projective;
+    type F = ark_bn254::Fr;
+
+    /// The plain driver's inversions are now Montgomery-batched (and chunked in parallel by
+    /// ark's `parallel` feature). Batching/chunking must not change the outputs: every element
+    /// has a unique field inverse. This asserts bit-exact equality with the per-element serial
+    /// reference the old implementation computed, for all three inversion entry points.
+    #[test]
+    fn batched_inversion_matches_serial_reference() {
+        let mut rng = StdRng::seed_from_u64(0xC0DEC0DE);
+        let mut state = Default::default();
+        let net = ();
+
+        // Length deliberately not a multiple of any chunk size.
+        let a: Vec<F> = (0..1027).map(|_| F::rand(&mut rng)).collect();
+        let expected: Vec<F> = a.iter().map(|x| x.inverse().unwrap()).collect();
+
+        let res = <Driver as NoirUltraHonkProver<P>>::inv_many(&a, &net, &mut state).unwrap();
+        assert_eq!(res, expected);
+
+        let mut b = a.clone();
+        <Driver as NoirUltraHonkProver<P>>::inv_many_in_place(&mut b, &net, &mut state).unwrap();
+        assert_eq!(b, expected);
+
+        // Leaking-zeros variant: zeros stay zero, nonzero elements get their exact inverse.
+        let mut with_zeros = a.clone();
+        for i in (0..with_zeros.len()).step_by(5) {
+            with_zeros[i] = F::zero();
+        }
+        let expected_lz: Vec<F> = with_zeros
+            .iter()
+            .map(|x| {
+                if x.is_zero() {
+                    F::zero()
+                } else {
+                    x.inverse().unwrap()
+                }
+            })
+            .collect();
+        let mut c = with_zeros.clone();
+        <Driver as NoirUltraHonkProver<P>>::inv_many_in_place_leaking_zeros(
+            &mut c, &net, &mut state,
+        )
+        .unwrap();
+        assert_eq!(c, expected_lz);
+
+        // The strict variants must still reject zeros.
+        assert!(
+            <Driver as NoirUltraHonkProver<P>>::inv_many(&with_zeros, &net, &mut state).is_err()
+        );
+        let mut d = with_zeros.clone();
+        assert!(
+            <Driver as NoirUltraHonkProver<P>>::inv_many_in_place(&mut d, &net, &mut state)
+                .is_err()
+        );
     }
 }

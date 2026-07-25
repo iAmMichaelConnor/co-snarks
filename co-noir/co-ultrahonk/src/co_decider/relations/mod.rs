@@ -146,6 +146,52 @@ pub(crate) struct AllRelationAccHalfShared<T: NoirUltraHonkProver<P>, P: CurveGr
 }
 
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> AllRelationAccHalfShared<T, P> {
+    /// Element-wise addition of another accumulator into this one.
+    ///
+    /// Field addition is exact, associative and commutative, so accumulating relation
+    /// contributions into per-chunk accumulators and merging them afterwards yields exactly the
+    /// same evaluations as a single sequential accumulation over all edges — independent of the
+    /// chunk count or thread schedule.
+    pub(crate) fn merge_from(&mut self, other: Self) {
+        for (a, b) in self
+            .r_arith
+            .r0
+            .evaluations
+            .iter_mut()
+            .zip(other.r_arith.r0.evaluations)
+        {
+            *a += b;
+        }
+        self.r_arith.r1.add_assign(&other.r_arith.r1);
+        self.r_perm.r0.add_assign(&other.r_perm.r0);
+        self.r_perm.r1.add_assign(&other.r_perm.r1);
+        self.r_perm.r2.add_assign(&other.r_perm.r2);
+        self.r_lookup.r0.add_assign(&other.r_lookup.r0);
+        self.r_lookup.r1.add_assign(&other.r_lookup.r1);
+        self.r_lookup.r2.add_assign(&other.r_lookup.r2);
+        self.r_delta.r0.add_assign(&other.r_delta.r0);
+        self.r_delta.r1.add_assign(&other.r_delta.r1);
+        self.r_delta.r2.add_assign(&other.r_delta.r2);
+        self.r_delta.r3.add_assign(&other.r_delta.r3);
+        self.r_elliptic.r0.add_assign(&other.r_elliptic.r0);
+        self.r_elliptic.r1.add_assign(&other.r_elliptic.r1);
+        self.r_memory.r0.add_assign(&other.r_memory.r0);
+        self.r_memory.r1.add_assign(&other.r_memory.r1);
+        self.r_memory.r2.add_assign(&other.r_memory.r2);
+        self.r_memory.r3.add_assign(&other.r_memory.r3);
+        self.r_memory.r4.add_assign(&other.r_memory.r4);
+        self.r_memory.r5.add_assign(&other.r_memory.r5);
+        self.r_nnf.r0.add_assign(&other.r_nnf.r0);
+        self.r_pos_ext.r0.add_assign(&other.r_pos_ext.r0);
+        self.r_pos_ext.r1.add_assign(&other.r_pos_ext.r1);
+        self.r_pos_ext.r2.add_assign(&other.r_pos_ext.r2);
+        self.r_pos_ext.r3.add_assign(&other.r_pos_ext.r3);
+        self.r_pos_int.r0.add_assign(&other.r_pos_int.r0);
+        self.r_pos_int.r1.add_assign(&other.r_pos_int.r1);
+        self.r_pos_int.r2.add_assign(&other.r_pos_int.r2);
+        self.r_pos_int.r3.add_assign(&other.r_pos_int.r3);
+    }
+
     pub(crate) fn reshare<N: Network>(
         self,
         net: &N,

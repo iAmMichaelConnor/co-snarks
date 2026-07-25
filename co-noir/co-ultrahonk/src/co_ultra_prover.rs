@@ -69,8 +69,10 @@ impl<
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
 
+        let phase_start = std::time::Instant::now();
         let oink = CoOink::new(net, state, has_zk);
         let oink_result = oink.prove(&mut proving_key, &mut transcript, crs, verifying_key)?;
+        crate::phase_timing("oink", phase_start);
 
         let circuit_size = proving_key.circuit_size;
         let log_dyadic_circuit_size = proving_key.circuit_size.next_power_of_two().ilog2() as usize;
@@ -80,12 +82,17 @@ impl<
             log_dyadic_circuit_size
         };
 
+        let phase_start = std::time::Instant::now();
         let mut memory =
             ProverMemory::from_memory_and_polynomials(oink_result, proving_key.polynomials);
         memory.gate_challenges = Self::generate_gate_challenges(&mut transcript, virtual_log_n);
+        crate::phase_timing("memory_handoff", phase_start);
 
+        let phase_start = std::time::Instant::now();
         let decider = CoDecider::new(net, state, memory, has_zk);
-        decider.prove(circuit_size, crs, transcript, virtual_log_n)
+        let proof = decider.prove(circuit_size, crs, transcript, virtual_log_n);
+        crate::phase_timing("decider_total", phase_start);
+        proof
     }
 }
 
