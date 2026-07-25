@@ -43,11 +43,14 @@ noirc-artifacts = { version = "1.0.0-beta.22", git = "https://github.com/noir-la
 ark-bls12-377 = "0.6"
 ark-bls12-381 = "0.6"
 ark-bn254 = "0.6"
-ark-ec = { version = "0.6", default-features = false }
+# parallel/asm were ALREADY active via feature unification from other deps
+# (verified with cargo tree 2026-07-24); declared explicitly here so they
+# survive dependency changes rather than riding on an accident.
+ark-ec = { version = "0.6", default-features = false, features = ["std", "parallel"] }
 ark-groth16 = { version = "0.6" }
-ark-ff = "0.6"
+ark-ff = { version = "0.6", features = ["parallel"] }
 ark-grumpkin = "0.6"
-ark-poly = "0.6"
+ark-poly = { version = "0.6", features = ["parallel"] }
 ark-relations = "0.6"
 ark-serialize = { version = "0.6", features = ["derive", "std"] }
 ark-std = { version = "0.6", features = ["std"] }
@@ -97,6 +100,16 @@ taceo-circom-types = { path = "vendor/taceo-circom-types" }
 taceo-ark-serde-compat = { path = "vendor/taceo-ark-serde-compat" }
 
 # This profile can be used for CI in pull requests.
+# Debug symbols in release: costs binary size only (no codegen change), and
+# makes release binaries profileable (samply/perf symbolication).
+# NOTE (measured 2026-07-24): lto fat/thin and codegen-units=1 were tried and
+# DROPPED — prove-time delta was inside the +/-2-3% host-noise floor on a
+# 3-way interleaved A/B (sha256 witness-fed plaindriver, 6-8 pairs), while
+# fat LTO cost a ~4.5 min link per rebuild (vs ~40 s). Revisit only if
+# profiling ever shows cross-crate call overhead on the hot path.
+[profile.release]
+debug = true
+
 [profile.ci-dev]
 opt-level = 1
 inherits = "dev"
