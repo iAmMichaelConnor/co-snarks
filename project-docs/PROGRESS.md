@@ -1573,3 +1573,464 @@ benchmark overnight after explaining its worth + a WAN-latency estimate.
 - **STILL OPEN for Mike:** F1 (cross-deployment seed reuse — VK/ABI-breaking,
   design in ch.17 §7) awaiting greenlight; F3/F6; the small stale-doc pass;
   5.1d TS port (ch.20, fresh session). None blocking.
+
+## Session 14 — 2026-07-24 morning — PLAN 0.5 bench RAN CLEAN overnight; results baked into the explorer (V7 done)
+
+- **The overnight bench ran, clean and fresh**: launcher waited out a busy
+  box (~1.3 h of load-83–178 readings from the session-13 parallel work),
+  got its 2×5-min quiet checks (load 20→16), ran 22:11:39→22:46:19 UTC
+  (2026-07-23), `BENCH_DONE rc=0`, NOT contended. Dataset (outside the
+  repo by design — hence a clean git tree): `~/bench-0_5-results/2026-07-23/`
+  (manifest.json / results.csv / site-anchors.json / RESULTS.md / logs).
+  Provenance: co-snarks `101544e8`, bb v5.0.1 source-built oracle,
+  nargo beta.22, 16 threads/party, loopback, medians of 3.
+- **Headline numbers (ZK, medians)** — and the headline FINDING: REP3÷bb is
+  NOT a constant factor, it tracks gate COMPOSITION, not circuit size:
+  | circuit | bb | plaindriver | REP3 3-party | REP3÷bb |
+  |---|---|---|---|---|
+  | poseidon (2^11) | 0.170 s | 0.671 s | 1.026 s | **6.0×** |
+  | bb_sha256_compression (2^15) | 0.355 s | 5.337 s | 156.067 s | **439.6×** |
+  | recursion_zk (2^19.4, 704k rows) | 4.493 s | 89.830 s | 133.773 s | **29.8×** |
+  sha256's boolean-heavy gates are disproportionately expensive in
+  arithmetic MPC — the REP3 cost curve is genuinely non-monotonic in gate
+  count (sha256 at 2^15 costs MORE than recursion_zk at 2^19.4). Other
+  reads: ZK overhead is small (1.00–1.13× per circuit — REP3 proving is
+  already randomness-heavy); split/witext/verify are noise next to prove
+  (≤0.35 / ≤0.55 / 0.015 s); plaindriver (ch. 23's target) is 3.9–20×
+  slower than bb single-prover.
+- **Shamir cells: all SKIPPED (rc=1), by design not by crash** — co-noir's
+  `split-input` is REP3-only (`co-noir.rs:1078`). Bench v2 fix: split as
+  REP3 then `translate-witness` REP3→Shamir. Recorded in the explorer as
+  modeled (REP3×1.05), badge unflipped.
+- **Aggregator bug found + fixed** (`scripts/bench-to-site.py`,
+  uncommitted): split/witext rows are stamped `zk="-"` in the CSV but were
+  looked up under `zk=nonzk/zk` → emitted as null/`—` despite being
+  measured. Fixed the lookup, regenerated site-anchors.json + RESULTS.md
+  from the untouched results.csv (their 08:28 UTC mtime is this
+  regeneration; the raw data is last night's).
+- **Explorer V7 DONE, same URL** (ch. 22 §7 V7 ticked): CIRCUITS/ANCHOR
+  block now carries the measured medians (all three circuits × bb/plain/
+  REP3 × zk/nonzk + REP3 phase times); the old constant-factor model
+  (rep3=2.0×bb, zkMul 1.18) REPLACED by log-log interpolation THROUGH the
+  measured anchors per config×zk-mode (verified: model at every anchor
+  reproduces the measured value exactly); comms model now adds only
+  above-loopback latency (measured loopback points already contain loopback
+  comms); ◆ markers on every exactly-measured point; assumptions table +
+  footer rewritten (measured rows cite the bench, Shamir/plain-nonzk/R
+  stay modeled). Antipodal sanity check: model gives ~5.1 min/proof at
+  RTT 280 ms — inside session-13's 2–9 min WAN estimate.
+- Uncommitted (Mike's word required): `scripts/bench-to-site.py` fix,
+  ch. 22 V7 tick, ARTIFACTS.md note, this entry.
+
+## Session 14 (cont.) — 2026-07-24 — bench v2 built + smoked (R measured!); ch. 24 opened; lit survey in; ch. 23 B1 refuted by measurement
+
+Mike's asks this burst (all tracked in PLAN 0.5 v2-block + new PLAN Phase 6):
+results in-repo; measure comms rounds R ("is R constant?"); theory-driven
+circuit features (read the UH prover code, not just guesses); bench-runtime
+optimisation w/o accuracy loss; size sweeps (poseidon 2^11/2^17..2^20,
+sha256 2^15..2^20, 10-min cell cap); start optimising before the re-run;
+new plan for optimising the co-snarkification itself (parity + sound
+sharing preserved, NO cheating); property-preservation tests; batching-vs-
+sequential question; lit survey.
+
+- **Bench v2 pipeline WORKS end-to-end** (smoke on poseidon, scratchpad):
+  v1's `bench-0_5.sh` rewritten — in-repo `bench-results/<date>/`,
+  netstats/ + features/ capture, ascending size sweeps with 600 s timeout
+  pruning + 2 reps ≥2^18, fair baselines (bb `vkgen` split out + `-k`;
+  plaindriver witness-fed via `--input`+`--witness` — needed both, `input`
+  is a required field; old solve+prove kept as `solveprove` phase), dead
+  Shamir cells dropped (v2.1 = translate-witness), REP3 VK hoisted out of
+  the rep loop, `BENCH_CIRCUITS` smoke override. bench-to-site.py v2:
+  netstats R/bytes aggregation, features join, new phases; regression-
+  tested against the v1 dataset (identical medians, nulls where v2-only).
+- **mpc-net message counters + CLI stats LANDED** (agent; fast-check PASS,
+  all 5 backends): `ConnectionStats` gains per-peer msg counts;
+  `CO_NOIR_NET_STATS_JSON` dumps per-phase JSONs from generate-witness /
+  build-and-generate-proof / translate-* / etc. `circuit-info` subcommand
+  extended (was plain-text): block composition, lookup gates/tables/table
+  rows, opcode histogram, witness zero-fraction. CAVEAT found: co-noir CLI
+  uses TCP, NOT the TLS section in party*.toml (ignored by this binary).
+- **FIRST MEASURED R (poseidon 2^11, loopback)**: witext R=366 (14.6 KB);
+  prove R=319 nonzk / 393 zk (~6.3 MB party-0 sent; ZK delta ≈74 rounds =
+  SSIPA/masking). 319 ≈ 10 relations × 11 sumcheck rounds + grand-product/
+  fold/open — confirms the sequential-per-relation reshare structure in
+  `co_sumcheck_round.rs` and sizes L1's headroom (~100 rounds). WAN: at
+  140 ms one-way, prove-ZK = 393×0.14 ≈ 55 s latency floor for ANY small
+  circuit. Mike's batching q answered in ch. 24 §2: FS forces phase order
+  only (challenges are computed locally from the public transcript);
+  sumcheck rounds are the one inherent sequential chain; within-phase is
+  batchable — TACEO's own `TACEO TODO could batch` markers (~25 sites)
+  inventoried.
+- **Ch. 24 written + indexed** (MPC-path optimisation): REP3 op price
+  list from code; round DAG; sha-440× hypotheses H1–H4 ranked with
+  discriminating measurements (H1 REFUTED for oink logderiv — properly
+  batched, 2 rounds; still open for sumcheck relation path + skip-parity
+  audit); levers L1–L7; §5 property tests (comms-floor asserts off the new
+  msg counters, share re-randomization invariance → identical non-ZK
+  bytes, view-scan tripwire); §6 lit survey.
+- **Lit survey (agent, full report in its transcript; distilled ch. 24
+  §6)**: TACEO Apr-2025 measured 10–20× MPC-sumcheck gain "chiefly from
+  round reduction" (our tree post-dates it; R=319 is the leftover);
+  no published lookup-vs-arithmetic overhead split exists — our
+  6×/29.8×/439.6× composition finding is ahead of the public literature;
+  MPlookup (2026/844) + eprint 2025/1388 corroborate lookups-as-pain;
+  parity-safe leftovers = Montgomery-tree batched openings, mask
+  pipelining, edaBit witext conversions; transcript-changing tricks
+  parked for a parity-relaxed future.
+- **Ch. 23 B1 REFUTED + corrected in place**: arkworks `parallel` (+ ff
+  `asm`) were ALREADY ON via feature unification (cargo tree verified;
+  explicit-features edit rebuilt nothing). Features now pinned explicitly
+  in workspace Cargo.toml (drift protection, no behavior change). Fair
+  witness-fed sha256 plaindriver baseline: ~4.67 s (v1's 5.34 included
+  ~0.6 s witness solving) vs bb 0.36 s — the gap is co-ultrahonk's own
+  single-threaded passes (Phase C) / allocation (Phase D). Profile is now
+  mandatory before the next lever (samply installing; box must also be
+  quiet — variants agent still compiling poseidon_2e20, K=743).
+- All 9 size variants landed + verified on-target (poseidon_2e17..2e20,
+  sha256_2e16..2e20; e.g. poseidon_2e20 rows 1,047,632 → dyadic 2^20).
+  Final runtime cuts before launch (Mike's ask, checked): skip
+  `nargo execute` when the witness exists (minutes/big circuit), non-ZK
+  plaindriver only <2^18, solveprove only on base circuits; re-smoked
+  green (33 rows, 0 failures). **Bench v2 ARMED 09:52 UTC 2026-07-24**
+  (launcher waiting for quiet; ~2.5–3.5 h run; watcher armed on
+  BENCH_DONE). Results → `bench-results/2026-07-24/`.
+- Data enrichment pass (Mike: "gobble up all data for the site"), landed
+  BEFORE the run started (launcher was still idle-waiting; verified with a
+  non-self-matching pgrep): per-cell **peak RSS + CPU%** (new CSV columns
+  max_rss_kb/cpu_pct via /usr/bin/time; MPC cells report max-RSS over the
+  3 parties, per-party wall/RSS/CPU% in `mem/` → party-skew data);
+  **artifact sizes** per circuit (`features/<c>.artifact-sizes.json` —
+  smoke shows proof = 14,656 B identical across bb/plaindriver/REP3);
+  manifest + kernel + cpu_model; aggregator + RESULTS.md updated (Peak
+  memory line, rss_mb fields, artifact_sizes in site-anchors.json).
+  Smoke 5: 0 failures, all new fields populated.
+
+**⚠ 12:05 UTC: bench v2 DISARMED before ever starting (Mike).** The
+launcher's load<25 quiet-gate never passed — and the reason reframes the
+methodology: mike-box is a sysbox on a SHARED mainframe, so /proc/loadavg
+and fork counters are HOST-wide; the "load 70–114, ~1,000 forks/s with no
+visible processes" I chased for an hour was other tenants. Quiet time may
+simply never come. Bench v2 relaunch needs a gate rethink first (see the
+runbook addendum below). Launcher + BENCH_DONE watcher both killed; all
+script/aggregator enrichments (progress+ETA logging incl.) are in the
+tree, smoke-tested, ready.
+
+### NEXT STEPS (written down in case of context loss — the runbook)
+
+**Step 0 (NEW, before any relaunch) — replace the launcher's quiet-gate:**
+load average is host-wide and useless here. Options: gate only on OUR
+processes (no compare/cargo/nargo/party procs of ours), run at a fixed
+time regardless and stamp host load into the manifest per-cell
+(loadavg before/after each cell as noise columns), raise reps + rely on
+medians, and prefer same-window relative ratios (REP3÷bb) over absolute
+seconds. Decide with Mike when to actually run.
+
+**On BENCH_DONE (watcher fires; results in `bench-results/<date>/`):**
+1. Read `RESULTS.md` + `launcher.log` (CONTENDED? rc? timeout-pruned rows
+   rc=124?). Sanity: medians vs v1 for the 3 base circuits (bb/REP3 cells
+   should reproduce v1 within noise; plaindriver prove is now witness-fed
+   so LOWER than v1 — expected, not a regression).
+2. The two headline questions: **R vs size** (netstats: is prove-R ~
+   10·log n + const across the poseidon sweep? sha vs poseidon at equal
+   dyadic?) and **features vs time** (join features/*.circuit-info.json:
+   does lookup_gates+table_rows predict the REP3÷bb ratio across the
+   sweep?). Append findings HERE + ch. 24 §3 (which hypothesis won).
+3. Bake into the explorer: `site-anchors.json` now has many more anchors +
+   net data — extend the ANCHOR/CIRCUITS block (same file
+   `/tmp/claude-1011/-mnt-user-data-mike-co-snarks/54a7d64f-f266-4b16-8a50-4d55433d7a15/scratchpad/cosnark-explorer.html`,
+   pass url to keep https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa;
+   consider swapping the modeled R slider default to measured R).
+4. Ch. 22 §5a/V7 note the v2 dataset; PLAN 0.5 → mark v2 RAN.
+
+**Then (PLAN Phase 6, order per ch. 23/24):**
+5. Ch. 23 clean Phase A on the now-idle box: per-phase wall attribution
+   (oink/sumcheck/shplemini/PCS coarse timers or tracing spans) × 3 base
+   circuits + samply with symbols (release now has debug=true); pick
+   Phase C items by share. Then LTO(+cg1) and target-cpu=native as two
+   separate gated units (fast-check parity + before/after sha256 timing).
+6. Ch. 24 L1 (round batching, TACEO TODOs) in a worktree, one batching
+   per gated change; T3 share re-randomization test alongside (cheap,
+   fences the work). T2 comms-floor thresholds: derive from tonight's
+   netstats medians (that data now exists).
+7. Bench v2.1 backlog: Shamir via REP3-split + translate-witness;
+   netem latency sweeps (distance axis → measured); rerun after each
+   landed optimisation unit (PLAN 6.4).
+
+**Afternoon burst (12:00–13:00): dataset infrastructure + parallel units.**
+- Bench v2 DISARMED pre-start (Mike; shared-mainframe quiet-gate is dead —
+  see 12:05 note + memory update). Absolute seconds stay primary; every
+  CSV row now stamps `host_load1m` (smoke-verified at host load 86–88).
+- Mike's measurement-audit table → ch. 22 **§5b** (every measured quantity,
+  unit, mechanism, ✅/⏳ status — grep-verifiable against the script).
+- **Circuit features captured for all 12 matrix circuits WITHOUT the bench**
+  (`bench-results/circuit-features-2026-07-24/`): sha256 = ~70% lookup
+  gates + constant 33,944 table rows (dyadic 2^16 with tables — v1's
+  "2^15" label was pre-table, explorer to be corrected at the v2 bake);
+  poseidon variants pure arithmetic, witness ~74% zeros; recursion_zk =
+  the delta-range+aux+elliptic mix, no plookup. The sha 2e16→2e20 sweep
+  scales lookup gates 17× at CONSTANT table rows — clean natural
+  experiment separating the two lookup-cost suspects.
+- **`bench-results/bench.sqlite`** (Mike: "store in a db for later
+  visualisation"): `scripts/bench-ingest.py` rebuilds it idempotently from
+  all run dirs (+ legacy v1). Tables runs/cells/medians/netstats/features/
+  artifact_sizes + `overhead` view (REP3÷bb joined with composition).
+  Validated: medians == v1 RESULTS.md exactly. Gitignored (derived).
+- **`bench-results/README.md`** = the pick-up-here doc (layout, schema,
+  quick-start, shared-mainframe rules, current state).
+- Launched in parallel worktrees: T3 share-re-randomization test
+  (ch. 24 §5) and L1 grand-product round batching (ch. 24 §4).
+- **T3 LANDED in main tree** (~13:20): test green in 4.3 s, red-validated
+  3 ways (decisive: XOR a share byte into the serialized proof → fails at
+  the exact target assert). ch. 24 §5 T3 marked DONE. API finding:
+  `split_witness_rep3` hard-codes thread_rng() — unseedable.
+- **L1 validated on the WRONG BASE — being re-ported.** The agent's
+  result is strong: grand-product comms 16 rounds → 8 (helper made
+  communication-free + one concatenated mul_many for the 4 independent
+  products; num/denom pair merged; the two prefix-product chains through
+  the existing array_prod_inner_mul_many utility), measured −8 ring
+  rounds −2 open rounds, proof bytes identical, gates green — BUT the
+  worktree harness based it on Taceo's origin/main (86340f52), not
+  mc/update-co-noir: our co_oink differs by ~95 lines (ZK-aware gp_start/
+  final_active_wire_idx structure) and its parity gates prove nothing
+  about our tree. Port agent relaunched on a manually-created worktree
+  off 53801f59 with explicit base verification. TRAP RECORDED in memory
+  (worktree-agents-wrong-base): always check `isolation: worktree` base
+  before trusting/transplanting. T3 was audited for the same trap — its
+  patch is additive, applied cleanly, and its gates were re-run in OUR
+  tree before landing, so it stands.
+- Agent's bonus finding for later: array_prod_inner_mul_many's two
+  internal mul_many calls are independent → one more −1 round available;
+  left for a follow-up unit because it's shared with co-acvm's is_zero.
+
+**Late-afternoon burst (13:30–15:00): L1 LANDED on our branch; B2/B3 measured out; Phase A delegated.**
+- **L1 port LANDED in main tree**: re-implemented against 53801f59
+  preserving our ZK-aware gp_start/final_active_wire_idx structure; gates
+  on OUR branch: plain 2/2, rep3+shamir 41/41 (incl. T3), rep3::poseidon
+  proof-byte KATs 4/4, recursion_vk_kat 1/1, then 7/7 after transplant
+  (with-LTO build). compute_grand_product comms: **16 → 8 rounds**,
+  correlated-randomness totals unchanged. ch. 24 L1 entry updated.
+- **B2 (LTO) MEASURED + DROPPED**: byte-parity green first (compare.sh
+  poseidon+sha vs bb oracle, 0 errors, LTO binary); then interleaved A/B
+  (8 pairs fat-vs-none: "−5%" at load 80–135) and a calmer 3-way (6
+  triples none/thin/fat: ALL within ±2% — noise floor; the −5% was
+  noise). Cost side: fat link ≈ 4.5 min/rebuild vs ~40 s. Flags removed,
+  measured-rationale note left in Cargo.toml, debug=true kept. ch. 23 B2
+  updated in place. **B3 (target-cpu) deprioritised**: ark asm is inline
+  asm independent of target-cpu; after B1+B2 both refuted, revisit only
+  if the profile shows generic field-code leaf time. Ch. 23's whole
+  Phase-B shelf is now empty-by-measurement — the gap is algorithmic
+  (Phase C), exactly what the §A-prelim ~68%-parked-workers sample said.
+- **Phase A delegated** (agent, main tree, docs off-limits): check
+  existing tracing spans first; else env-gated permanent phase timers
+  (CO_NOIR_PHASE_TIMINGS=1) in the plain path only; 3 circuits × 3 reps,
+  loadavg stamped; deliverable = per-phase % table + parallelisation
+  order. Results pending — do not assume.
+- LTO A/B binaries kept in scratchpad for reference; main tree rebuilt
+  no-LTO (1m05s), consistent state.
+- **Phase A MEASURED (agent; ch. 23 §A table now authoritative):
+  sumcheck = 60.5% (sha 2^16) / 54.0% (recursion 2^20, 26 s of 48.3 s)
+  of plain proving; oink second (25.5% at 2^20); shplemini 6%; opening
+  MSM ~1%; small circuits bound by the 0.33 s JSON parse (61% of
+  poseidon!).** Permanent env-gated timers landed
+  (`CO_NOIR_PHASE_TIMINGS=1`, stderr, zero effect otherwise; parity
+  re-verified): co-ultrahonk lib.rs + co_ultra_prover.rs +
+  co_decider_prover.rs + plaindriver.rs. Phase-C order fixed by
+  evidence: C1 sumcheck edge loop → C2 oink (grand-product prefix scan /
+  inverse batches; its MSMs already parallel) → C3 shplemini batching.
+- **C1 agent LAUNCHED** (main tree, sumcheck files only, co_oink
+  off-limits): rayon the per-edge relation accumulation for the plain
+  driver, exact tree-reduce (field sums exact ⇒ bytes provably stable),
+  ZK row-disabling/skip logic preserved per-row; gates = plain KATs,
+  rep3+shamir suite, recursion VK KAT, phase-timer before/after on
+  sha+recursion. Results pending — do not assume.
+
+**Evening burst (Mike: "fuck yeah, keep optimising" + test discipline):**
+- fast-check re-run on the full landed stack (T3 + L1 + phase timers):
+  **PASS, 1.52 s inner loop** — the discipline holds after each unit.
+- **Test-tier convention (Mike's fast/slow ask), applied henceforth:**
+  every optimisation unit ships with tests that are (a) reachable by
+  fast-check's existing filters and sub-5 s in-process → FAST tier, or
+  (b) marked #[ignore] with a comment naming the suite that runs them
+  (acceptance-parallel/full sweep) → SLOW tier. This session's additions
+  are all FAST: T3 rerandomization (~1 s, rides the rep3::poseidon
+  filter), C1's thread-count-invariance test (requested from the agent
+  mid-flight: 1-thread vs 16-thread scoped rayon pools must yield
+  byte-identical plain proofs — catches nondeterministic-reduction bugs
+  structurally, not just for KAT-pinned circuits). T2 comms-floors stay
+  queued until bench v2 netstats set the thresholds.
+- **JSON-parse quick-win agent LAUNCHED** in parallel (disjoint files:
+  parsing path only, co-ultrahonk off-limits): root-cause the 0.33 s
+  read_circuit (61% of small-circuit total; classic suspect: unbuffered
+  serde_json::from_reader), fix only if accidental, add a fast parsing
+  unit test. Results pending — do not assume.
+- Optimisation queue after C1: C2 oink internals (grand-product prefix
+  scan + inverse batches — now both round-batched by L1 AND
+  parallelisation targets), C3 shplemini batching, ch. 24 L1 follow-up
+  (−1 round in array_prod_inner_mul_many, shared with co-acvm is_zero).
+- **C1 LANDED: sumcheck ~8.2× on recursion 2^20 (32→4 s), prove_total
+  ~2.5× (52→20.5 s); sha 2^16 sumcheck ~6.2×, total ~2.8×.** Hybrid
+  design (plain: per-chunk build+accumulate, exact-addition merge; MPC:
+  order-preserving concat reproduces the sequential batch exactly —
+  scheduling untouched). Full record: ch. 23 §C ledger. Gates green in
+  MY tree after landing: fast-check PASS + thread-invariance test 0.32 s.
+  C1 agent's fine split of sumcheck internals also recorded (relation
+  accumulation 16.3 s vs build 1.1 s pre-change). C2 (oink) agent
+  launched at the new dominant phase (~12.5–14.5 s: plain.rs elementwise
+  ops, logderiv/grand-product row loops; measure-first brief). Sumcheck
+  residual ~4 s (partially_evaluate) = C1b candidate.
+- **JSON-parse fix LANDED (~80×: read_circuit 0.33 s → 0.004 s).** Root
+  cause was one read(2) PER BYTE (unbuffered File into
+  serde_json::from_reader; strace 317,557 syscalls → 26). One-function
+  fix in noir-types (`read_to_end` + `from_slice`), mends every CLI call
+  site incl. MPC party startup. Fast unit test added (~0 s,
+  `noir-types tests::parses_program_artifact` + 810-byte fixture — note
+  fixture lives in test_fixtures/ because target/ is gitignored).
+  Gates: plain KATs 3/3, fast-check PASS. ch. 23 §A note updated.
+- **C2 LANDED: oink 12.33 → 2.54 s (4.9×); prove_total 20.0 → 12.2 s
+  (1.64×, conservative — after-reps at loadavg 71–106 vs before 12–20).**
+  The root cause deserves its headline: plain `inv_many*` did ONE FULL
+  EXTENDED-EUCLID INVERSION PER ELEMENT, serially — ~3M inversions
+  ≈ 9.5 s of oink. Now ark_ff::batch_inversion (Montgomery, parallel):
+  batch_invert ~300×, array_prod 14.7×. Plus plain.rs elementwise ops →
+  rayon (helps all phases); oink row loops par-mapped order-preservingly
+  (safe for all drivers — pure local ops; L1 structure preserved);
+  permanent oink sub-timers. REP3/Shamir 0-line diff. Kept serial:
+  RNG streams (thread-invariance!), prefix scans, MSMs (already
+  parallel). New fast test batched_inversion_matches_serial_reference
+  (0.05 s). Gates green; re-verified in main tree (fast-check PASS).
+  Full record ch. 23 §C ledger. Note for ch. 24: the SAME serial-inv_many
+  finding suggests checking whether the REP3 driver's local inversion
+  work shares this class of issue.
+- **C1b+C3 LANDED** (decider residuals): prove_total 10.2 → 8.0 s at
+  2.5× higher after-load (matched-load rep: 7.80 s); partially_evaluate
+  2.8×, shplemini batched_polys 6.5×, batched_quotient 3.0× with the
+  Q/ν accumulation order kept exactly (bit-identical); size-gated
+  parallel slice ops in the polynomial types. No new tests needed
+  (elementwise/independent-task only; KATs + thread-invariance cover
+  it). fast-check re-verified PASS by coordinator after landing.
+- **DAY PUNCHLINE — plain prover, recursion_zk 2^20: ~52 s → ~8 s
+  (~6.5×), proofs byte-identical throughout; gap to bb now ~1.8×
+  (was ~11×).** Remaining profile: MSMs (parallel already), RNG
+  (serial by design), fixed pipeline costs → ch. 23 Phase D is optional
+  polish now. Every unit gated: fast-check PASS after each landing;
+  fast-tier tests added today: thread-invariance 0.33 s,
+  batched-inversion reference 0.05 s, artifact-parse ~0 s, T3
+  rerandomization ~1 s. MPC path: L1 −8 rounds landed; ch. 24 notes the
+  serial-inversion audit lead for the REP3 local paths.
+- **Still open at close: bench v2 run (Mike's go) — now doubly valuable:
+  it measures the post-optimisation baseline (R post-L1, times post-C*);
+  commits (Mike's word); C2-residual leads (RNG/MSM); ch. 24 L2–L7;
+  T2 comms floors (needs bench netstats); 5.1d TS port (fresh session).**
+
+**Session hygiene:** tree has ~30 modified/untracked files, ALL
+uncommitted (Mike's word required; list in this entry + git status).
+New-session briefs Mike may run in parallel: 5.1d TS port (ch. 20,
+monty-hall repo, no collision); L1 worktree (item 6). Both must avoid
+heavy builds while the bench runs (check `pgrep -f bench-0_5`).
+
+## Session 15 — 2026-07-25 — regression audit of the optimisation stack: all fast gates green; T2-lite comms fence landed; benchmarking-practice survey in
+
+Mike's asks: was yesterday's work well-tested / write more tests where
+useful; run the fast suite (NO long tests); enumerate remaining
+optimisation + benchmarking tasks, taking inspiration from public
+SNARK/co-SNARK benchmarking; judge commit-worthiness; think about
+explorer-site enhancements.
+
+- **Full fast tier re-verified on the landed stack: PASS.**
+  `fast-check.sh --all-fast`: plain poseidon KATs incl. thread-count
+  invariance (2.1 s), 11 security regressions (2.6 s), REP3+Shamir
+  poseidon incl. T3 (15.1 s), and the live bb cross-verify — **VK +
+  proof byte-identical to the source-built v5.0.1 oracle** on the fully
+  optimised code. Crate-local unit tests (batched-inversion reference,
+  artifact-parse) also green.
+- **fast-check coverage gap FIXED**: the two crate-local unit tests were
+  unreachable via `-p tests` — tier 1 now also runs
+  `-p co-noir-common --lib mpc::plain::tests` and
+  `-p noir-types tests::parses_program_artifact` (<0.1 s each).
+  Re-ran: PASS.
+- **T2-lite comms-message fence LANDED** (agent, main tree; coordinator
+  re-ran gates independently):
+  `poseidon_prove_comms_message_fence_poseidon2sponge` (rep3.rs, fast
+  tier, rides the rep3::poseidon filter). Rationale: proof-byte KATs
+  pass regardless of round count, so L1's 16→8 win was unfenced. Pins
+  exact per-party (sent, recv) totals — pk-gen (116,116)×3 both nets,
+  prove (199,199)×3 net0 — determinism confirmed across runs; proof
+  bytes cross-checked vs the plain KAT (anti-shortcut). ch. 24 §5
+  updated. rep3::poseidon suite 6/6 twice + once by coordinator.
+- **Test gaps recorded, not yet closed**: thread-invariance covers only
+  poseidon (pure arithmetic) — a slow-tier (#[ignore]) invariance test
+  on recursion would exercise C1's lookup/elliptic/aux relation paths;
+  ZK path can't be byte-fenced (masking RNG unseedable) — covered by
+  verify-accept + tamper tests only; T4 view-scan still open; T2-proper
+  (full-matrix floors) still wants bench v2 netstats.
+- **Benchmarking-practice survey DONE** (agent, 15 sources, full cited
+  report in the agent transcript; ranked backlog distilled to ch. 22
+  §5c). Headlines: our metric set already covers the ZKProof cost
+  taxonomy incl. rounds (which single-prover benches omit); NOBODY
+  publishes a LAN/WAN sweep for co-SNARKs (incl. TACEO) — netem + the
+  predict-then-validate model (zk-Bench pattern) would be first;
+  Scalable-coZK's netem tiers adopted as our future tier definitions;
+  cheap adds: bb/plaindriver verify phases, $-cost + TDP-energy columns,
+  gates/sec normalization, cost-accounting disclosure, security-model
+  caveat; TACEO:Proof's phone/laptop/MPC-network client-latency table
+  is the presentation to emulate for the deployment story.
+- **Commit recommendation given to Mike: YES** — all gates green, tree
+  consistent; propose a series of small logical commits (JSON-parse fix,
+  C1, C2, C1b+C3, L1, tests T3+T2-lite+invariance, phase timers, bench
+  v2 suite + dataset infra, docs) so each unit is individually
+  revertable. Awaiting Mike's word (hard rule).
+
+**Midday burst (Mike's go: "do the commits… run the benchmarks in full… no need to wait for my input"):**
+- **COMMITTED — the whole 2-day optimisation + bench stack, 8 logical
+  commits on mc/update-co-noir** (Mike's explicit word, this burst):
+  `4830a90a` build (ark feature pins + debug symbols, LTO measured out),
+  `b466fb4b` mpc-net msg counters, `521f3672` noir-types parse fix,
+  `ae631122` prover perf C1–C3+L1, `83a8bde9` co-noir CLI
+  instrumentation (size-variant circuit SOURCES rode along here —
+  compiled artifacts stay gitignored), `fb7c3f8b` tests + fast-check
+  wiring, `0a005290` bench v2 suite + dataset home, + the docs commit
+  after this entry. fast-check --all-fast PASS on the committed tree.
+- **Bench suite finished per the §5c survey before launch** (Mike:
+  "if you've built all the measurements you want"): NEW timed verify
+  cells — bb verify per zk-mode (verifier-time baseline, ~19 ms
+  poseidon) and plaindriver `verify_bb` (bb cross-verifies our zk
+  proof; rc=0 IS the verifier-side parity invariant, in-dataset).
+  Launcher quiet-gate physically removed (was still in the script;
+  the 07-24 12:05 decision is now code). Smoke: poseidon 40 rows,
+  0 failures, aggregator + RESULTS.md handle the new phases.
+  Deliberately NOT added pre-run: busy-vs-blocked network-wait split
+  (invasive mpc-net change — queued as v2.1 with Shamir + netem);
+  $-cost/energy/gates-per-sec (pure post-processing, no rerun needed).
+
+### BENCH v2 FULL RUN — LAUNCHED 2026-07-25 (WHERE EVERYTHING LIVES)
+
+Run dir: **`bench-results/2026-07-25/`** (in-repo). Contents when done:
+`manifest.json` (provenance; co_snarks_commit = the docs commit below),
+`results.csv` (every timed cell: circuit,protocol,zk,rep,phase,seconds,
+rc,max_rss_kb,cpu_pct,host_load1m — rc=124 = 600 s timeout, failures
+kept), `netstats/*.json` (per MPC phase × party bytes + msg counts → R),
+`mem/*.time` (per-party wall/RSS/CPU% — party skew), `features/*`
+(circuit-info/bbgates/nargo-info/artifact-sizes per circuit),
+`RESULTS.md` (human-readable — READ THIS FIRST), `site-anchors.json`
+(explorer bake), `launcher.log` (live progress + per-circuit ETA;
+`BENCH_DONE rc=… out=…` sentinel line when finished), `*_r*.log`
+(per-cell command logs). Runner: `scripts/bench-0_5-launcher.sh`
+detached via setsid, its own pid in `bench-results/2026-07-25/launcher.pid`;
+stdout/err → launcher.log. Matrix: 12 circuits × {bb, plaindriver, REP3}
+× {zk, nonzk} × ≤3 reps, ~2.5–3.5 h estimate (post-optimisation, may be
+less). After ingest: `python3 scripts/bench-ingest.py` →
+`bench-results/bench.sqlite` (gitignored, derived).
+
+On BENCH_DONE the standing runbook applies (session-14 NEXT STEPS,
+minus the dead quiet-gate step): 1) RESULTS.md + launcher.log sanity
+(rc≠0? timeout-pruned? medians vs v1 for the 3 base circuits — bb/REP3
+should reproduce v1 within noise; plaindriver + REP3-local-work now
+FASTER than v1 = the optimisation delta, expected); 2) headline
+questions: R vs size (is prove-R ≈ 10·log n + const?), features vs
+REP3÷bb ratio (lookup_gates/table_rows as predictor), NEW: verify_bb
+rc=0 everywhere (parity invariant), verifier times; 3) commit the run
+dir (results are data, committable per the dataset rules); 4) bake
+site-anchors into the explorer (same artifact URL, ch. 22 V6/V7);
+5) T2-proper floors from the netstats medians; 6) ch. 24 H2–H4
+discrimination from the sha sweep. Post-run leads: serial-inversion
+audit of REP3 local paths, L1-followup −1 round, C2 residuals.

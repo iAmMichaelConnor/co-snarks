@@ -59,12 +59,86 @@ Two things must be fixed before any hot-spot claim:
    profile; the §2–§4 levers below are hypotheses ranked by likely impact,
    to be confirmed, not a fixed order.**
 
+### §A results — MEASURED (2026-07-24 afternoon; permanent env-gated phase
+### timers `CO_NOIR_PHASE_TIMINGS=1`, medians of 3, loadavg 23–31/192 cores)
+
+| phase | poseidon 2^11 | sha256 2^16 | recursion_zk 2^20 |
+|---|---|---|---|
+| read_circuit (JSON) | 0.330s / **61%** | 0.1% | 0.0% |
+| build+CRS+PK (pipeline) | 5% | 15% | 11% |
+| oink | 8% | 10% | 12.30s / **25.5%** |
+| **sumcheck** | 17% | 1.28s / **60.5%** | 26.03s / **54.0%** |
+| shplemini batching | 5% | 10% | 6% |
+| opening MSM + rest | ~3% | ~3% | ~1% |
+| **total** | **0.54s** | **2.11s** | **48.3s** |
+
+Reading (Phase C order, by evidence): **C1 = the sumcheck per-edge
+relation-accumulation loop** (54–60% at size; serial today — arkworks'
+parallel feature only threads arkworks-internal ops like MSMs, which is
+why commitment-heavy phases are already cheap). **C2 = oink** (share grows
+7.8%→10.4%→25.5%; its MSMs are already parallel via ark-ec — the serial
+suspects are the grand-product prefix scan and lookup-inverse batches).
+**C3 = shplemini batching** (6% at 2^20, trivially data-parallel).
+NOT worth touching: the final opening MSM (~1%). Bonus finding: small
+circuits are bound by the 0.33 s JSON artifact parse, not proving.
+**→ FIXED same day (~80×: 0.33 s → 0.004 s).** Root cause: `noir-types`'
+`program_artifact_from_reader` called `serde_json::from_reader` on a bare
+unbuffered `File` → one read(2) syscall PER BYTE (strace: 317,557
+syscalls for the 317 KB poseidon artifact; now 26). Fix: `read_to_end` +
+`from_slice`, same signature/error semantics, mends all 6+ CLI call
+sites at once (incl. every MPC party's startup read). New fast unit test
+`noir-types tests::parses_program_artifact` (in-memory fixture
+`co-noir/noir-types/test_fixtures/add3.json`, ~0 s); plain KATs +
+fast-check PASS. Timers live in co-ultrahonk (prove path, driver-generic,
+transcript untouched; zero output unless env set); parity re-verified.
+Residue accounting ≤2.1% everywhere. Detail in PROGRESS s14.
+
+### §A results — earlier same-day preliminary (superseded by the table
+### above; kept for the record: samply 500 Hz, box NOT idle)
+
+- **The prover is serial-dominated.** Process-wide, ~68% of samples sit in
+  libc `syscall`/`sched_yield`/clone paths = 16 rayon workers parked or
+  spinning while one thread works (their arkworks `parallel` pool exists —
+  B1 note above — but co-ultrahonk's own passes rarely feed it). Amdahl
+  says Phase C (parallelise the prover's passes) is the primary lever,
+  matching bb, which hand-threads these loops.
+- Main-thread hot leaves (sha256, witness-fed, ZK): glibc memmove/memcpy
+  cluster (large-vector copying — Phase D de-alloc/copy territory),
+  `partially_evaluate_init` (sumcheck folding), `ark_ff …Fp::mul`, and
+  `num_bigint::BigUint::mul` (conversions — includes CRS point
+  deserialization; NOT full-file: RSS 21 MB vs 67 MB `bn254_g1.dat`, the
+  subset TODO in `co-noir/src/lib.rs` is already partially moot).
+- Fair witness-fed baselines (this box, 3 runs): sha256 ~4.67 s vs bb
+  0.36 s (~13×); poseidon 0.70 s vs bb 0.17 s (~4×) — v1's plaindriver
+  numbers included ~0.6 s witness solving (bench v2 fixed the boundary).
+- NEXT for a clean §A: idle box; per-phase wall attribution (tracing spans
+  or coarse timers at oink/sumcheck/shplemini/PCS boundaries) for all
+  three circuit sizes; THEN pick C-items by share. LTO/codegen-units and
+  `target-cpu=native` (below) remain untested, each as its own gated unit.
+- Build/profiling change landed meanwhile: `[profile.release] debug=true`
+  (symbols for samply/perf; size-only cost).
+
 ## 2. Phase B — build/feature wins (low risk, likely large, cheap to try)
 
 Grounded in the current tree (verified 2026-07-23):
 
-- **Arkworks is built with `default-features = false` → its `parallel` and
-  `asm` features are OFF.** Consequences, both directly on the hot path:
+**⚠ B1 REFUTED by measurement (2026-07-24, PLAN 6.1):** the
+`default-features = false` reading below missed Cargo *feature
+unification* — other workspace dependencies already switch `parallel`
+(and `asm` on ark-ff) ON for the resolved graph. Verified with
+`cargo tree -p co-noir -i ark-{ec,ff,poly}@0.6.0 -f "{p} {f}"`: all three
+resolve with `parallel,rayon,std` (+`asm` for ark-ff), and adding the
+features explicitly rebuilt nothing (0.5 s no-op build). The features are
+now pinned explicitly in the workspace Cargo.toml so they survive
+dependency drift, but there is NO win here — the plaindriver-vs-bb gap
+(witness-fed sha256: ~4.67 s vs bb 0.36 s, measured 2026-07-24) is
+therefore in co-ultrahonk's OWN single-threaded passes (Phase C) and/or
+allocation churn (Phase D), which the §1 profile must now arbitrate
+before any further lever is pulled. The §1 "measure first" rule wins
+again. The original (wrong) analysis is preserved below for the record:
+
+- ~~**Arkworks is built with `default-features = false` → its `parallel` and
+  `asm` features are OFF.**~~ Consequences, both directly on the hot path:
   - MSM is `P::msm_unchecked` = arkworks Pippenger running **single-threaded**
     (`co-noir-common/src/mpc/plain.rs:271`). Enabling the arkworks `parallel`
     feature threads Pippenger (and FFT) for free — likely the single biggest
@@ -77,17 +151,91 @@ Grounded in the current tree (verified 2026-07-23):
     (workspace Cargo.toml). **Byte-parity must be re-verified** (integer
     Montgomery is exact → identical results expected; asm is the same
     reduction, just faster — but verify, don't assume).
-- **No `[profile.release]` tuning** (only `ci-dev` exists). Add
-  `[profile.release] lto = "fat"`, `codegen-units = 1` (and consider
-  `panic = "abort"` only if it doesn't break the test harness — probably
-  leave it). Typical 10–30% from LTO+cg1 alone.
-- **No `.cargo/config.toml`** → no `target-cpu`. Add `target-cpu=native` for
-  local builds (unlocks the CPU's full ISA incl. the ADX/BMI2 the asm field
-  wants). Note it makes the binary machine-specific — fine for a local oracle-
-  compared build; keep a portable baseline documented. Re-verify parity.
+- ~~**No `[profile.release]` tuning**~~ **B2 MEASURED + DROPPED
+  (2026-07-24):** fat and thin LTO (+cg1) both landed inside the ±2–3%
+  host-noise floor on a 3-way interleaved A/B (no-LTO / thin / fat run
+  back-to-back per pair, sha256 witness-fed, byte-parity gate green via
+  compare.sh vs the bb oracle first) — while fat LTO cost ~4.5 min of link
+  per rebuild vs ~40 s. Flags removed; rationale note left in Cargo.toml;
+  `debug = true` kept (symbols for profiling, size-only). Consistent with
+  B1's refutation: the hot loops (ark asm field mul, within-crate poly
+  passes) don't cross the crate boundaries LTO optimises.
+- **B3 `target-cpu=native` DEPRIORITISED (2026-07-24):** ark-ff's `asm`
+  feature (already active) emits its mulx/adcx/adox path via inline asm
+  regardless of target-cpu, so the expected win is near zero; after B1+B2
+  both measured as no-ops, not worth another 5-min build + noise-floor
+  A/B now. Revisit only if Phase A's profile shows leaf time in generic
+  (non-asm) field code or autovectorisable loops.
 
 These are independent one-to-few-line changes; land + measure each separately
 so the attribution is clean.
+
+### §C results ledger (2026-07-24 evening)
+
+- **C1 LANDED: parallel sumcheck relation accumulation — sumcheck ~6.2×
+  (sha 2^16) / ~8.2× (recursion 2^20: 32 s → ~4 s); prove_total ~2.8× /
+  ~2.5× (52 s → ~20.5 s).** Design: hybrid — rayon chunks each build
+  their edge batch AND accumulate relations into per-chunk accumulators,
+  merged by exact field addition (bit-identical regardless of thread
+  count; KATs are the referee and stayed green). Plain-driver detection
+  via TypeId (only plain's share type is the raw scalar); MPC drivers
+  keep the OLD schedule by construction (chunks build partial batches,
+  order-preserving concat reproduces the exact sequential batch, one
+  accumulation on the caller thread — mul_many batching, network
+  scheduling, randomness untouched). ZK needed nothing special: all
+  masking randomness is drawn before the rounds; disabled-rows
+  contribution stays sequential; PlainState::fork holds no RNG. Files:
+  co_sumcheck_round.rs, relations/mod.rs (merge_from), types_batch.rs
+  (concat), + new FAST test
+  `poseidon_proof_bytes_thread_count_invariance` (0.33 s: 1-thread vs
+  16-thread scoped pools ⇒ byte-identical proofs — catches
+  scheduling-dependent-reduction bugs structurally).
+- **JSON-parse fix** (see §A note): read_circuit ~80× — every CLI call
+  site incl. MPC party startup.
+- **C2 LANDED: oink 12.33 s → 2.54 s (4.9×) on recursion 2^20;
+  prove_total 20.0 s → 12.2 s (1.64×, CONSERVATIVE — the after-reps ran
+  at loadavg 71–106 vs before at 12–20).** Root cause was brutal: the
+  plain driver's `inv_many*` did one full extended-Euclid inversion PER
+  ELEMENT, serially — ~3M inversions ≈ 9.5 s of oink's 12.4 s. Fix:
+  `ark_ff::batch_inversion` (Montgomery batch, chunk-parallel; ark skips
+  zeros = exact leaking-zeros semantics; strict variants keep
+  error-on-zero via parallel pre-scan) — gp/batch_invert ~300×,
+  gp/array_prod 14.7×. Also: plain.rs mul_many/local_mul_vec/
+  mul_open_many → rayon elementwise (speeds ALL phases); logderiv +
+  grand-product row loops → order-preserving indexed par-map (pure local
+  ops for all drivers — no TypeId gating needed; operand order, values,
+  MPC randomness consumption unchanged; L1's round-batching structure
+  preserved). Permanent oink sub-phase timers added (env-gated).
+  REP3/Shamir impls verified untouched (0-line diff). Deliberately
+  serial: T::rand paths (RNG-stream order = thread-invariance),
+  prefix scans (inherent, now ~0.2 s), MSMs (already parallel). New
+  FAST test: `batched_inversion_matches_serial_reference` (0.05 s,
+  non-chunk-aligned length, zero handling both variants). Oink residual
+  ~2.5 s = masking-poly RNG + MSM commits — RNG/MSM work, separate scope.
+- **C1b+C3 LANDED: prove_total 10.2 s → 8.0 s (1.27× at 2.5× HIGHER
+  load; a matched-load rep showed 7.80 s).** partially_evaluate 2.8×
+  (parallel across all 41 columns + within-column for the init variant —
+  distinct src/dest buffers make it chunk-safe; in-place variant columns
+  only, overlapping writes), shplemini batched_polys 6.5×, shplonk
+  batched_quotient 3.0× (per-claim quotients parallel, Q/ν accumulation
+  kept serial in the exact original order → bit-identical), plus
+  size-gated (≥2^13) parallel slice ops in shared_polynomial/polynomial.
+  All parallelised paths are purely local for every driver (no
+  net/state/RNG in signature) — no TypeId gating needed. Kept serial:
+  factor_roots prefix recurrence (parallel across claims instead),
+  in-place halving overlap, Horner within one eval (parallel across
+  evals), Q/ν order, transcript. No new tests needed (elementwise/
+  independent-task only — KATs + thread-invariance are the coverage;
+  all green, fast-check PASS re-verified by coordinator).
+
+**Day punchline (2026-07-24): plain prover recursion_zk 2^20
+~52 s → ~8 s (~6.5×), byte-identical proofs throughout.** Remaining
+profile is MSM commits (~1.5 s, already parallel — algorithmic work
+only), masking-poly RNG (~0.6 s, serial by thread-invariance design),
+compute_univariate ~2.3 s (already parallel), pipeline fixed costs.
+bb comparison at same circuit: ~4.5 s → the gap is now ~1.8×, down
+from ~11×. Phase D (profile-directed deeper work) is now optional
+polish, not a mission.
 
 ## 3. Phase C — parallelise the plain prover (algorithmic)
 

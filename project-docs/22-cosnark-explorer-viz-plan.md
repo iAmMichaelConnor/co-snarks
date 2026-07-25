@@ -139,13 +139,138 @@ run directory holds:
 | `RESULTS.md` | human-readable per-circuit tables + the provenance header + REP3÷bb ratio | read first; the legible record |
 | `launcher.log` | idle-wait + run progress; `BENCH_DONE` line at the end | ops trail |
 
-**Re-run:** `BENCH_OUT=~/bench-0_5-results/$(date +%F) bash scripts/bench-0_5.sh`
+**v2 (2026-07-24, Mike's asks):** runs now live **in-repo** at
+`bench-results/<date>/` (visible in `git status`, committable with the code
+that produced them). New per-run content: `netstats/` (per phase × party
+JSONs: sent/recv bytes AND message counts from mpc-net — recv-msgs from the
+busiest REP3 neighbour at party 0 is the sequential-rounds proxy **R**, the
+WAN-latency multiplier; answers "is R constant across circuits?"),
+`features/` (per circuit: `co-noir circuit-info` — trace-block composition,
+lookup gates/tables/table rows, witness zero-fraction — plus `bb gates`,
+`nargo info`), size sweeps (poseidon 2^11→2^20, sha256 2^15→2^20, ascending
+with timeout pruning ≥ 600 s/cell, 2 reps ≥ 2^18), FAIR baselines (bb prove
+gets `-k` with VK gen timed separately as `vkgen`; plaindriver prove is
+witness-fed via `--witness`, the old solve+prove kept as phase
+`solveprove` — v1's plaindriver numbers silently included witness solving,
+relevant to ch. 23 §A1), and Shamir cells dropped (v1 proved `split-input`
+is REP3-only; v2.1 = REP3-split + `translate-witness`).
+
+### §5b. EVERYTHING the v2 suite measures (audit table, 2026-07-24)
+
+Compiled from `scripts/bench-0_5.sh` + `bench-to-site.py` as they exist in
+the tree (each row grep-verifiable), after Mike's "tabulate what you're
+measuring, I'm not trusting you." Status: ✅ = implemented + smoke-tested
+today; ⏳ = designed, not yet implemented.
+
+**Per timed cell** (cell = circuit × config × zk-mode × rep × phase; CSV row):
+
+| measurement | unit | how | status |
+|---|---|---|---|
+| **wall-clock (ABSOLUTE seconds)** | s, ms-resolution | monotonic ms clock around the command; the primary column, absolute not relative | ✅ |
+| exit code | rc (124 = 10-min timeout) | captured per cell; rc≠0 excluded from medians, never hidden | ✅ |
+| peak memory | KB (max RSS) | `/usr/bin/time %M`; MPC cells = max over the 3 parties | ✅ |
+| CPU utilisation | % of one core (1600% = 16 cores) | `/usr/bin/time %P` (single-process cells; parallelism-story data) | ✅ |
+| **host load at cell start** | 1-min loadavg (HOST-wide, incl. other mainframe tenants) | `/proc/loadavg` stamped per row — the noise context for the absolute seconds | ✅ |
+
+**Phases timed** (each its own cell): bb `vkgen`; bb `prove` (zk + non-zk,
+VK pre-supplied via `-k` so prove is pure prove); plaindriver `prove`
+(witness-fed, zk + non-zk<2^18) + `solveprove` (base circuits — quantifies
+the witness-solving boundary); REP3 `split`, `witext` (3 parties parallel),
+`prove` (zk + non-zk, 3 parties parallel), `verify`.
+
+**Per MPC phase × party** (files, not CSV rows):
+
+| measurement | unit | how | status |
+|---|---|---|---|
+| bytes sent/received per peer | B | mpc-net counters → `netstats/*.json` | ✅ |
+| messages sent/received per peer | count | same | ✅ |
+| **R — sequential comms rounds** | count | recv-msgs from ring predecessor (protocol is synchronous → bounds the sequential chain); exact, immune to CPU noise | ✅ |
+| per-party wall / peak RSS / CPU% | s / KB / % | `/usr/bin/time` per party → `mem/*.time` (party-skew: how long the fast parties wait) | ✅ |
+
+**Per circuit, once** (`features/` — the composition data for correlating
+against proving time):
+
+| measurement | how | status |
+|---|---|---|
+| finalized rows + dyadic size | `co-noir circuit-info` | ✅ |
+| per-trace-block gate composition (arithmetic, delta-range, elliptic, aux/memory, poseidon2 ext/int, lookup, …) | same | ✅ |
+| lookup gates, #lookup tables, total table rows | same | ✅ |
+| ACIR opcode histogram incl. blackbox calls by name | same | ✅ |
+| public-input count | same | ✅ |
+| witness length + zero-fraction | same (with `--witness`) | ✅ |
+| bb's own acir_opcodes + circuit_size (cross-check) | `bb gates` | ✅ |
+| nargo opcode counts (cross-check) | `nargo info --json` | ✅ |
+| proof / VK / public-input byte sizes per prover | `stat` before cleanup → `artifact-sizes.json` | ✅ |
+
+**Per run, once** (`manifest.json`): UTC start, host, kernel, CPU model,
+core count, thread cap, co-snarks commit/branch/dirty, bb oracle
+path+pin+provenance, nargo version, matrix definition, reps, timeout,
+fairness notes, CSV schema. Plus `launcher.log`: per-circuit progress
+lines with estimates vs actuals, suite ETA. Both ✅.
+
+**Matrix**: {poseidon 2^11, poseidon_2e17…2e20, bb_sha256_compression 2^15,
+sha256_2e16…2e20, recursion_zk 2^19.4} × {bb, plaindriver, REP3} ×
+{zk, nonzk} × 3 reps (2 for ≥2^18), 16 threads/party, loopback, TCP.
+
+**NOT measured (honest gaps, all planned):** Shamir (⏳ v2.1:
+REP3-split + translate-witness); real network latency/distance (⏳ v3:
+netem sweeps — currently the explorer MODELS distance from measured R ×
+assumed latency); malicious-security variants (out of scope, semi-honest
+REP3 per PLAN decision 5); per-cell energy (no RAPL access in sysbox);
+bb peak-RSS for the MPC cells' bb-equivalent phases IS captured, but bb's
+internal phase split (oink/sumcheck/…) is not — that's ch. 23 Phase A
+territory, not the bench's.
+
+**Re-run:** `BENCH_OUT=$ROOT/bench-results/$(date +%F) bash scripts/bench-0_5.sh`
 (or `scripts/bench-0_5-launcher.sh` to idle-wait first). **Compare two
 runs:** diff their `manifest.json` first (same machine/threads/commit?),
 then their `results.csv`/`RESULTS.md`. **Never** compare timings across
 runs whose manifests differ on cores, thread cap, or bb/nargo vintage
 without saying so. The CSV schema is stable; new phases/configs append
 columns-worth of rows, never renumber.
+
+### §5c. External-practice survey (2026-07-25) → measurement/presentation backlog
+
+Agent survey of public SNARK/co-SNARK benchmarking (zkalc, Celer
+Pantheon/zk-Harness, zk-Bench eprint 2023/1503, ZKProof benchmarking
+proposal, ZPrize, TACEO's posts, Ozdemir–Boneh USENIX'22, zkSaaS,
+Scalable-coZK eprint 2024/143 + USENIX'25, MP-SPDZ, Thaler F·B,
+ethproofs.org, zkbenchmarks.com, EF zkEVM team; full cited report in
+PROGRESS session 15). Ranked backlog for US, deduped against §5b:
+
+1. **WAN prediction model from R + bytes, validated by netem later**
+   (zk-Bench's estimator-vs-ground-truth pattern): predict per-phase
+   `compute + R×RTT + bytes/bw` NOW, report prediction error when netem
+   lands — stronger result than "we measured WAN", nearly free.
+2. **Adopt the literature's netem tiers verbatim** (Scalable-coZK:
+   Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN third rung) so our
+   REP3÷bb ratios are directly comparable to published numbers.
+3. **Busy-vs-blocked-on-recv split per party per phase** (critical-path
+   decomposition; instrument + validate on loopback while it's cheap).
+4. **$-cost/proof** (Σ-party instance-price × wall vs 1×bb host) and
+   **energy proxy** (Σ TDP×wall — ethproofs' formula; RAPL unavailable
+   in the sysbox). Board-level columns every public dashboard leads with.
+5. **Gates/sec throughput normalization** per gate-class (derivable
+   today from features × wall — puts both sweeps on one axis).
+6. **bb + plaindriver `verify` as timed phases** (only REP3 verify is
+   timed today) + a "verifier-side overhead = 0, byte-identical VK/proof"
+   line item stated as a measured invariant, not an assumption.
+7. **Cost-accounting disclosure** next to every headline number (ZKProof
+   proposal): which phases are "in" (witext? split? vkgen?). Audit the
+   explorer + RESULTS.md once.
+8. **Security-model caveat next to the overhead ratio** (semi-honest
+   honest-majority REP3 vs single-prover — Ozdemir–Boneh's honest-vs-
+   malicious ~1×/~2× split is the most-cited number in the field; we
+   can't replicate it without a malicious mode, so say so).
+9. **1–2 application-shaped circuits** alongside the synthetic sweeps
+   (EF zkEVM critique of Fibonacci-style benches; Aztec kernel-shaped
+   candidate) — v2.2+.
+10. **Raw-dataset export** from the explorer (CSV/JSON download — every
+    mature effort ships it; we already have the files, link them).
+Deprioritised: cross-hardware sweep (zk-Bench found 40–50% tool-dependent
+instance effects — matters at production party-placement time, not now);
+n>3 parties (different-in-kind axis, zkSaaS/Scalable-coZK territory);
+recursion-throughput north-star (post-pipeline-integration).
 
 ## 6. Build constraints (Artifacts runtime)
 
@@ -172,8 +297,19 @@ estimated; no axis that hides the latency-dominated regime.
 - [x] V4 — the six views (§4), SVG, theme-aware, dataviz-compliant.
 - [x] V5 — honesty layer: badges, assumptions panel, reproduce command.
 - [x] V6 — published (private): https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa  (redeploy same file path to keep the URL).
-- [ ] V7 — after the 0.5 bench: swap ANCHORS to measured medians, flip
-      badges, redeploy same URL. **Pipeline wired (2026-07-23):** the
+- [x] V7 — **DONE 2026-07-24** (bench ran clean overnight 2026-07-23
+      22:11–22:46 UTC): measured medians baked into CIRCUITS (all 3 circuits
+      × bb/plaindriver/REP3 × zk/non-zk + REP3 split/witext/verify);
+      constant-factor model replaced by log-log interpolation through the
+      anchors (model reproduces every anchor exactly — the §7 V2 rule);
+      comms adds only above-loopback latency; badges flipped; same URL
+      redeployed. Shamir stays modeled (split-input is REP3-only —
+      bench v2: REP3-split + translate-witness). Headline finding recorded
+      in PROGRESS session 14: REP3÷bb = 6.0×/439.6×/29.8× (poseidon/sha256/
+      recursion_zk) — composition-dependent, non-monotonic in gate count.
+      NOTE: `bench-to-site.py` split/witext zk="-" lookup bug found+fixed
+      during the bake. Original pipeline notes: swap ANCHORS to measured
+      medians, flip badges, redeploy same URL. **Pipeline wired (2026-07-23):** the
       launcher runs `scripts/bench-to-site.py results.csv → site-anchors.json`
       (medians of rc==0 rows per circuit/config/phase; loopback only;
       unmeasured cells emitted as `null` so they STAY modeled — never

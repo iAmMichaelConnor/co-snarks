@@ -130,9 +130,31 @@ Goal: a co-snark generated and verified end-to-end this week; baseline metrics.
       accepts. Two divergences found → fix in Phase 2: (i) co-noir accepts
       trailing proof bytes (bb rejects); (ii) panic (not clean reject) on
       off-curve points in proof/VK (ch. 14 §7).
-- [ ] 0.5 Benchmark: wall-clock + comms for 2–3 circuit sizes, REP3 vs Shamir,
-      ZK vs non-ZK, vs single-prover bb. First data points in ch. 14 §6.2
-      (MPC ≈ 10× plain bb on loopback, small circuit); full matrix TODO.
+- [~] 0.5 Benchmark: wall-clock + comms, REP3 vs Shamir, ZK vs non-ZK, vs
+      single-prover bb. **v1 RAN CLEAN overnight 2026-07-23** (wall-clock
+      only; PROGRESS session 14): REP3÷bb = 6.0× poseidon / 439.6× sha256 /
+      29.8× recursion_zk → cost tracks gate COMPOSITION, not size; explorer
+      recalibrated (ch. 22 V7). **v2 prepared 2026-07-24** (Mike's asks, all
+      tracked in ch. 22 §5a): results in-repo (`bench-results/<date>/`);
+      comms bytes+msgs per phase (R = sequential-rounds proxy — "is R
+      constant?" gets measured); circuit-feature capture (`co-noir
+      circuit-info`: block composition, lookup/table rows, witness zeros);
+      size sweeps poseidon 2^11→2^20 + sha256 2^15→2^20 (ascending,
+      600 s/cell timeout prune — Mike's 10-min rule, 2 reps ≥2^18); FAIR
+      baselines (bb vkgen split out; plaindriver witness-fed); Shamir cells
+      deferred to v2.1 (= REP3-split + translate-witness; split-input is
+      REP3-only). Instrumentation ALL LANDED + committed 2026-07-25
+      (mpc-net msg counters, CO_NOIR_NET_STATS_JSON, circuit-info, size
+      variants, per-cell RSS/CPU%/load stamps, artifact sizes, verify
+      cells incl. the verify_bb parity invariant, SQLite ingest, dataset
+      README). Quiet-gate REMOVED (host loadavg is mainframe-wide —
+      2026-07-24 12:05 decision): run when convenient, stamp load per
+      row. **v2 FULL RUN LAUNCHED 2026-07-25** (post-optimisation
+      baseline: R post-L1, times post-C1–C3) → `bench-results/2026-07-25/`.
+      THEN: bake v2 anchors into the explorer (same URL); v2.1 = Shamir
+      via translate-witness; v3 = netem latency tiers (adopt
+      Local 10Gbps/0.1ms, LAN 1Gbps/2ms, WAN from the literature —
+      ch. 22 §5c).
 
 ### Phase 1 — decisions  [DONE 2026-07-08]
 - [x] 1.1 Mike answered the 5 open questions — see "Decisions made by Mike"
@@ -300,6 +322,37 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       transfer directly. Soundness lens (guides where to spend review effort):
       the prover carries completeness and privacy, while soundness lives in
       the verifier and the circuit builder — so negative tests belong there.
+
+### Phase 6 — performance (opened 2026-07-24 on Mike's asks; nothing here
+### relaxes the invariants: non-ZK proof bytes stay identical to bb, secret
+### sharing stays sound — NO shortcuts on MPC properties)
+- [x] 6.1 **Plaindriver/single-prover optimisation** — DONE to the point
+      of diminishing returns (2026-07-24, committed 2026-07-25): ~6.5×
+      on recursion_zk 2^20 (~52 s → ~8 s), gap to bb now ~1.8× (was
+      ~11×), proofs byte-identical throughout. Landed: JSON-parse fix
+      (~80×), C1 sumcheck rayon (~8.2× phase), C2 oink batch-inversion
+      + rayon (4.9× phase), C1b+C3 decider residuals, phase timers
+      (CO_NOIR_PHASE_TIMINGS=1). B1/B2/B3 refuted by measurement
+      (features were already on; LTO within noise). Full ledger ch. 23
+      §C. Phase D = optional polish, reopen only on profile evidence.
+- [~] 6.2 **MPC-path (co-snarkification) optimisation** — ch. 24 written
+      + first lever LANDED: L1 grand-product round batching 16 → 8 comms
+      rounds (committed 2026-07-25). First measured R (poseidon 2^11):
+      prove 319 nonzk / 393 zk. Remaining levers: L1-followup (−1 round
+      in array_prod_inner_mul_many, shared with co-acvm is_zero), L2
+      per-row shared-op vectorisation, L4–L6, serial-inversion audit of
+      REP3 local paths (C2's finding class). sha-overhead hypotheses
+      H2–H4 discrimination + T2-proper floors: blocked on bench v2 data.
+- [~] 6.3 **Property-preservation tests** — T3 share re-randomization
+      DONE; T2-lite comms-message fence DONE 2026-07-25 (exact per-party
+      msg counts pinned for rep3 poseidon, fast tier); thread-invariance
+      + batched-inversion reference tests landed alongside. Remaining:
+      T2-proper (full-matrix floors from bench v2 netstats), T4 view
+      scan, slow-tier thread-invariance on a relation-rich circuit
+      (recursion). Specs in ch. 24 §5.
+- [x] 6.4 Bench v2 run: LAUNCHED 2026-07-25 after 6.1+L1 landed — the
+      run measures the post-optimisation baseline. Rerun-per-lever
+      (formerly the rest of 6.4) continues as levers land.
 
 ### Phase 5 — Aztec integration (successor project; scope after Phase 2)
 - [ ] 5.0 **PXE secret sharer** (key output per decision 6): choose the
