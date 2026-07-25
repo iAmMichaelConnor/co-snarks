@@ -4,8 +4,7 @@ use crate::honk_curve::NUM_LIMB_BITS;
 use ark_ec::CurveGroup;
 use ark_ff::One;
 use ark_ff::PrimeField;
-use ark_ff::{Field, Zero};
-use itertools::izip;
+use ark_ff::Zero;
 use mpc_core::protocols::rep3::Rep3BigUintShare;
 use mpc_core::protocols::rep3::conversion;
 use mpc_core::{
@@ -121,7 +120,12 @@ impl<P: CurveGroup<BaseField: PrimeField>> NoirUltraHonkProver<P> for Rep3UltraH
         net: &N,
         state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        arithmetic::mul_vec(a, b, net, state)
+        // Parallel local multiply with a single pre-squeezed mask draw, then one
+        // reshare round — the same schedule as `arithmetic::mul_vec` (identical
+        // message counts and opened values), but the local work runs on rayon
+        // (`with_min_len(1024)` keeps small inputs on one thread).
+        let local = arithmetic::local_mul_vec(a, b, state);
+        arithmetic::reshare_vec(local, net)
     }
 
     fn add_with_public(
@@ -217,15 +221,21 @@ impl<P: CurveGroup<BaseField: PrimeField>> NoirUltraHonkProver<P> for Rep3UltraH
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
 
         if y.iter().any(|y| y.is_zero()) {
             eyre::bail!("Cannot compute inverse of zero",);
         }
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            *a = r * y.inverse().unwrap();
-        }
+        // The opened y values are public, so we can Montgomery-batch-invert them. Batch
+        // inversion yields exactly the per-element inverses the previous serial loop
+        // computed (we bailed on zeros above), so the resulting shares are identical.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
@@ -238,16 +248,19 @@ impl<P: CurveGroup<BaseField: PrimeField>> NoirUltraHonkProver<P> for Rep3UltraH
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
 
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            if y.is_zero() {
-                *a = Self::ArithmeticShare::default();
-            } else {
-                *a = r * y.inverse().unwrap();
-            }
-        }
+        // The opened y values are public, so we can Montgomery-batch-invert them.
+        // `batch_inversion` skips zeros in place (they stay zero), and `r * 0` is the
+        // all-zero share, which is exactly `ArithmeticShare::default()` — so the fold-in
+        // below needs no zero branch and matches the previous serial loop bit-for-bit.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
