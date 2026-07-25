@@ -20,3 +20,4 @@ groth16_tester.rs
 
 # local scratch — links/notes, never committed
 ARTIFACTS.md
+bench-results/bench.sqlite
