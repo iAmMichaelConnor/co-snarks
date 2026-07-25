@@ -557,8 +557,14 @@ pub fn witness_from_reader(reader: impl io::Read) -> io::Result<Vec<ark_bn254::F
     Ok(witness)
 }
 
-pub fn program_artifact_from_reader(reader: impl io::Read) -> io::Result<ProgramArtifact> {
-    Ok(serde_json::from_reader::<_, ProgramArtifact>(reader)?)
+pub fn program_artifact_from_reader(mut reader: impl io::Read) -> io::Result<ProgramArtifact> {
+    // Buffer the whole artifact before parsing: `serde_json::from_reader` pulls bytes one at a
+    // time from the reader, so an unbuffered reader (e.g. a bare `File`, as passed by the CLI
+    // binaries) costs one read syscall per byte (~1 MB/s). Reading to a Vec first and parsing
+    // with `from_slice` yields the identical result at memory speed.
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(serde_json::from_slice::<ProgramArtifact>(&bytes)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -609,5 +615,30 @@ impl U256 {
                 ))
             })
             .collect::<Vec<U256>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::program_artifact_from_reader;
+
+    /// A tiny Noir artifact (add3: assert x + y + z == 6) checked in as a fixture, so this test
+    /// does not depend on the gitignored generated artifacts under examples/test_vectors.
+    const ADD3_ARTIFACT: &[u8] = include_bytes!("../test_fixtures/add3.json");
+
+    #[test]
+    fn parses_program_artifact() {
+        let artifact = program_artifact_from_reader(ADD3_ARTIFACT).expect("artifact should parse");
+        let param_names: Vec<&str> = artifact
+            .abi
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(param_names, ["x", "y", "z"]);
+        assert_eq!(artifact.bytecode.functions.len(), 1);
+        let circuit = &artifact.bytecode.functions[0];
+        assert_eq!(circuit.opcodes.len(), 1);
+        assert_eq!(circuit.public_parameters.0.len(), 2);
     }
 }
