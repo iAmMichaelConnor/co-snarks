@@ -73,6 +73,11 @@ fi
 
 # ---- Tier 1 (default): plain poseidon KAT byte-parity — the tightest oracle ----
 run cargo test -p tests --release --test noir -- plain::poseidon
+# Crate-local fast unit tests (NOT reachable via `-p tests`): the batched-inversion
+# serial-reference check (co-noir-common) and the artifact-parse regression
+# (noir-types). Both sub-0.1 s once built.
+run cargo test -p co-noir-common --release --lib -- mpc::plain::tests
+run cargo test -p noir-types --release -- tests::parses_program_artifact
 
 # ---- Tier 2 (--sec): verifier / deserialization security regressions ----
 [[ $want_sec -eq 1 ]] && run cargo test -p tests --release --test noir -- security_regression

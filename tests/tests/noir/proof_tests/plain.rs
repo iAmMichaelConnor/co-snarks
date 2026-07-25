@@ -173,6 +173,84 @@ fn poseidon_test_poseidon2sponge() {
     );
 }
 
+/// Structural determinism check for the parallelised prover: prove the same circuit twice
+/// in-process — once inside a rayon pool with a single thread, once inside a pool with 16 —
+/// and require byte-identical proofs.
+///
+/// Why this exists: the prover accumulates sumcheck relation contributions in parallel. Every
+/// parallel reduction it uses is a sum of exact field elements, so the proof bytes must not
+/// depend on how many threads ran or how work was scheduled. If a change ever introduces a
+/// scheduling-dependent reduction (order-sensitive transcript feeds, per-thread RNG draws, a
+/// non-associative merge, ...), the prover would still emit proofs that verify — they would just
+/// no longer be reproducible. The pinned-circuit byte KATs would only catch that for the exact
+/// circuits they pin; this test checks the thread-count-invariance property itself and stays
+/// fast. Scoped thread pools are used so the test controls parallelism regardless of the
+/// RAYON_NUM_THREADS environment.
+#[test]
+fn poseidon_proof_bytes_thread_count_invariance() {
+    const CIRCUIT_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.json";
+    const WITNESS_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.gz";
+
+    fn prove_once() -> Vec<u8> {
+        let constraint_system =
+            constraint_system_from_reader(File::open(CIRCUIT_FILE).unwrap()).unwrap();
+        let witness = noir_types::witness_from_reader(File::open(WITNESS_FILE).unwrap()).unwrap();
+        let mut driver = PlainAcvmSolver::new();
+
+        let recursion_crs_size =
+            constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>();
+        let recursion_crs = if recursion_crs_size > 0 {
+            CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, recursion_crs_size, ZeroKnowledge::No)
+                .unwrap()
+        } else {
+            ProverCrs::default()
+        };
+        let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+            &constraint_system,
+            0,
+            witness,
+            HonkRecursion::UltraHonk,
+            &recursion_crs,
+            &mut driver,
+        )
+        .unwrap();
+        let crs_size = builder.compute_dyadic_size();
+        let crs = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+            CRS_PATH_G1,
+            CRS_PATH_G2,
+            crs_size,
+            ZeroKnowledge::No,
+        )
+        .unwrap();
+        let (prover_crs, verifier_crs) = crs.split();
+        let (proving_key, verifying_key) = builder
+            .create_keys::<Bn254>(prover_crs.into(), verifier_crs, &mut driver)
+            .unwrap();
+        let (proof, _public_inputs) = UltraHonk::<_, Poseidon2Sponge>::prove(
+            proving_key,
+            ZeroKnowledge::No,
+            &verifying_key.inner_vk,
+        )
+        .unwrap();
+        Poseidon2Sponge::to_buffer(proof.inner_as_ref())
+    }
+
+    let proof_single_threaded = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(prove_once);
+    let proof_multi_threaded = rayon::ThreadPoolBuilder::new()
+        .num_threads(16)
+        .build()
+        .unwrap()
+        .install(prove_once);
+    assert_eq!(
+        proof_single_threaded, proof_multi_threaded,
+        "proof bytes must not depend on the rayon thread count"
+    );
+}
+
 #[test]
 fn poseidon_test_keccak256() {
     const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_kec";
