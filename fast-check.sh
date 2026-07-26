@@ -74,16 +74,26 @@ fi
 # ---- Tier 1 (default): plain poseidon KAT byte-parity — the tightest oracle ----
 run cargo test -p tests --release --test noir -- plain::poseidon
 # Crate-local fast unit tests (NOT reachable via `-p tests`): the batched-inversion
-# serial-reference check (co-noir-common) and the artifact-parse regression
-# (noir-types). Both sub-0.1 s once built.
-run cargo test -p co-noir-common --release --lib -- mpc::plain::tests
+# serial-reference check (co-noir-common), the seedable-ZK-blinding per-site
+# stream distinctness pin (co-noir-common zk_masking), and the artifact-parse
+# regression (noir-types). All sub-0.1 s once built.
+run cargo test -p co-noir-common --release --lib -- mpc::plain::tests zk_masking
 run cargo test -p noir-types --release -- tests::parses_program_artifact
 
 # ---- Tier 2 (--sec): verifier / deserialization security regressions ----
 [[ $want_sec -eq 1 ]] && run cargo test -p tests --release --test noir -- security_regression
 
 # ---- Tier 3 (--mpc): co-mirror parity (REP3 + Shamir) ----
-[[ $want_mpc -eq 1 ]] && run cargo test -p tests --release --test noir -- rep3::poseidon shamir::poseidon
+# rep3::poseidon also picks up the T2/T2-lite comms-fence tests (fence test
+# names are prefixed with their circuit, e.g.
+# poseidon_prove_comms_message_fence_poseidon2sponge / *_zk_poseidon2sponge)
+# for free. The two extra filters below add the newer per-circuit comms
+# fences on different (non-poseidon) small circuits -- targeted to just the
+# fence tests, not the whole blackbox_and/add3u64 suites, to keep this tier's
+# added wall time near-zero (ch. 24 §5 T2-proper).
+# rep3::zk_blinding is the seedable-ZK-blinding byte-parity fence (plaindriver
+# vs all 3 REP3 parties, ZK mode, injected deterministic masking; ~1.2 s).
+[[ $want_mpc -eq 1 ]] && run cargo test -p tests --release --test noir -- rep3::poseidon shamir::poseidon rep3::blackbox_and_prove_comms_message_fence rep3::add3u64_prove_comms_message_fence rep3::zk_blinding
 
 # ---- Tier 4 (--bb): single-circuit byte cross-verify vs the source-built oracle ----
 if [[ $want_bb -eq 1 ]]; then
@@ -92,20 +102,31 @@ if [[ $want_bb -eq 1 ]]; then
     rc=1
   else
     cargo build --release --bin plaindriver >/dev/null 2>&1 || rc=1
-    TV="$ROOT/test_vectors/noir/poseidon/kat"
-    OUT="$(mktemp -d)"
-    echo; echo ">>> single-circuit bb cross-verify: poseidon (poseidon2, non-ZK)"
-    "$ROOT/target/release/plaindriver" --prover-crs "$CRS_G1" --verifier-crs "$CRS_G2" \
-      --circuit "$TV/poseidon.json" --input "$TV/poseidon.gz" --witness "$TV/poseidon.gz" \
-      --hasher poseidon2 --out-dir "$OUT" >"$OUT/pd.log" 2>&1 || { echo "plaindriver FAILED (see $OUT/pd.log)"; rc=1; }
-    "$BB" write_vk --scheme ultra_honk --oracle_hash poseidon2 --disable_zk -b "$TV/poseidon.json" -o "$OUT" >>"$OUT/bb.log" 2>&1
-    "$BB" prove --scheme ultra_honk --oracle_hash poseidon2 --disable_zk -b "$TV/poseidon.json" -w "$TV/poseidon.gz" -k "$OUT/vk" -o "$OUT" >>"$OUT/bb.log" 2>&1
-    if [[ -f "$OUT/proof" && -f "$OUT/proof_plaindriver" ]] && cmp -s "$OUT/proof" "$OUT/proof_plaindriver" && cmp -s "$OUT/vk" "$OUT/vk_plaindriver"; then
-      echo "    VK + PROOF byte-identical to $BB ✓"
-    else
-      echo "    MISMATCH or missing artifact (see $OUT) ✗"; rc=1
-    fi
-    rm -rf "$OUT"
+    # poseidon = pure arithmetic; bb_sha256_compression = lookup tables + sha
+    # gadget (Mike 2026-07-25: byte cross-verify must cover a lookup-bearing
+    # circuit, not just poseidon). Recursion proof BYTES are legitimately
+    # prover-specific (random masking offset generator, PLAN item 2.9) — its
+    # parity fence is the always-on recursion{,_zk}_vk_kat VK-byte tests run
+    # in the tier below, not a proof cmp here.
+    for CV in "poseidon|$ROOT/test_vectors/noir/poseidon/kat/poseidon" \
+              "bb_sha256_compression|$ROOT/test_vectors/noir/bb_sha256_compression/kat/bb_sha256_compression"; do
+      NAME="${CV%%|*}"; BASE="${CV#*|}"
+      OUT="$(mktemp -d)"
+      echo; echo ">>> single-circuit bb cross-verify: $NAME (poseidon2, non-ZK)"
+      "$ROOT/target/release/plaindriver" --prover-crs "$CRS_G1" --verifier-crs "$CRS_G2" \
+        --circuit "$BASE.json" --input "$BASE.gz" --witness "$BASE.gz" \
+        --hasher poseidon2 --out-dir "$OUT" >"$OUT/pd.log" 2>&1 || { echo "plaindriver FAILED (see $OUT/pd.log)"; rc=1; }
+      "$BB" write_vk --scheme ultra_honk --oracle_hash poseidon2 --disable_zk -b "$BASE.json" -o "$OUT" >>"$OUT/bb.log" 2>&1
+      "$BB" prove --scheme ultra_honk --oracle_hash poseidon2 --disable_zk -b "$BASE.json" -w "$BASE.gz" -k "$OUT/vk" -o "$OUT" >>"$OUT/bb.log" 2>&1
+      if [[ -f "$OUT/proof" && -f "$OUT/proof_plaindriver" ]] && cmp -s "$OUT/proof" "$OUT/proof_plaindriver" && cmp -s "$OUT/vk" "$OUT/vk_plaindriver"; then
+        echo "    VK + PROOF byte-identical to $BB ✓"
+      else
+        echo "    MISMATCH or missing artifact (see $OUT) ✗"; rc=1
+      fi
+      rm -rf "$OUT"
+    done
+    # recursion parity fence: VK byte-KATs (proof bytes prover-specific by design)
+    run cargo test -p tests --release --test noir -- recursion_vk_kat recursion_zk_vk_kat
   fi
 fi
 

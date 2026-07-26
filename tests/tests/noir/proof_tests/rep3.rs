@@ -1,22 +1,32 @@
 use crate::proof_tests::{CRS_PATH_G1, CRS_PATH_G2};
 use ark_bn254::{Bn254, Fr};
-use co_acvm::solver::Rep3CoSolver;
+use ark_serialize::CanonicalSerialize;
+use bytes::Bytes;
+use co_acvm::{solver::Rep3CoSolver, PlainAcvmSolver};
+use co_builder::{
+    keys::proving_key,
+    prelude::{HonkRecursion, UltraCircuitBuilder},
+};
+use co_noir::ProgramArtifact;
 use co_noir::{Bn254G1, HonkProof};
 use co_noir_common::{
-    crs::parse::CrsParser,
+    crs::{parse::CrsParser, ProverCrs},
     honk_proof::TranscriptFieldType,
     keys::verification_key::VerifyingKey,
+    mpc::plain::PlainUltraHonkDriver,
     transcript::{Poseidon2Sponge, TranscriptHasher},
     types::ZeroKnowledge,
+    zk_masking::SeededZkBlinding,
 };
 use co_noir_types::Rep3Type;
-use co_ultrahonk::prelude::{Rep3CoUltraHonk, UltraHonk};
-use co_noir::ProgramArtifact;
+use co_ultrahonk::prelude::{CoUltraHonk, Rep3CoUltraHonk, UltraHonk};
 use itertools::izip;
 use mpc_core::protocols::rep3::share_field_element;
-use mpc_net::{Network, local::LocalNetwork};
-use rand::{CryptoRng, Rng, SeedableRng, rngs::StdRng};
+use mpc_net::{local::LocalNetwork, ConnectionStats, Network};
+use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 use sha3::Keccak256;
+use std::collections::HashSet;
+use std::sync::Mutex;
 use std::{fs::File, sync::Arc};
 
 fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
@@ -140,6 +150,75 @@ fn split_witness<R: Rng + CryptoRng>(
         }
     }
     res
+}
+
+/// Computes the plain (single-prover, non-MPC) UltraHonk proof bytes for a
+/// circuit's KAT witness, using the `PlainUltraHonkDriver` (mirrors
+/// `tests/tests/noir/proof_tests/plaindriver.rs::proof_test`). Used as the
+/// cross-check oracle for comms fences on circuits that don't (yet) have a
+/// checked-in proof KAT file -- so the fence can still assert "this is
+/// provably the real protocol's output", not just "the byte count didn't
+/// change".
+fn plain_proof_bytes<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    has_zk: ZeroKnowledge,
+) -> Vec<u8> {
+    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+    let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
+
+    let constraint_system =
+        co_noir::constraint_system_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse constraint system");
+    let witness = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
+        .expect("failed to parse witness");
+
+    let mut driver = PlainAcvmSolver::new();
+    let recursion_crs_size = constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>();
+    let recursion_crs = if recursion_crs_size > 0 {
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, recursion_crs_size, has_zk).unwrap()
+    } else {
+        ProverCrs::default()
+    };
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness,
+        HonkRecursion::UltraHonk,
+        &recursion_crs,
+        &mut driver,
+    )
+    .unwrap();
+
+    let crs_size = builder.compute_dyadic_size();
+    let (prover_crs, verifier_crs) =
+        CrsParser::<Bn254G1>::get_crs::<Bn254>(CRS_PATH_G1, CRS_PATH_G2, crs_size, has_zk)
+            .expect("failed to get crs")
+            .split();
+    let (proving_key, inner_vk) = proving_key::create_keys_barretenberg::<
+        Bn254G1,
+        PlainUltraHonkDriver,
+        _,
+    >(0, builder, &prover_crs, &mut driver)
+    .unwrap();
+    let verifying_key = VerifyingKey {
+        crs: verifier_crs,
+        inner_vk,
+    };
+
+    let (proof, public_input) = CoUltraHonk::<PlainUltraHonkDriver, _, H>::prove(
+        proving_key,
+        &prover_crs,
+        has_zk,
+        &verifying_key.inner_vk,
+    )
+    .unwrap();
+
+    let is_valid =
+        UltraHonk::<_, H>::verify::<Bn254>(proof.clone(), &public_input, &verifying_key, has_zk)
+            .unwrap();
+    assert!(is_valid, "plain cross-check proof must itself verify");
+
+    H::to_buffer(proof.inner_as_ref())
 }
 
 /// Runs the full 3-party REP3 proving flow on the given witness share-sets.
@@ -376,6 +455,132 @@ fn msg_totals(stats: &mpc_net::ConnectionStats) -> (usize, usize) {
         .fold((0, 0), |(s, r), (_, (sent, recv))| (s + sent, r + recv))
 }
 
+/// Sums a party's per-peer payload-byte counters into a single
+/// (total_sent_bytes, total_received_bytes) pair. Companion to
+/// [`msg_totals`]: the byte totals catch a leak that keeps the frame COUNT
+/// intact but fattens the payloads (e.g. accidentally serializing both share
+/// limbs, or an unmasked value alongside the masked one), which the
+/// message-count pins alone would miss.
+fn byte_totals(stats: &mpc_net::ConnectionStats) -> (usize, usize) {
+    stats
+        .iter()
+        .fold((0, 0), |(s, r), (_, (sent, recv))| (s + sent, r + recv))
+}
+
+/// Asserts each party's (sent, recv) byte totals sit within ±`tolerance`
+/// bytes of the pinned values. Exact pins are preferred (and used) wherever
+/// the totals are deterministic; phases that transmit Yao garbled circuits
+/// need this small band instead, because the GC input/output serialization
+/// contains variable-length encodings of per-run-randomized values (observed
+/// drift: ±1 byte on multi-megabyte totals). The band is deliberately tight:
+/// any systematic fattening of payloads (an extra share limb, an unmasked
+/// value riding along -- 32 bytes per element over vector flows) lands far
+/// outside ±8 bytes.
+fn assert_byte_totals_within(
+    measured: [(usize, usize); 3],
+    pinned: [(usize, usize); 3],
+    tolerance: usize,
+    what: &str,
+) {
+    for (party, (&(ms, mr), &(ps, pr))) in measured.iter().zip(pinned.iter()).enumerate() {
+        assert!(
+            ms.abs_diff(ps) <= tolerance && mr.abs_diff(pr) <= tolerance,
+            "{what}: party {party} (sent, recv) byte totals ({ms}, {mr}) outside \
+             ±{tolerance} of pinned ({ps}, {pr})"
+        );
+    }
+}
+
+/// Everything a comms-fence test pins, measured per party (indexed by
+/// party id): framed-message totals AND payload-byte totals for the pk-gen
+/// and prove phases, plus the party-0 proof bytes for the KAT cross-check.
+struct CommsFenceMeasurement {
+    proof: Vec<u8>,
+    pkgen_msgs: [(usize, usize); 3],
+    prove_msgs: [(usize, usize); 3],
+    pkgen_bytes: [(usize, usize); 3],
+    prove_bytes: [(usize, usize); 3],
+}
+
+/// Generic T2-proper comms-fence harness: shares the named circuit's KAT
+/// witness with a fixed seed, runs REP3 pk-gen + prove for the given
+/// `has_zk` mode, and returns per-party (sent, recv) message AND byte
+/// totals for both phases (see [`CommsFenceMeasurement`]). Generalizes the
+/// body of `poseidon_prove_comms_message_fence_poseidon2sponge` (left
+/// untouched above) so new per-circuit fences don't each re-derive the
+/// harness.
+///
+/// pk-gen is measured across BOTH REP3 networks (net0 + net1); prove is
+/// measured on net0 only -- this is what `Rep3CoUltraHonk::prove` uses, and
+/// matches the phase split documented in `rep3_comms_floor_table.json`.
+fn rep3_prove_comms_fence<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    has_zk: ZeroKnowledge,
+    seed: u64,
+) -> CommsFenceMeasurement {
+    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+    let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
+
+    let program_artifact =
+        co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let witness = co_noir::witness_from_reader(File::open(&witness_file).unwrap()).unwrap();
+    let mut rng = StdRng::seed_from_u64(seed);
+    let witnesses = split_witness(&witness, &constraint_system.public_inputs, &mut rng);
+
+    let nets0 = LocalNetwork::new_3_parties();
+    let nets1 = LocalNetwork::new_3_parties();
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs =
+        Arc::new(CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, has_zk).unwrap());
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+
+    let mut threads = Vec::with_capacity(3);
+    for (net0, net1, witness) in izip!(nets0, nets1, witnesses) {
+        let prover_crs = prover_crs.clone();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+        threads.push(std::thread::spawn(move || {
+            let pk = co_noir::generate_proving_key_rep3(
+                &constraint_system,
+                witness,
+                &net0,
+                &net1,
+                &prover_crs,
+            )
+            .unwrap();
+            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+
+            let pkgen0 = msg_totals(&net0.get_connection_stats());
+            let pkgen1 = msg_totals(&net1.get_connection_stats());
+            let pkgen0_b = byte_totals(&net0.get_connection_stats());
+            let pkgen1_b = byte_totals(&net1.get_connection_stats());
+
+            let (proof, _) =
+                Rep3CoUltraHonk::<_, H>::prove(&net0, pk, &prover_crs, has_zk, &vk.inner_vk)
+                    .unwrap();
+
+            let after = msg_totals(&net0.get_connection_stats());
+            let after_b = byte_totals(&net0.get_connection_stats());
+            let pkgen = (pkgen0.0 + pkgen1.0, pkgen0.1 + pkgen1.1);
+            let prove = (after.0 - pkgen0.0, after.1 - pkgen0.1);
+            let pkgen_b = (pkgen0_b.0 + pkgen1_b.0, pkgen0_b.1 + pkgen1_b.1);
+            let prove_b = (after_b.0 - pkgen0_b.0, after_b.1 - pkgen0_b.1);
+            (proof, pkgen, prove, pkgen_b, prove_b)
+        }));
+    }
+
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let proof_u8 = H::to_buffer(results[0].0.inner_as_ref());
+    CommsFenceMeasurement {
+        proof: proof_u8,
+        pkgen_msgs: std::array::from_fn(|i| results[i].1),
+        prove_msgs: std::array::from_fn(|i| results[i].2),
+        pkgen_bytes: std::array::from_fn(|i| results[i].3),
+        prove_bytes: std::array::from_fn(|i| results[i].4),
+    }
+}
+
 /// Communication-regression fence for the non-ZK REP3 poseidon prove.
 ///
 /// The proof-byte KATs above pass no matter how many network round-trips the
@@ -402,10 +607,20 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
     // 199 -> 198: the two independent mul_many calls in array_prod_inner_mul_many
     // were merged into one (one fewer round per grand-product computation).
-    // 198 -> 204: L0d half-share MSM — each of the 6 non-ZK commit-open calls
-    // now opens via a 3-way broadcast (2 sends/2 recvs per party) instead of a
-    // ring reshare (1/1).
+    // 198 -> 204: L0d half-share commit MSMs — the 6 non-ZK commit-open calls
+    // (oink wires, counts/tags/w4, inverses/z_perm, shplemini folds, Q, KZG:W)
+    // now open via 3-way broadcast (2 sends + 2 recvs per party) instead of a
+    // ring reshare (1 + 1), buying half the local MSM work per commitment.
     const PROVE_MSGS: [(usize, usize); 3] = [(204, 204), (204, 204), (204, 204)];
+    // Per-party (total_sent_bytes, total_received_bytes) — same bump policy.
+    // The byte pins catch a leak that keeps the frame count intact but fattens
+    // payloads (e.g. serializing both share limbs); see byte_totals. Poseidon
+    // is pure-arithmetic (no Yao GC anywhere), so both phases pin EXACT totals.
+    const PKGEN_BYTES: [(usize, usize); 3] = [(30336, 30336), (30368, 30336), (30336, 30368)];
+    // prove bytes re-pinned with PROVE_MSGS for L0d (broadcast opens carry the
+    // same points to one extra peer).
+    const PROVE_BYTES: [(usize, usize); 3] =
+        [(6242368, 6242368), (6242400, 6242368), (6242368, 6242400)];
 
     let program_artifact = co_noir::program_artifact_from_reader(File::open(circuit_file).unwrap())
         .expect("failed to parse program artifact");
@@ -441,6 +656,8 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
             // and the net0 totals double as the baseline for the prove phase.
             let pkgen0 = msg_totals(&net0.get_connection_stats());
             let pkgen1 = msg_totals(&net1.get_connection_stats());
+            let pkgen0_b = byte_totals(&net0.get_connection_stats());
+            let pkgen1_b = byte_totals(&net1.get_connection_stats());
 
             let (proof, _) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
                 &net0,
@@ -452,9 +669,12 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
             .unwrap();
 
             let after = msg_totals(&net0.get_connection_stats());
+            let after_b = byte_totals(&net0.get_connection_stats());
             let pkgen = (pkgen0.0 + pkgen1.0, pkgen0.1 + pkgen1.1);
             let prove = (after.0 - pkgen0.0, after.1 - pkgen0.1);
-            (proof, pkgen, prove)
+            let pkgen_b = (pkgen0_b.0 + pkgen1_b.0, pkgen0_b.1 + pkgen1_b.1);
+            let prove_b = (after_b.0 - pkgen0_b.0, after_b.1 - pkgen0_b.1);
+            (proof, pkgen, prove, pkgen_b, prove_b)
         }));
     }
 
@@ -467,6 +687,8 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
 
     let measured_pkgen: [(usize, usize); 3] = std::array::from_fn(|i| results[i].1);
     let measured_prove: [(usize, usize); 3] = std::array::from_fn(|i| results[i].2);
+    let measured_pkgen_b: [(usize, usize); 3] = std::array::from_fn(|i| results[i].3);
+    let measured_prove_b: [(usize, usize); 3] = std::array::from_fn(|i| results[i].4);
     assert_eq!(
         measured_pkgen, PKGEN_MSGS,
         "pk-gen per-party (sent, recv) message totals changed"
@@ -474,6 +696,141 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     assert_eq!(
         measured_prove, PROVE_MSGS,
         "prove per-party (sent, recv) message totals changed"
+    );
+    assert_eq!(
+        measured_pkgen_b, PKGEN_BYTES,
+        "pk-gen per-party (sent, recv) byte totals changed"
+    );
+    assert_eq!(
+        measured_prove_b, PROVE_BYTES,
+        "prove per-party (sent, recv) byte totals changed"
+    );
+}
+
+/// ZK-mode counterpart of `poseidon_prove_comms_message_fence_poseidon2sponge`.
+///
+/// ZK proof BYTES legitimately vary run-to-run (the masking values are drawn
+/// from an unseedable `thread_rng()` inside the proving-key/prove path -- see
+/// the share-rerandomization-invariance test's doc comment above for the same
+/// finding at the API level), so this test cannot byte-compare against a KAT.
+/// But masking only changes the VALUES placed on the wire, not the NUMBER or
+/// SHAPE of messages: pinning is still possible if the message counts
+/// themselves are deterministic. Measured directly (see PROGRESS): they are,
+/// across repeated runs, so this pins EXACT counts rather than a floor. If
+/// that ever stops being true (e.g. a masking scheme that conditionally
+/// resamples and occasionally sends an extra frame), replace the `assert_eq!`
+/// below with a `>=` floor against the non-ZK `PROVE_MSGS` constants above
+/// (ZK strictly adds masking communication on top of non-ZK, never removes
+/// it) and note the change here.
+#[test]
+fn poseidon_prove_comms_message_fence_zk_poseidon2sponge() {
+    // Per-party (total_sent_msgs, total_received_msgs). Measured directly via
+    // `Network::get_connection_stats()`, exactly like the non-ZK fence above.
+    const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
+    // 273 -> 272: array_prod_inner_mul_many mul_many merge (see non-ZK fence).
+    // 272 -> 282: L0d half-share commit MSMs — the non-ZK fence's 6 broadcast
+    // opens plus the 4 ZK-only commitments (gemini masking poly, libra
+    // concatenation, SSIPA grand-sum + quotient), each +1 send/+1 recv.
+    const PROVE_MSGS: [(usize, usize); 3] = [(282, 282), (282, 282), (282, 282)];
+    // Per-party (total_sent_bytes, total_received_bytes) — the ZK masking
+    // values are random but FIXED-LENGTH field elements, so byte totals are
+    // deterministic too (measured across repeated runs). See byte_totals'
+    // doc comment for what the byte pins catch beyond the message pins.
+    // pk-gen byte totals must equal the non-ZK fence's exactly.
+    const PKGEN_BYTES: [(usize, usize); 3] = [(30336, 30336), (30368, 30336), (30336, 30368)];
+    // prove bytes re-pinned with PROVE_MSGS for L0d.
+    const PROVE_BYTES: [(usize, usize); 3] =
+        [(6276208, 6276208), (6276240, 6276208), (6276208, 6276240)];
+
+    let m = rep3_prove_comms_fence::<Poseidon2Sponge>("poseidon", ZeroKnowledge::Yes, 0xFE_ACE);
+
+    // No byte-KAT cross-check possible in ZK mode (bytes legitimately vary),
+    // but the proof must still verify -- rep3_prove_comms_fence's callee
+    // (Rep3CoUltraHonk::prove) already asserts protocol success via `.unwrap()`,
+    // and `proof` being non-empty plus the exact message-count pins below is
+    // the available evidence that the real (masked) protocol ran.
+    assert!(!m.proof.is_empty());
+
+    // Non-ZK pk-gen is unaffected by has_zk, so pk-gen counts must match the
+    // non-ZK fence exactly -- a cross-check that has_zk didn't leak into the
+    // wrong phase.
+    assert_eq!(
+        m.pkgen_msgs, PKGEN_MSGS,
+        "ZK pk-gen per-party (sent, recv) message totals changed (or diverged from non-ZK pk-gen)"
+    );
+    assert_eq!(
+        m.prove_msgs, PROVE_MSGS,
+        "ZK prove per-party (sent, recv) message totals changed"
+    );
+    assert_eq!(
+        m.pkgen_bytes, PKGEN_BYTES,
+        "ZK pk-gen per-party (sent, recv) byte totals changed"
+    );
+    assert_eq!(
+        m.prove_bytes, PROVE_BYTES,
+        "ZK prove per-party (sent, recv) byte totals changed"
+    );
+}
+
+/// Lookup-gate comms fence: `blackbox_and` lowers `x & y` to REP3's lookup
+/// path (2 lookup tables / 12 lookup gates per `co-noir circuit-info`) --
+/// structurally distinct from poseidon's pure-arithmetic path. This is the
+/// fence upcoming `construct_lookup_read_counts` optimisation work must keep
+/// honest: comms here MUST stay nonzero, and this pin is expected to change
+/// (deliberately, with the constants updated) the day that lever lands. No
+/// proof KAT is checked in for this circuit, so the cross-check oracle is a
+/// plain (non-MPC) proof computed in-test via `plain_proof_bytes`.
+#[test]
+fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
+    // Per-party (total_sent_msgs, total_received_msgs). See the doc comment
+    // on `poseidon_prove_comms_message_fence_poseidon2sponge` for the bump
+    // policy (increase = investigate a regression; decrease = an
+    // optimisation landed, lower deliberately).
+    // [(155,203),(185,161),(191,167)] -> current: merged GC input rounds in the
+    // Yao decompose blueprints (mpc-core L0c): -2 sends at ID2, -1 recv at
+    // ID0/ID1 per GC invocation (3 invocations in this pk-gen).
+    const PKGEN_MSGS: [(usize, usize); 3] = [(155, 200), (185, 158), (185, 167)];
+    // 199 -> 198: array_prod_inner_mul_many mul_many merge (grand product),
+    // NOT a lookup-path change (see the assert message below).
+    // 198 -> 204: L0d half-share commit MSMs (see the poseidon fence).
+    const PROVE_MSGS: [(usize, usize); 3] = [(204, 204), (204, 204), (204, 204)];
+    // Per-party (total_sent_bytes, total_received_bytes); see byte_totals.
+    // pk-gen transmits Yao garbled circuits (lookup path), whose
+    // serialization length wobbles by ±1 byte run-to-run (see
+    // assert_byte_totals_within) — pinned as a tight band. Prove is pure
+    // field flows: exact (re-pinned for L0d with PROVE_MSGS).
+    const PKGEN_BYTES: [(usize, usize); 3] =
+        [(2661703, 4507496), (4344248, 2896960), (2970928, 2572423)];
+    const PROVE_BYTES: [(usize, usize); 3] =
+        [(21040064, 21040064), (21040096, 21040064), (21040064, 21040096)];
+
+    let m = rep3_prove_comms_fence::<Poseidon2Sponge>("blackbox_and", ZeroKnowledge::No, 0xFE_ACE);
+
+    let expected = plain_proof_bytes::<Poseidon2Sponge>("blackbox_and", ZeroKnowledge::No);
+    assert_eq!(
+        m.proof, expected,
+        "REP3 proof bytes must match the plain (non-MPC) prover on the same witness"
+    );
+
+    assert_eq!(
+        m.pkgen_msgs, PKGEN_MSGS,
+        "pk-gen per-party (sent, recv) message totals changed"
+    );
+    assert_eq!(
+        m.prove_msgs, PROVE_MSGS,
+        "prove per-party (sent, recv) message totals changed -- if this DECREASED, check it \
+         isn't `construct_lookup_read_counts` (or another lookup step) silently degenerating to \
+         local computation: lookup comms must stay nonzero"
+    );
+    assert_byte_totals_within(
+        m.pkgen_bytes,
+        PKGEN_BYTES,
+        8,
+        "pk-gen (GC-bearing, banded) byte totals",
+    );
+    assert_eq!(
+        m.prove_bytes, PROVE_BYTES,
+        "prove per-party (sent, recv) byte totals changed"
     );
 }
 
@@ -505,6 +862,268 @@ fn add3u64_proof_test_keccak256() {
     proof_test::<Keccak256>("add3u64", ZeroKnowledge::Yes, PROOF_FILE);
 }
 
+/// Range/delta-range comms fence: `add3u64` (u64 addition with overflow range
+/// checks; 1,396 delta-range gates per `co-noir circuit-info`, zero lookup
+/// gates) exercises REP3's bit-decomposition / range-check path -- distinct
+/// from both poseidon's pure-arithmetic path and blackbox_and's lookup path.
+/// A checked-in proof KAT already exists for this circuit (used by the
+/// existing `add3u64_*_test_*` tests above), so no plain in-test proof is
+/// needed for the cross-check.
+#[test]
+fn add3u64_prove_comms_message_fence_poseidon2sponge() {
+    const PROOF_FILE: &str = "../test_vectors/noir/add3u64/kat/add3u64_proof_with_pos";
+
+    // Per-party (total_sent_msgs, total_received_msgs). See the doc comment
+    // on `poseidon_prove_comms_message_fence_poseidon2sponge` for the bump
+    // policy.
+    // [(146,193),(220,190),(222,205)] -> current: merged GC input rounds in the
+    // Yao decompose blueprints (mpc-core L0c): -2 sends at ID2, -1 recv at
+    // ID0/ID1 per GC invocation (1 invocation in this pk-gen).
+    const PKGEN_MSGS: [(usize, usize); 3] = [(146, 192), (220, 189), (220, 205)];
+    // 249 -> 248: array_prod_inner_mul_many mul_many merge (see poseidon fence).
+    // 248 -> 254: L0d half-share commit MSMs (see the poseidon fence).
+    const PROVE_MSGS: [(usize, usize); 3] = [(254, 254), (254, 254), (254, 254)];
+    // Per-party (total_sent_bytes, total_received_bytes); see byte_totals.
+    // pk-gen transmits a Yao garbled circuit (delta-range path) — banded like
+    // the blackbox_and fence. Prove is pure field flows: exact (re-pinned for
+    // L0d with PROVE_MSGS).
+    const PKGEN_BYTES: [(usize, usize); 3] =
+        [(1702780, 2578388), (3449228, 2590420), (2508360, 2491560)];
+    const PROVE_BYTES: [(usize, usize); 3] =
+        [(16249680, 16249680), (16249712, 16249680), (16249680, 16249712)];
+
+    let m = rep3_prove_comms_fence::<Poseidon2Sponge>("add3u64", ZeroKnowledge::No, 0xFE_ACE);
+
+    assert_eq!(m.proof, std::fs::read(PROOF_FILE).unwrap());
+
+    assert_eq!(
+        m.pkgen_msgs, PKGEN_MSGS,
+        "pk-gen per-party (sent, recv) message totals changed"
+    );
+    assert_eq!(
+        m.prove_msgs, PROVE_MSGS,
+        "prove per-party (sent, recv) message totals changed"
+    );
+    assert_byte_totals_within(
+        m.pkgen_bytes,
+        PKGEN_BYTES,
+        8,
+        "pk-gen (GC-bearing, banded) byte totals",
+    );
+    assert_eq!(
+        m.prove_bytes, PROVE_BYTES,
+        "prove per-party (sent, recv) byte totals changed"
+    );
+}
+
+/// A [`Network`] wrapper that copies every sent and received frame into a
+/// shared log before/after delegating to the wrapped [`LocalNetwork`]. Used
+/// by the T4 view-scan test below to capture one full protocol run's traffic
+/// for offline inspection. Test-only by construction (lives in the test
+/// crate; production binaries cannot reach it).
+struct RecordingNetwork {
+    inner: LocalNetwork,
+    log: Arc<Mutex<Vec<Bytes>>>,
+}
+
+impl RecordingNetwork {
+    fn new(inner: LocalNetwork, log: Arc<Mutex<Vec<Bytes>>>) -> Self {
+        Self { inner, log }
+    }
+}
+
+impl Network for RecordingNetwork {
+    fn id(&self) -> usize {
+        self.inner.id()
+    }
+
+    fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+        self.log.lock().unwrap().push(data.clone());
+        self.inner.send(to, data)
+    }
+
+    fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+        let data = self.inner.recv(from)?;
+        self.log.lock().unwrap().push(data.clone());
+        Ok(data)
+    }
+
+    fn get_connection_stats(&self) -> ConnectionStats {
+        self.inner.get_connection_stats()
+    }
+}
+
+/// Returns the location of the first 32-byte window in `frames` that matches
+/// any pattern in `patterns`, as (frame_index, offset), or None.
+fn scan_frames_for_patterns(
+    frames: &[Bytes],
+    patterns: &HashSet<[u8; 32]>,
+) -> Option<(usize, usize)> {
+    for (fi, frame) in frames.iter().enumerate() {
+        if frame.len() < 32 {
+            continue;
+        }
+        for off in 0..=frame.len() - 32 {
+            let window: [u8; 32] = frame[off..off + 32].try_into().unwrap();
+            if patterns.contains(&window) {
+                return Some((fi, off));
+            }
+        }
+    }
+    None
+}
+
+/// T4 witness view scan (ch. 24 §5): record EVERY frame sent or received by
+/// EVERY party across a full REP3 run -- witness extension, pk-gen and prove
+/// -- and assert that no private witness value ever appears in the traffic in
+/// plaintext.
+///
+/// This is the tripwire for the grossest possible MPC-performance-work
+/// regression: code that "optimises" by opening (or simply serializing) the
+/// witness instead of computing on shares. The message/byte-count fences
+/// above can't catch a leak that replaces a masked payload with a plaintext
+/// one of the same shape; this scan can.
+///
+/// Method and honest limits (heuristic, per the ch. 24 §5 spec):
+/// - Targets are the KAT witness's PRIVATE values (public inputs are known to
+///   everyone and legitimately handled in the clear), filtered to those whose
+///   32-byte encoding has at least 16 nonzero bytes, so that low-entropy
+///   values (small integers) can't false-positive against structural zeros or
+///   length fields in frames. A uniformly random share/masked value matches a
+///   specific high-entropy 32-byte pattern with probability ~2^-256 per
+///   window -- a hit is a leak, not a coincidence.
+/// - Each target is searched in BOTH its canonical little-endian field
+///   encoding (what `CanonicalSerialize` puts on the wire) and its raw
+///   Montgomery-limb encoding (what a memory-dump-style serialization of an
+///   ark field element would emit), at every byte offset of every frame.
+/// - What this cannot catch: leaks under any further encoding (compressed,
+///   split across frames, arithmetically re-blinded with a KNOWN mask, ...).
+///   It is a tripwire, not a proof of privacy.
+#[test]
+fn poseidon_witness_view_scan_no_plaintext_leak_poseidon2sponge() {
+    use ark_ff::BigInteger;
+
+    const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_pos";
+    const NAME: &str = "poseidon";
+    let circuit_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.json");
+    let witness_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.gz");
+    let prover_toml = format!("../test_vectors/noir/{NAME}/Prover.toml");
+
+    let program_artifact =
+        co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let public_inputs = constraint_system.public_inputs.clone();
+
+    // Build the plaintext-pattern set from the known (KAT) witness: the
+    // values below are exactly what the MPC run computes under sharing, so
+    // none of them may ever cross the network in the clear.
+    let witness: Vec<Fr> = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
+        .expect("failed to parse witness");
+    let mut patterns: HashSet<[u8; 32]> = HashSet::new();
+    let mut n_targets = 0usize;
+    for (index, value) in witness.iter().enumerate() {
+        if public_inputs.contains(&(index as u32)) {
+            continue;
+        }
+        let mut canonical = Vec::with_capacity(32);
+        value.serialize_uncompressed(&mut canonical).unwrap();
+        assert_eq!(canonical.len(), 32);
+        if canonical.iter().filter(|&&b| b != 0).count() < 16 {
+            continue; // low-entropy value; would false-positive on zeros
+        }
+        n_targets += 1;
+        patterns.insert(canonical.try_into().unwrap());
+        // Raw Montgomery limbs (ark's in-memory representation).
+        let mont: [u8; 32] = value.0.to_bytes_le().try_into().unwrap();
+        patterns.insert(mont);
+    }
+    // Anti-vacuity: the poseidon witness must supply a healthy number of
+    // high-entropy private targets (hash-round intermediates), otherwise the
+    // scan below proves nothing.
+    assert!(
+        n_targets >= 32,
+        "too few high-entropy private witness targets ({n_targets}); scan would be vacuous"
+    );
+
+    // Anti-vacuity for the scanner itself: it must find a target that we
+    // deliberately embed mid-frame.
+    let some_pattern = *patterns.iter().next().unwrap();
+    let mut planted = vec![0xAB_u8; 7];
+    planted.extend_from_slice(&some_pattern);
+    planted.extend_from_slice(&[0xCD_u8; 5]);
+    assert_eq!(
+        scan_frames_for_patterns(&[Bytes::from(planted)], &patterns),
+        Some((0, 7)),
+        "scanner failed to find a deliberately planted witness value"
+    );
+
+    // Full REP3 run -- witext + pk-gen + prove -- with every party's traffic
+    // on both networks recorded.
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let nets0 = LocalNetwork::new_3_parties().map(|n| RecordingNetwork::new(n, log.clone()));
+    let nets1 = LocalNetwork::new_3_parties().map(|n| RecordingNetwork::new(n, log.clone()));
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+    );
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+
+    let mut threads = Vec::with_capacity(3);
+    for (net0, net1) in nets0.into_iter().zip(nets1) {
+        let prover_crs = prover_crs.clone();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+        let artifact = program_artifact.clone();
+        let prover_toml = prover_toml.clone();
+        threads.push(std::thread::spawn(move || {
+            let solver = Rep3CoSolver::new(&net0, &net1, artifact, prover_toml).unwrap();
+            let witness = solver.solve().unwrap();
+            let witness = co_noir::witness_stack_to_vec_rep3(witness);
+            let pk = co_noir::generate_proving_key_rep3(
+                &constraint_system,
+                witness,
+                &net0,
+                &net1,
+                &prover_crs,
+            )
+            .unwrap();
+            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+            let (proof, _) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                &net0,
+                pk,
+                &prover_crs,
+                ZeroKnowledge::No,
+                &vk.inner_vk,
+            )
+            .unwrap();
+            proof
+        }));
+    }
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+    // The run must be the real protocol: proof bytes match the plain KAT.
+    let proof_u8 = Poseidon2Sponge::to_buffer(results[0].inner_as_ref());
+    assert_eq!(proof_u8, std::fs::read(PROOF_FILE).unwrap());
+
+    // Volume sanity: we must actually have captured a full run's traffic.
+    let frames = Arc::try_unwrap(log).unwrap().into_inner().unwrap();
+    let total_bytes: usize = frames.iter().map(|f| f.len()).sum();
+    assert!(
+        total_bytes >= 1_000_000,
+        "captured only {total_bytes} bytes of traffic; recording is broken"
+    );
+
+    // The scan proper: no private witness value, in either encoding, at any
+    // offset, in any frame, at any party, in either direction.
+    if let Some((frame, offset)) = scan_frames_for_patterns(&frames, &patterns) {
+        panic!(
+            "PLAINTEXT WITNESS LEAK: witness value found in network traffic \
+             (frame {frame} at byte offset {offset} of {} frames / {total_bytes} bytes scanned)",
+            frames.len()
+        );
+    }
+}
+
 #[test]
 #[ignore = "REP3 methods on shared values are not yet implemented"]
 fn recursion_witness_and_proof_test_poseidon2sponge() {
@@ -531,4 +1150,393 @@ fn zk_recursion_witness_and_proof_test_poseidon2sponge() {
 fn zk_recursion_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
+}
+
+/// Loads the committed comms floor-table: median per-phase, per-party
+/// framed-message/byte totals from the 2026-07-25 full 12-circuit bench run
+/// (`bench-results/2026-07-25/netstats/`), PLUS a separate in-process
+/// LocalNetwork baseline for the slow test below. See the embedded
+/// `_provenance` object for methodology, phase definitions, and known data
+/// anomalies (sha256 family REP3-prove timeout/pruning, party asymmetry,
+/// and -- found while landing the slow test below -- a large gap between
+/// in-process and cross-process message/byte counts at high data volumes).
+fn comms_floor_table() -> serde_json::Value {
+    let raw = include_str!("rep3_comms_floor_table.json");
+    serde_json::from_str(raw).expect("rep3_comms_floor_table.json must parse as JSON")
+}
+
+/// Reads the `total_msgs` in-process baseline for `circuit`/`phase` out of
+/// `circuits_inprocess_baseline` (NOT the cross-process `circuits` section --
+/// see that section's `_methodology` and `_provenance.known_anomalies` for
+/// why the two are not comparable at this data volume).
+fn inprocess_baseline_total_msgs(table: &serde_json::Value, circuit: &str, phase: &str) -> u64 {
+    table["circuits_inprocess_baseline"][circuit][phase]["total_msgs"]
+        .as_u64()
+        .unwrap_or_else(|| {
+            panic!(
+                "no in-process baseline for {circuit}/{phase} in \
+                 rep3_comms_floor_table.json `circuits_inprocess_baseline`"
+            )
+        })
+}
+
+/// T2-proper: end-to-end comms BAND fence for a mid-size circuit. Unlike the
+/// exact-pin fences above, this asserts each phase's total message count
+/// falls inside `[0.5x, 2x]` of a measured baseline (ch. 24 §5's band idea):
+/// loose enough to tolerate implementation-detail drift across a full
+/// end-to-end run (real witness extension via `Rep3CoSolver` + pk-gen +
+/// prove, three genuine REP3 parties), tight enough to catch both a silent
+/// protocol-skip (comms collapsing towards 0 -- the "optimisation" that
+/// stops doing the MPC) and an accidental round explosion (10x+ blow-up).
+///
+/// `bb_sha256_compression` was chosen over the poseidon/sha256 size sweeps
+/// because per `bench-results/2026-07-25/RESULTS.md` it is the only "big"
+/// circuit in the 12-circuit matrix with COMPLETE REP3 netstats: the sha256
+/// 2^16-2^20 sweep's REP3 prove either hit the 600s cell timeout (2^16) or
+/// was never attempted at all (2^17-2^20, family pruned after that timeout)
+/// -- see `_provenance.known_anomalies` in the floor table JSON. It also
+/// exercises the lookup-heavy path at scale (2,896 lookup gates / 12 tables
+/// / 33,944 table rows per `co-noir circuit-info`), unlike poseidon.
+///
+/// The band is checked against `circuits_inprocess_baseline` in the floor
+/// table, NOT the cross-process `circuits` bench data, for a reason found
+/// while landing this test: `bench-results/2026-07-25/RESULTS.md` measured
+/// ~140s wall-clock and ~268k total messages / ~17.2GB total bytes for a
+/// cross-process (3 independent OS processes, real TCP loopback) REP3 run of
+/// this circuit's prove phase. This test's in-process `LocalNetwork` harness
+/// (matching every other test in this file: 3 `std::thread::spawn` "parties"
+/// sharing one process and one 16-thread rayon pool) instead measures ~2.5k
+/// messages / ~1.07GB bytes and finishes in ~5-6s -- ~100x fewer messages,
+/// ~16x fewer bytes, ~25x faster -- for a PROVABLY CORRECT run (the proof
+/// byte-matches the plain-prover KAT below). That is a real measurement-
+/// methodology gap (see `_provenance.known_anomalies` for the numbers and
+/// what was and wasn't verified about its cause), not a protocol difference,
+/// so comparing this harness's counts against the cross-process floor would
+/// be comparing two different things and either need a permanently-loose
+/// band or spuriously fail. `#[ignore]`-gated: milestone/acceptance runs
+/// only, never fast-check or CI's default tier (it is the heaviest test in
+/// this file even at ~5-6s).
+#[test]
+#[ignore = "slow relative to the rest of this file (~5-6s, full REP3 witext+pkgen+prove on \
+            the lookup-heavy bb_sha256_compression circuit): milestone/acceptance runs only"]
+fn bb_sha256_compression_comms_band_fence_poseidon2sponge() {
+    const NAME: &str = "bb_sha256_compression";
+    let circuit_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.json");
+    let prover_toml = format!("../test_vectors/noir/{NAME}/Prover.toml");
+
+    let program_artifact =
+        co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+
+    let nets0 = LocalNetwork::new_3_parties();
+    let nets1 = LocalNetwork::new_3_parties();
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+    );
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+
+    let mut threads = Vec::with_capacity(3);
+    for (net0, net1) in nets0.into_iter().zip(nets1) {
+        let prover_crs = prover_crs.clone();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+        let artifact = program_artifact.clone();
+        let prover_toml = prover_toml.clone();
+        threads.push(std::thread::spawn(move || {
+            let solver = Rep3CoSolver::new(&net0, &net1, artifact, prover_toml).unwrap();
+            let witness = solver.solve().unwrap();
+            let witness = co_noir::witness_stack_to_vec_rep3(witness);
+
+            // Snapshot after witext: combined across both networks, since
+            // solving can use either. (Byte totals were also inspected while
+            // landing this test -- see the doc comment above and the floor
+            // table's `known_anomalies` for the in-process-vs-cross-process
+            // byte comparison; only message counts are asserted below.)
+            let witext0 = msg_totals(&net0.get_connection_stats());
+            let witext1 = msg_totals(&net1.get_connection_stats());
+            let witext_total = (witext0.0 + witext0.1) + (witext1.0 + witext1.1);
+
+            let pk = co_noir::generate_proving_key_rep3(
+                &constraint_system,
+                witness,
+                &net0,
+                &net1,
+                &prover_crs,
+            )
+            .unwrap();
+            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+
+            // pk-gen delta (both networks) since the witext snapshot.
+            let pkgen0 = msg_totals(&net0.get_connection_stats());
+            let pkgen1 = msg_totals(&net1.get_connection_stats());
+            let pkgen_total = (pkgen0.0 - witext0.0 + pkgen0.1 - witext0.1)
+                + (pkgen1.0 - witext1.0 + pkgen1.1 - witext1.1);
+
+            let (proof, _) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                &net0,
+                pk,
+                &prover_crs,
+                ZeroKnowledge::No,
+                &vk.inner_vk,
+            )
+            .unwrap();
+
+            // prove delta (net0 only -- Rep3CoUltraHonk::prove doesn't touch
+            // net1) since the pk-gen snapshot.
+            let after0 = msg_totals(&net0.get_connection_stats());
+            let prove_total = (after0.0 - pkgen0.0) + (after0.1 - pkgen0.1);
+
+            // "prove_nonzk" in the floor table = pk-gen (both nets) + prove
+            // (net0) combined -- see rep3_comms_floor_table.json
+            // `_provenance.phase_definitions`.
+            let prove_nonzk_total = pkgen_total + prove_total;
+
+            (proof, witext_total, prove_nonzk_total)
+        }));
+    }
+
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+    // Cross-check against a plain (non-MPC) proof computed in-test: no KAT
+    // proof file is checked in for this circuit.
+    let proof_u8 = Poseidon2Sponge::to_buffer(results[0].0.inner_as_ref());
+    let expected = plain_proof_bytes::<Poseidon2Sponge>(NAME, ZeroKnowledge::No);
+    assert_eq!(
+        proof_u8, expected,
+        "REP3 proof bytes must match the plain (non-MPC) prover on the same witness"
+    );
+    for (i, r) in results.iter().enumerate() {
+        let bytes_i = Poseidon2Sponge::to_buffer(r.0.inner_as_ref());
+        assert_eq!(bytes_i, expected, "party {i} proof bytes diverged");
+    }
+
+    let measured_witext_total: u64 = results.iter().map(|r| r.1 as u64).sum();
+    let measured_prove_total: u64 = results.iter().map(|r| r.2 as u64).sum();
+
+    let table = comms_floor_table();
+    let baseline_witext = inprocess_baseline_total_msgs(&table, NAME, "witext");
+    let baseline_prove = inprocess_baseline_total_msgs(&table, NAME, "prove_nonzk");
+
+    let band = |measured: u64, baseline: u64, label: &str| {
+        let lo = baseline as f64 * 0.5;
+        let hi = baseline as f64 * 2.0;
+        assert!(
+            (measured as f64) >= lo && (measured as f64) <= hi,
+            "{label}: measured total_msgs={measured} outside [0.5x, 2x] of the in-process \
+             LocalNetwork baseline={baseline} (band=[{lo}, {hi}]) from \
+             rep3_comms_floor_table.json `circuits_inprocess_baseline` -- a value BELOW the \
+             band suggests a silent protocol-skip (comms collapsed); ABOVE suggests a \
+             round/message explosion"
+        );
+    };
+    band(measured_witext_total, baseline_witext, "witext");
+    band(
+        measured_prove_total,
+        baseline_prove,
+        "prove_nonzk (pk-gen + prove combined)",
+    );
+}
+
+/// Computes the ZK plaindriver (single-prover, `PlainUltraHonkDriver`) proof bytes for a
+/// circuit's KAT witness with the ZK masking values drawn deterministically from
+/// `zk_blinding` (seedable-ZK-blinding fence; see
+/// `co_noir_common::zk_masking`). Mirrors `plain_proof_bytes` above, but ZK-only and
+/// seeded. Asserts the proof verifies before returning the bytes.
+fn plaindriver_zk_seeded_proof_bytes<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    zk_blinding: &SeededZkBlinding,
+) -> Vec<u8> {
+    let has_zk = ZeroKnowledge::Yes;
+    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+    let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
+
+    let constraint_system =
+        co_noir::constraint_system_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse constraint system");
+    let witness = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
+        .expect("failed to parse witness");
+
+    let mut driver = PlainAcvmSolver::new();
+    let recursion_crs_size = constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>();
+    let recursion_crs = if recursion_crs_size > 0 {
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, recursion_crs_size, has_zk).unwrap()
+    } else {
+        ProverCrs::default()
+    };
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness,
+        HonkRecursion::UltraHonk,
+        &recursion_crs,
+        &mut driver,
+    )
+    .unwrap();
+
+    let crs_size = builder.compute_dyadic_size();
+    let (prover_crs, verifier_crs) =
+        CrsParser::<Bn254G1>::get_crs::<Bn254>(CRS_PATH_G1, CRS_PATH_G2, crs_size, has_zk)
+            .expect("failed to get crs")
+            .split();
+    let (proving_key, inner_vk) = proving_key::create_keys_barretenberg::<
+        Bn254G1,
+        PlainUltraHonkDriver,
+        _,
+    >(0, builder, &prover_crs, &mut driver)
+    .unwrap();
+    let verifying_key = VerifyingKey {
+        crs: verifier_crs,
+        inner_vk,
+    };
+
+    let (proof, public_input) =
+        CoUltraHonk::<PlainUltraHonkDriver, _, H>::prove_with_seeded_zk_blinding(
+            proving_key,
+            &prover_crs,
+            has_zk,
+            &verifying_key.inner_vk,
+            zk_blinding,
+        )
+        .unwrap();
+
+    let is_valid =
+        UltraHonk::<_, H>::verify::<Bn254>(proof.clone(), &public_input, &verifying_key, has_zk)
+            .unwrap();
+    assert!(is_valid, "seeded plaindriver ZK proof must verify");
+
+    H::to_buffer(proof.inner_as_ref())
+}
+
+/// Runs the full 3-party REP3 ZK proving flow with the ZK masking values drawn
+/// deterministically from `zk_blinding` (all parties get the same source, exactly like they
+/// would agree on masking randomness out of band). Returns each party's serialized proof
+/// bytes plus party 0's (proof, public inputs, vk) so the caller can order the
+/// verification assert AFTER its byte-parity asserts (red-validation then fails at the
+/// parity assert, the sharpest signal).
+#[expect(clippy::type_complexity)]
+fn rep3_zk_seeded_proof_bytes_per_party<H: TranscriptHasher<TranscriptFieldType>>(
+    program_artifact: &ProgramArtifact,
+    witnesses: [Vec<Rep3Type<Fr>>; 3],
+    zk_blinding: &SeededZkBlinding,
+) -> (
+    [Vec<u8>; 3],
+    HonkProof<H::DataType>,
+    Vec<H::DataType>,
+    VerifyingKey<Bn254>,
+) {
+    let has_zk = ZeroKnowledge::Yes;
+    let nets0 = LocalNetwork::new_3_parties();
+    let nets1 = LocalNetwork::new_3_parties();
+    let mut threads = Vec::with_capacity(3);
+    let constraint_system = co_noir::get_constraint_system_from_artifact(program_artifact);
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs =
+        Arc::new(CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, has_zk).unwrap());
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+    for (net0, net1, witness) in izip!(nets0, nets1, witnesses) {
+        let prover_crs = prover_crs.clone();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(program_artifact);
+        let zk_blinding = zk_blinding.clone();
+        threads.push(std::thread::spawn(move || {
+            let pk = co_noir::generate_proving_key_rep3(
+                &constraint_system,
+                witness,
+                &net0,
+                &net1,
+                &prover_crs,
+            )
+            .unwrap();
+            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+
+            let (proof, public_input) = Rep3CoUltraHonk::<_, H>::prove_with_seeded_zk_blinding(
+                &net0,
+                pk,
+                &prover_crs,
+                has_zk,
+                &vk.inner_vk,
+                &zk_blinding,
+            )
+            .unwrap();
+            (proof, public_input, vk)
+        }));
+    }
+
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let bytes: [Vec<u8>; 3] = std::array::from_fn(|i| H::to_buffer(results[i].0.inner_as_ref()));
+    let (proof, public_input, vk) = results.into_iter().next().unwrap();
+    (bytes, proof, public_input, vk)
+}
+
+/// Seedable-ZK-blinding byte-parity fence (plaindriver vs REP3, ZK mode).
+///
+/// ZK proof bytes normally can't be cross-checked between drivers because the masking
+/// randomness comes from an unseedable secure RNG (see the ZK comms fence's doc comment
+/// above). This fence closes that gap: with the SAME witness and the SAME injected blinding
+/// randomness (`SeededZkBlinding`, testing-only API), the plaindriver ZK proof and all
+/// three REP3 parties' ZK proofs must be BYTE-IDENTICAL -- the strongest possible statement
+/// that the MPC ZK path computes exactly the plain protocol, masking included. Also pins:
+/// - determinism: same seed twice => identical bytes;
+/// - anti-vacuity: a different seed => different bytes, and seeded != unseeded
+///   (overwhelmingly), so the parity assert can't pass by comparing constants.
+#[test]
+fn zk_blinding_seeded_plaindriver_rep3_byte_parity_poseidon2sponge() {
+    let circuit_file = "../test_vectors/noir/poseidon/kat/poseidon.json";
+    let witness_file = "../test_vectors/noir/poseidon/kat/poseidon.gz";
+
+    let program_artifact = co_noir::program_artifact_from_reader(File::open(circuit_file).unwrap())
+        .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let witness = co_noir::witness_from_reader(File::open(witness_file).unwrap()).unwrap();
+
+    let seed_a = SeededZkBlinding::from_u64(0x5EED_B11D);
+    let seed_b = SeededZkBlinding::from_u64(0x0DD5_EED5);
+
+    // Plaindriver, seed A, twice: seeded proving must be deterministic.
+    let plain_a = plaindriver_zk_seeded_proof_bytes::<Poseidon2Sponge>("poseidon", &seed_a);
+    let plain_a_again = plaindriver_zk_seeded_proof_bytes::<Poseidon2Sponge>("poseidon", &seed_a);
+    assert_eq!(
+        plain_a, plain_a_again,
+        "same blinding seed must reproduce identical proof bytes"
+    );
+
+    // Anti-vacuity 1: a different seed must change the bytes (the seed actually reaches
+    // the committed masking values).
+    let plain_b = plaindriver_zk_seeded_proof_bytes::<Poseidon2Sponge>("poseidon", &seed_b);
+    assert_ne!(
+        plain_a, plain_b,
+        "different blinding seeds must produce different ZK proof bytes"
+    );
+
+    // Anti-vacuity 2: seeded vs unseeded (secure-RNG) bytes differ overwhelmingly. This
+    // also re-runs the existing unseeded ZK plaindriver prove+verify path, pinning that the
+    // default path still works alongside the new API.
+    let plain_unseeded = plain_proof_bytes::<Poseidon2Sponge>("poseidon", ZeroKnowledge::Yes);
+    assert_ne!(
+        plain_a, plain_unseeded,
+        "seeded proof bytes must differ from a secure-RNG (unseeded) run"
+    );
+
+    // REP3, seed A: every party's ZK proof bytes must equal the plaindriver's.
+    let mut rng = StdRng::seed_from_u64(0xFE_ACE);
+    let witnesses = split_witness(&witness, &constraint_system.public_inputs, &mut rng);
+    let (rep3_bytes, proof, public_input, vk) = rep3_zk_seeded_proof_bytes_per_party::<
+        Poseidon2Sponge,
+    >(&program_artifact, witnesses, &seed_a);
+    for (i, party_bytes) in rep3_bytes.iter().enumerate() {
+        assert_eq!(
+            party_bytes, &plain_a,
+            "REP3 party {i}'s seeded ZK proof bytes must equal the plaindriver's"
+        );
+    }
+
+    // And the (shared) REP3 proof must verify.
+    let is_valid = UltraHonk::<Bn254G1, Poseidon2Sponge>::verify(
+        proof,
+        &public_input,
+        &vk,
+        ZeroKnowledge::Yes,
+    )
+    .unwrap();
+    assert!(is_valid, "seeded REP3 ZK proof must verify");
 }
