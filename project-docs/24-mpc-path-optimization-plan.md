@@ -265,7 +265,16 @@ its job. The prove-side pain must come from the lookup machinery.)*
   47 ms/gate slope rests on ONE circuit (sha256_2e16 is censored at the
   600 s cap); queued: (a) one UNCAPPED sha256_2e16 REP3 pk-gen
   measurement — registered prediction ≈ 2,040 s ± 20% (43,440 gates ×
-  47 ms + 0.45 s baseline); (b) a designed sweep: synthetic Noir
+  47 ms + 0.45 s baseline);
+  **[(a) DONE 2026-07-26 02:20–02:54 UT: measured pk-gen
+  2,039.6 s (all 3 parties within 3 ms), prove-proper 3.6 s —
+  the registered ~2,040 s prediction hit to 0.02%. The
+  per-compression-call cost model (15 calls × ~136 s) is CONFIRMED;
+  equivalently ~47 ms per lookup gate on this circuit family — but
+  note the mechanism behind that slope is the per-intermediate Yao
+  field↔binary conversions (L0e), not lookup-gate machinery per se.
+  3-party proofs byte-identical (non-ZK). Logs: session-17 scratchpad
+  sha2e16-uncapped/.]** (b) a designed sweep: synthetic Noir
   circuits varying lookup-gate count at fixed table set & fixed
   arithmetic, and varying arithmetic at fixed lookups — prediction:
   pk-gen linear in lookup gates (slope set by the per-gate OHV pipeline,
@@ -276,6 +285,14 @@ its job. The prove-side pain must come from the lookup machinery.)*
   vkgen was already split at v2 design time; co-noir's wasn't — design
   miss) and emit separate netstats phases (currently one
   "build-and-generate-proof" blob).
+  **[v2.1 measurement fixes LANDED 2026-07-26 (uncommitted): the
+  launcher now auto-produces phase-split.csv every run (wired
+  bench-retro-phase-split.py into bench-0_5-launcher.sh), and the CLI
+  gained CO_NOIR_NET_STATS_JSON_PKGEN — a mid-run netstats snapshot
+  after pk-gen (phase "build-proving-key"), wired into the bench's
+  REP3 prove cells as netstats/*_pkgen_*.json; subtract from the
+  matching *_prove_* totals for true per-phase comms. Smoke-tested on
+  a live 3-party 2^17 prove.]**
 - **Poseidon (pure-arithmetic) overhead: REP3÷bb (zk) = 3.1× at 2^11,
   rising to a ~13× plateau across 2^17–2^20** (11.0/12.3/13.3/12.8×).
   REP3÷plaindriver ≈ 5.2× at 2^20 (101 s vs 19.3 s). Down from v1's
@@ -370,10 +387,70 @@ its job. The prove-side pain must come from the lookup machinery.)*
   `decompose_circuit_compose_blueprint!` (mpc-core's OWN TODOs at
   yao.rs:944/:965/:993) — −1 RTT on EVERY GC invocation, S effort,
   keeps paying after batching.
+  **[L0c LANDED 2026-07-25 late (agent) + coordinator-verified
+  2026-07-26 (uncommitted).** New shared framing primitive
+  `joint_input_added_and_id2_as_bits` (rep3/yao.rs) + typed wrappers
+  (field, and 4 ring/field combinations in rep3_ring/yao.rs); all four
+  decompose blueprints now sample x23 locally up-front and inject it
+  with the arithmetic inputs in ONE round-trip. Payloads identical —
+  ID2's wire labels are drawn from the same RNG streams in the same
+  per-stream order (x2 bits then x23 bits), so every derived value and
+  the garbled circuit are unchanged; only frame framing merged. x23
+  sampling moved before the input round but uses the separate
+  bitcomp1/bitcomp2 streams — no per-stream sequence change. Referee:
+  blackbox_and 3-party proofs BYTE-IDENTICAL before/after (md5, all
+  parties); poseidon fences UNCHANGED (116,116)/(198,198) — canary
+  held; blackbox_and + add3u64 pk-gen fences re-pinned consciously
+  (−2 sends at ID2, −1 recv at ID0/ID1 per GC invocation:
+  blackbox_and (155,203)/(185,161)/(191,167) → (155,200)/(185,158)/
+  (185,167); add3u64 (146,193)/(220,190)/(222,205) → (146,192)/
+  (220,189)/(220,205)); fast-check --all-fast PASS incl. live bb
+  v5.0.1 cross-verify. Timing: blackbox_and pk-gen 81.8 → 75.0 ms
+  (3 GC invocations; the win scales with GC-call count — sha's 369
+  calls are the target). Patch: session-16 scratchpad l0c/l0c.patch.]**
   Ceiling: witext's one-shot Bristol evaluation = 0.1 s for the whole
   compression. Note: NO cross-invocation garbling-preprocessing
   (delta reuse) exists in mpc-core — within-call batching is the only
   amortisation lever short of engine work.
+  **[L0a+L0b REFUTED BY MEASUREMENT 2026-07-26, REVERTED (patch +
+  full analysis preserved: session-17 scratchpad l0ab/).** Implemented
+  exactly to spec (agent, coordinator-verified): init + extend_witness
+  same-table batching (369→~354 invocations), fetch/finish split of
+  get_lookup_accumulators_ct so gate emission stayed
+  position-preserving, ChInput∥MajInput per round on the two nets
+  (128→64 serial-equivalent). Byte-correct on every referee (sha
+  3-party non-ZK proof md5 identical before/after; bb cross-verify
+  VK+proof byte-identical; ALL fences unchanged incl. the poseidon
+  canary — no re-pin was even needed). Performance: before
+  139.3/139.4/139.6 s pk-gen; after 142.3/144.1/142.4 s; isolation
+  L0a-only 146.1 s. So L0a's plumbing is ~+7 s (every remaining
+  singular call pays batch-1 _many routing overhead; batch-of-2 costs
+  ≥2× a singular call) and L0b's concurrency claws back ~−3 s but not
+  enough. **Load-bearing mechanism correction to §3a: the per-GC cost
+  is SIZE-LINEAR garbling/eval compute (wire labels, SHA3 consistency,
+  serialization scale with circuit size), NOT fixed per-call setup —
+  the fixed part is ~2.3 ms/call (L0c's own delta). Each sparse
+  normalization call garbles a full 254-bit field↔binary conversion
+  circuit; K batched conversions cost K× — there is nothing to
+  amortise at loopback.** Consequences: (a) witext's 0.1 s ceiling
+  comes from working on native 32-bit words in ONE Bristol circuit,
+  never round-tripping field↔binary per intermediate — the real L0
+  lever is keeping sha's sparse-form intermediates in the binary/Yao
+  (or LUT) domain across the whole gadget, or the non-Yao a2b+OHV/LUT
+  path (~2 ms/op measured, §3a) — engine-level, effort L, opened as
+  L0e below; (b) batching/concurrency WOULD still pay under WAN RTTs
+  (each call is still a round-trip) — L0a/b-shaped work is a WAN-tier
+  lever, re-evaluate after netem v3; (c) candidate small win: L0b-ONLY
+  (join concurrency without the batching plumbing) hinted at ~−3 s —
+  a much smaller diff, unproven vs baseline, queued behind L0d/L2.]**
+  **L0e (NEW, the surviving sha lever)** — eliminate the per-
+  intermediate field↔binary conversions in the builder's sha gadget:
+  either one-shot the whole compression's sparse-form derivations in a
+  single GC with intermediate wires as outputs (values fed to gate
+  emission in original order), or route the sparse table reads through
+  the MAESTRO-style LUT path (in-tree since PR #307) instead of
+  per-value Yao conversion blueprints. Effort L, engine-level; the
+  only path with headroom to approach witext's 0.1 s ceiling.
 - **L0d — half-share MSM for immediately-opened commitments (NEW,
   from co-groth16 precedent; prove-path, all circuits).**
   `CoUtils::commit` (co-noir-common/src/lib.rs:88-101) runs TWO
@@ -387,6 +464,30 @@ its job. The prove-side pain must come from the lookup machinery.)*
   ~15+ full-size commitments per prove. Effort M, risk low-medium
   (audit: no commitment share consumed un-opened — agent's audit says
   all are opened immediately; re-verify at implementation).
+  **[LANDED 2026-07-26 (coordinator-implemented, uncommitted).**
+  Call-site audit re-verified at implementation: ALL 11 commit sites
+  open immediately (oink w_l/w_r/w_o, counts/tags/w4,
+  inverses/z_perm, gemini masking; zk-data libra concat; SSIPA
+  grand-sum + quotient; shplemini folds + Q; KZG:W). Shape: trait
+  `commit_and_open{,_many}` with default = msm+open (plain/Shamir
+  unchanged); REP3 overrides with `msm_public_points_half` (new,
+  mpc-core pointshare) + `open_half_point{,_many}`
+  (open_half_point_many new, via broadcast_many). Comms: each
+  converted open call = 3-way broadcast (2 sends/2 recvs per party)
+  instead of ring reshare (1/1); fences re-pinned EXACTLY as
+  predicted pre-measurement: poseidon nonzk prove (198,198)→(204,204)
+  (+6 = the 6 non-ZK commit-open calls), zk (272,272)→(282,282)
+  (+10 = +4 ZK-only commitments), blackbox_and 198→204, add3u64
+  248→254; pk-gen fences UNCHANGED (no commit-opens there); byte pins
+  re-pinned, deterministic ×2 runs. Referees: non-ZK proof bytes
+  KAT-identical (opened points identical by construction);
+  fast-check --all-fast PASS incl. bb cross-verify; view scan clean.
+  Measured (poseidon 2^17 ZK prove, 2 reps): 7.94/8.28 s vs ~8.2–8.5 s
+  post-L1f ledger baseline — within the registered 7.7–8.2 s
+  prediction band (~3–4%; different host window, bench v2.1 rerun is
+  the definitive cross-lever measurement; commit-open phase timers
+  now 0.07–0.15 s each at 2^17). §4a checklist: see the retro-audit
+  list in §4a.]**
 - **L2 — RE-SCOPED (2026-07-25, full audit), demoted same day by the
   profile from #1 to "real but minor": batch
   `construct_lookup_read_counts`** (measured 8.0 s = 5.8% of
@@ -470,7 +571,12 @@ its job. The prove-side pain must come from the lookup machinery.)*
   `compute_honk_style_permutation_lagrange_polynomials_from_mapping`
   (co-builder/src/keys/plain_proving_key.rs:297 — the explicit
   "TACEO TODO Barrettenberg uses multithreading here"; 4 wires × n
-  public writes, embarrassingly parallel, ~100–300 ms at 2^20);
+  public writes, embarrassingly parallel, ~100–300 ms at 2^20)
+  **[DONE 2026-07-26 (uncommitted): wires × rows both rayon'd
+  (par_iter_mut zip mapping, min_len 2^12); values identical by
+  construction (pure per-row map), byte parity gated by the VK/proof
+  KATs in fast-check --all-fast (PASS); local-only, no fence impact.
+  Patch: session-17 scratchpad small-levers/]**;
   `get_from_public_luts_internal` b2a loop (mpc-core
   rep3_ring/lut_field.rs:123 "TODO parallelize" — witext path, flag
   only); z_perm writeback + reshare_vec packing (cheap, low priority).
@@ -545,6 +651,34 @@ Retro-audit of today's levers against 1+2 (all PASS):
   the CLI, doc-marked; the unseeded default is bit-identical (proven
   by fences/KATs). Listed here so nobody ever "optimises" it into a
   production path. ✓
+- L0d (2026-07-26): (1) no new knowledge — each party's broadcast
+  half-MSM partial is derivable from the opened commitment plus that
+  party's own summands: with the opened V = A_0+A_1+A_2 public and
+  party i already holding the shares to compute A_i and A_{i-1}, the
+  received A_{i+1} = V − A_i − A_{i-1} adds nothing beyond what the
+  reshare-based open already revealed. Values are identical by
+  construction (same sum), proven by the non-ZK byte-KATs. (2)
+  separate-entity discipline — opens still go through the Network
+  trait (broadcast_many); the half-MSM result is a doc-marked
+  open-immediately-only type (a bare curve point, cannot re-enter
+  share arithmetic); default trait impl keeps plain/Shamir on the
+  exact pre-change path. (3) mechanical: all four prove fences
+  re-pinned to values predicted BEFORE measurement (msg + byte),
+  pk-gen fences unchanged, KAT byte-identity, view scan clean,
+  --all-fast + bb cross-verify green. ✓
+- L0c (checklist written 2026-07-26 at verification; the implementing
+  agent was cut off at the session token limit before writing it):
+  (1) no new knowledge — every party sends/receives exactly the same
+  wire labels as the sequential variant, concatenated into one frame;
+  ID2's x23 values were always locally sampled and always entered the
+  GC as garbler inputs; nothing is opened earlier and no extra limbs
+  ship (fences: ID2 sends FEWER frames, byte totals unchanged in
+  spirit — byte pins land with T4). (2) separate-entity discipline —
+  all traffic still flows through the Network trait; the merged
+  primitive is a pure framing change inside mpc-core's existing
+  send/receive helpers. Mechanical: proof md5 identity ×3 parties,
+  poseidon fence canary, re-pinned lookup-path fences, --all-fast +
+  bb cross-verify. ✓
 
 ## 5. Property-preservation tests (PLAN 6.3 — "actually doing MPC" fences)
 
@@ -592,6 +726,28 @@ Fences, cheapest first:
   plaintext witness values do not appear in any sent/received frame
   (heuristic — random shares collide with plaintext with negligible
   probability at 254 bits). Catches gross "open the witness" regressions.
+  **[DONE 2026-07-26 (uncommitted), strengthened beyond the spec:
+  `poseidon_witness_view_scan_no_plaintext_leak_poseidon2sponge`
+  (tests/rep3.rs, fast tier ~3 s) records EVERY frame at ALL THREE
+  parties on BOTH networks (a `RecordingNetwork` wrapper over
+  `LocalNetwork`) across a full witext + pk-gen + prove run, and scans
+  every byte offset of every frame for every high-entropy private
+  witness value in BOTH encodings — canonical LE (what
+  CanonicalSerialize emits) and raw Montgomery limbs (what a
+  memory-dump serialization would emit). Public inputs excluded; low-
+  entropy values (<16 nonzero bytes of 32) excluded so zeros can't
+  false-positive. Anti-vacuity: ≥32 targets asserted, ≥1 MB traffic
+  asserted, scanner must find a deliberately planted value, proof
+  bytes must equal the plain KAT (real protocol ran). Result: CLEAN.
+  BYTE-level fence pins also landed alongside the msg-count pins in
+  all four T2 fences (§4a item 3): exact per-party (sent, recv) byte
+  totals for poseidon nonzk+zk both phases and for blackbox_and/
+  add3u64 prove; pk-gen totals for the GC-bearing circuits are pinned
+  as a ±8-byte BAND because Yao GC serialization contains variable-
+  length encodings of randomized values (measured drift ±1 byte on
+  multi-MB totals; a systematic leak of 32 B/element lands far outside
+  the band). ZK prove byte totals measured EXACTLY deterministic
+  (masking values are fixed-length), so ZK pins are exact too.]**
 - **T5 (existing)**: ≥4-party Shamir randomness-accounting suite keeps
   guarding degree/resharing correctness for the Shamir path.
 

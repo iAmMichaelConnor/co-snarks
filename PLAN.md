@@ -364,9 +364,23 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       Seedable ZK blinding byte-fence (plaindriver ≡ REP3, Mike's ask)
       in flight. Remaining: T4 view scan, slow-tier thread-invariance
       on recursion. Specs in ch. 24 §5.]**
+      **[UPDATE 2026-07-26 session 17: seedable-ZK-blinding fence landed
+      (session-16 late, verified); T4 VIEW SCAN + BYTE-LEVEL FENCE PINS
+      DONE (uncommitted) — all-parties/both-nets frame recording across
+      witext+pk-gen+prove, scanned for every high-entropy private
+      witness value in canonical AND Montgomery encodings, CLEAN;
+      byte pins added beside all msg-count pins (exact, except GC-
+      bearing pk-gen phases: ±8-byte band — Yao GC serialization
+      drifts ±1 byte run-to-run, measured). Details ch. 24 §5.
+      Remaining: slow-tier thread-invariance on recursion.]**
 - [x] 6.4 Bench v2 run: LAUNCHED 2026-07-25 after 6.1+L1 landed — the
       run measures the post-optimisation baseline. Rerun-per-lever
       (formerly the rest of 6.4) continues as levers land.
+      **[v2.1 rerun LAUNCHED 2026-07-26 01:12 on the optimised tree
+      (L2b/L2c/L1f/L0c/L0d/perm-lagrange; L0a+L0b refuted+reverted,
+      ch. 24 §4), with the v2.1 measurement fixes: native
+      phase-split.csv + per-phase netstats (pkgen snapshot env).
+      High-load window (45.8) — noise caveat in PROGRESS s17.]**
 
 ### Phase 5 — Aztec integration (successor project; scope after Phase 2)
 - [ ] 5.0 **PXE secret sharer** (key output per decision 6): choose the

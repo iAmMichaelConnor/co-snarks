@@ -303,6 +303,7 @@ estimated; no axis that hides the latency-dominated regime.
 - [x] V5 — honesty layer: badges, assumptions panel, reproduce command.
 - [x] V6 — published (private): https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa  (redeploy same file path to keep the URL).
 - [x] V8 — **DONE 2026-07-25** v2 bake: family-split sweep, censored ▲ floor, measured-R default 385, RSS tile, verify_bb banner, provenance → 89666ce5 (same URL).
+- [x] V9 — **DONE 2026-07-26** v2.1 bake (optimised-tree run): anchors re-baked (~110 values), dated Update-2026-07-26 banner (lever results −20…−30% prove-proper; sha root cause resolved → L0e; R-caveat resolved via per-phase netstats), R default 385→384, dirty-tree provenance → 049d3435 + session-17 levers, assumptions refresh (whole-step ~10.4× / prove-proper ~8.8× at 2^20 zk). 07-25 banner + historical CSV blocks kept verbatim. Same URL; source explorer-v4.html in session-17 scratchpad.
 - [x] V7 — **DONE 2026-07-24** (bench ran clean overnight 2026-07-23
       22:11–22:46 UTC): measured medians baked into CIRCUITS (all 3 circuits
       × bb/plaindriver/REP3 × zk/non-zk + REP3 split/witext/verify);

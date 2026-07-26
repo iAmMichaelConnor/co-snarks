@@ -2358,3 +2358,161 @@ re-pinned consciously with old→new recorded; fast-check --all-fast +
 bb cross-verify green before a unit counts as landed; NOTHING commits
 without Mike's explicit word (patches per unit live in the session
 scratchpad; ch. 24 §4 unit boundaries define the commit split).
+
+## Session 17 — 2026-07-26 overnight (autonomous; Mike asleep) — L0c verified; lever queue continues
+
+Recovery: session 16 hit the token limit with the L0c agent in flight.
+Forensics: the agent HAD finished the code + fence re-pins + before/after
+referee runs (patch + proofs + logs in session-16 scratchpad `l0c/`,
+21:11–21:12), but was cut off before the final gate + checklist. Mike had
+separately committed L2b+L2c + session-16 docs at 21:13 (049d3435,
+c621fdde, 78dfcad1). Still uncommitted: L1-followup, seeded-ZK fence,
+T2-proper fences + floor table, L0c.
+
+- **L0c VERIFIED (task 1 of the close-out queue)**: tree diff ≡ saved
+  l0c.patch (only its annotation block differs); blackbox_and proofs
+  byte-identical before/after (md5 ×3 parties ×2 runs); poseidon fence
+  canary unchanged; blackbox_and/add3u64 pk-gen fences re-pinned with
+  old→new recorded in-code; **fast-check --all-fast PASS on the full
+  uncommitted tree** (13 fast-tier tests, bb v5.0.1 cross-verify VK+proof
+  byte-identical, recursion VK KATs green). §4a checklist written
+  retroactively (ch. 24 §4a) — the agent died before writing it.
+  blackbox_and pk-gen 81.8 → 75.0 ms (3 GC invocations; win scales with
+  GC-call count).
+- **Mike's overnight directives (before bed)**: run the whole queue; after
+  the optimisations, re-run the bench suite — extending its measurements
+  first where insightful (pk-gen/prove cell split etc.); research chapter
+  on private-shared-state offerings + business-viable Aztec use cases
+  (ch. 25, agent-drafted — see below); if the queue runs dry, pick other
+  PLAN work but NOT the TS orchestration port.
+- **T4 view-scan + byte-level fence pins DONE (uncommitted)** — the two
+  security asks from the session-16 queue, spec ch. 24 §5 (details + honest
+  limits recorded there): all-parties/both-nets frame recording over a full
+  witext+pk-gen+prove run, scanned at every byte offset for every
+  high-entropy private witness value in canonical AND Montgomery encodings
+  — CLEAN; anti-vacuity via planted-value detection + KAT cross-check.
+  Byte pins beside all msg-count pins: exact everywhere except GC-bearing
+  pk-gen phases (±8-byte band; Yao GC serialization drifts ±1 byte
+  run-to-run — measured, documented in-code). Determinism of ZK prove
+  byte totals confirmed across runs. New test in the fast MPC tier
+  (~3 s, tier now 14 tests / ~12.7 s); fast-check --all-fast PASS ×2.
+  Also fixed a pre-existing clippy needless_question_mark in
+  co-noir/src/lib.rs:210 (from 83a8bde9; fast-check has no clippy step so
+  it had slipped through). Patches: session-17 scratchpad t4/.
+- **Ch. 25 WRITTEN (uncommitted)** — private-shared-state landscape +
+  business-viable Aztec use cases (Mike's overnight ask; agent-researched,
+  ~1,040 lines, claims tagged [V]/[S]/[opinion], grounded in our own bench
+  numbers — spot-verified). Top-3 bets: sealed-bid auctions, Aztec dark
+  pool, private credit-data consortium. Notable finds: TACEO×Aztec
+  announced a formal PSS partnership 2025-09-25; TACEO Network launched
+  2026-03; Penumbra shut down ~2025-09. README indexed.
+- **L0a+L0b implemented, REFUTED by measurement, REVERTED** (full story
+  ch. 24 §4 L0 entry; patch + prediction + all timing logs + agent's
+  own post-mortem: session-17 scratchpad l0ab/). Byte-correct on every
+  referee but pk-gen went 139.4 → 142.4 s (L0a-only isolation: 146.1 s
+  — the batching plumbing itself is the regression; the L0b join
+  clawed back ~3 s). **Mechanism correction that outlives the revert:
+  per-GC cost is size-linear garbling compute, NOT fixed setup — each
+  sparse-normalization call garbles a 254-bit field↔binary conversion
+  circuit, so batching K costs K×; nothing to amortise at loopback.**
+  New lever L0e opened (keep intermediates in binary/LUT domain across
+  the gadget — the only path to witext's 0.1 s ceiling); L0a/b-shaped
+  work re-classified as a WAN-tier lever (still −1 RTT × calls there).
+  Post-revert gate re-run green. Bench-methodology note from the agent,
+  owned honestly: its rep1-after was contaminated by its own concurrent
+  clippy build; conclusion rests on reps 2–3 + isolation rep.
+- **L0d LANDED (uncommitted, coordinator-implemented)** — half-share MSM
+  for the 11 immediately-opened commitments (co-groth16 pattern): REP3
+  now MSMs one summand (ONE Pippenger, not two) and opens via 3-way
+  broadcast; plain/Shamir ride the default trait impl unchanged. Fence
+  moves predicted exactly before measurement (+6 nonzk/+10 zk prove
+  msgs; pk-gen untouched); non-ZK proofs KAT-byte-identical; --all-fast
+  green; poseidon 2^17 ZK prove 7.94/8.28 s vs ~8.2–8.5 s baseline
+  (within prediction band; bench rerun = definitive). Full entry +
+  §4a checklist: ch. 24 §4/§4a. Patch: session-17 scratchpad l0d/.
+- **Small levers + bench v2.1 instrumentation (uncommitted)**:
+  permutation-lagrange rayon TODO done (L4 residue, local-only, KAT-gated,
+  ch. 24 §4); launcher auto-runs phase-split.csv per run; CLI gained
+  CO_NOIR_NET_STATS_JSON_PKGEN (mid-run netstats snapshot after pk-gen)
+  wired into the bench's REP3 cells — per-phase comms now measured, not
+  reconstructed (smoke-tested live). Patches: scratchpad small-levers/.
+- **BENCH v2.1 FULL RUN LAUNCHED 2026-07-26 01:12 UTC** →
+  `bench-results/2026-07-26/` (12 circuits × {bb, plaindriver, REP3} ×
+  {zk, nonzk}, same matrix as v2). ⚠ Host load1m at launch: 45.8
+  (HOST-wide; noisier window than v2's 15–25 — read absolute numbers
+  with the per-row load stamps, lean on medians + same-window ratios).
+  Tree state measured: v2 baseline + L2b + L2c + L1f + L0c + L0d +
+  perm-lagrange rayon (L0a/L0b implemented-then-reverted, not in tree).
+  On BENCH_DONE: RESULTS.md sanity → v2-comparison findings (expect:
+  REP3 prove faster by ~L2b+L2c+L1f+L0d margins; sha pk-gen ~unchanged
+  — L0c's −1 RTT × 369 calls is loopback-small; phase-split.csv +
+  pkgen netstats now native) → commit stays PENDING Mike's word →
+  explorer re-bake (same URL) with the new anchors.
+- **BENCH v2.1 RAN CLEAN 01:12–02:12 UTC (60 min, rc=0, 314 rows,
+  verify_bb 12/12).** Full findings appended to bench-results/README.md;
+  headlines: **REP3 prove-proper −20…−30% at every size** (poseidon 2^20
+  zk 90.2→66.2 s; recursion_zk 85.2→67.1 s; REP3÷bb at 2^20 zk
+  11.4×→8.8×); sha pk-gen −0.4% (unchanged, as predicted post-L0a/b);
+  both expectations from the lever ledger CONFIRMED on the full matrix.
+  Bonus analytical win from the new per-phase netstats: **v2's R-proxy
+  caveat is RESOLVED** — prove-proper recv_msgs IS true round depth
+  (204 at 2^17 nonzk, byte-equal to the in-process fence pin; 336 at
+  2^20 zk ≈ 10·log n + const), and ALL the size-linear frame growth was
+  pk-gen's ~253 B frames; the in-process-vs-TCP anomaly is now
+  LOCALIZED to pk-gen (open, smaller haystack). Run dir UNCOMMITTED
+  with everything else, pending Mike's word.
+- **Explorer RE-BAKED + republished (same URL)** with the v2.1 anchors
+  (~110 values), a dated "Update 2026-07-26" banner (levers/−27%;
+  sha root cause RESOLVED, L0e surviving; R-caveat RESOLVED), honest
+  dirty-tree provenance (049d3435 + uncommitted session-17 levers),
+  R-slider re-seeded 385→384 with the validated round-depth note, and
+  assumptions-table refresh (whole-step ~10.4× / prove-proper ~8.8× at
+  2^20 zk; v2's ~13× kept as dated history; CPU-260% row explicitly
+  dated pre-levers — not re-profiled). 07-25 correction banner + all
+  historical CSV blocks kept verbatim (dated, never rewritten).
+  Source: session-17 scratchpad site/explorer-v4.html.
+- **Uncapped sha256_2e16 REP3 run DONE (02:20–02:54)**: pk-gen
+  **2,039.6 s** vs the registered ~2,040 s ± 20% prediction — a 0.02%
+  hit; prove-proper 3.6 s; 3-party proofs byte-identical (non-ZK; the
+  stored plaindriver proof is ZK — size 14,656 vs 13,120 — so no
+  byte-compare there, by mode not by defect). The per-compression-call
+  model (15 × ~136 s) is CONFIRMED; recorded in ch. 24 §3a.
+
+### Session 17 CLOSE-OUT (read this first next session)
+
+Everything below remains **UNCOMMITTED** (Mike's hard rule; commit split
+should follow ch. 24 §4 unit boundaries + this session's scratchpad
+patches: t4/, l0d/, small-levers/, plus session-16's l2b/, l2c-l1f/,
+l0c/ and the l0ab/ record of the REVERTED unit). Tree gated green
+throughout: fast-check --all-fast + live bb v5.0.1 cross-verify, all
+fences re-pinned consciously, view scan clean.
+
+**Landed this session**: L0c verified; T4 view-scan + byte pins; L0d
+half-share MSM; perm-lagrange rayon; bench v2.1 instrumentation
+(native phase-split + per-phase netstats); bench v2.1 full run
+(REP3 prove −20…−30%, ratio to bb at 2^20 zk now ~8.8×); explorer V9
+re-bake (same URL); ch. 25 (private shared state); uncapped sha
+confirmation (2,039.6 s vs 2,040 predicted). L0a/L0b: implemented,
+refuted, reverted — the mechanism correction (size-linear GC compute)
+and new lever L0e are the surviving value.
+
+**NEXT STEPS, in order (specs in ch. 24)**:
+1. Mike reviews + gives commit word (suggested split: T4+byte-pins /
+   L0c / L0d / perm-lagrange / bench-v2.1 instrumentation / bench run
+   dir + docs / ch. 25).
+2. L0e design (the one remaining sha lever: keep sparse-form
+   intermediates in the binary/LUT domain across the gadget; or the
+   MAESTRO LUT path). Effort L — needs a design pass before code.
+3. Controlled gate-sweep circuits (§3a open item (b)) — the designed
+   experiment; the natural-experiment slope is now confirmed but not
+   isolated.
+4. L2 (construct_lookup_read_counts batching, 1a→1b→1c), L0b-only
+   candidate (WAN-tier), shplemini allocation hygiene (20 GB RSS),
+   old-L2 OHV batching.
+5. Floor-table refresh from v2.1 netstats (provenance text is now
+   doubly historical — L1f and L0d moved prove counts); logical-round
+   counter + per-round byte histogram + distance-tier model (§3a);
+   netem v3; Shamir cells via translate-witness.
+6. In-process-vs-TCP frame anomaly: now localized to pk-gen (~253 B
+   frames, 116 in-process vs 11k–90k TCP) — root-cause when touching
+   mpc-net next.
