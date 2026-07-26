@@ -3963,7 +3963,6 @@ mod field_share {
     /// opened 42,016 bit values, the opened per-read tuple vectors (same shapes as
     /// [`sparse_trace_singular_kernel_reads`]), the slowest party's kernel wall time, and a
     /// per-party comms report (bytes/messages/rounds deltas measured around the kernel call).
-    #[expect(clippy::type_complexity)]
     fn sparse_trace_kernel_run(
         h_init: [u32; 8],
         w_in: [u32; 16],
@@ -4179,7 +4178,7 @@ mod field_share {
     #[ignore = "L0e referee, ~2 min: run explicitly before landing any L0e unit and at milestone gates"]
     fn rep3_sha256_block_sparse_trace_kernel_referee() {
         use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(0x10E_02_u64);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x10E02u64);
 
         let mut cases: Vec<(String, [u32; 8], [u32; 16], bool)> = vec![
             ("all-zero".to_string(), [0; 8], [0; 16], false),

@@ -395,6 +395,26 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         Vec<Self::AcvmType>,
     )>;
 
+    /// Offers the driver the chance to precompute, in one shot, every plookup read the builder's
+    /// sha256 gadget (`co-builder sha_compression.rs::sha256_block`) will request for ONE
+    /// compression call, so the per-read
+    /// [`slice_and_get_sparse_table_with_rotation_values`](Self::slice_and_get_sparse_table_with_rotation_values)
+    /// / [`slice_and_get_sparse_normalization_values`](Self::slice_and_get_sparse_normalization_values)
+    /// calls can be served from a cache instead of each running their own MPC kernel.
+    ///
+    /// Called exactly once at the top of `sha256_block` with the gadget's 24 input VALUES
+    /// (`h_init[0..8]`, `w_in[0..16]`). Purely an optimization hook: the returned values served
+    /// from any cache MUST be identical to what the per-read methods would produce, and drivers
+    /// are free to ignore the hint entirely. The DEFAULT is a no-op (plain and Shamir drivers
+    /// never cache).
+    fn precompute_sha256_block(
+        &mut self,
+        _h_init: &[Self::AcvmType; 8],
+        _w_in: &[Self::AcvmType; 16],
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
+
     /// Slices input1 and input2 into a vector of basis_bits bits each, XORs all values and rotates the results by rotation. Thereby, in total only total_bitsize bits per input are considered.
     #[expect(clippy::type_complexity)]
     fn slice_and_get_xor_rotate_values_with_filter(

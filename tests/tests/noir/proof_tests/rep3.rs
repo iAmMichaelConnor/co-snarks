@@ -1453,6 +1453,166 @@ fn bb_sha256_compression_comms_band_fence_poseidon2sponge() {
     );
 }
 
+/// L0e evidence + referee: full 3-party REP3 pk-gen + prove of `bb_sha256_compression` from a
+/// SHARED KAT witness. Unlike the band fence above (whose `Prover.toml` inputs enter the solver
+/// as PUBLIC AcvmTypes via `Rep3CoSolver::new`, so its sha-gadget plookup reads all take the
+/// public branch), this shares every private witness value like `proof_test` does — the profiled
+/// case where the builder's sha gadget issues its per-read driver calls on shared keys. It is
+/// therefore the byte-level referee for the L0e sha-gadget work (design §5.3-U3/§5.4):
+///
+/// - runs TWO reps with DIFFERENT sharing randomness: per-rep pk-gen wall time + pk-gen comms
+///   deltas are printed as evidence, and the two reps' proof/VK bytes must be IDENTICAL
+///   (sha-path share-rerandomization invariance, the sha analog of
+///   `poseidon_proof_share_rerandomization_invariance_poseidon2sponge`);
+/// - asserts all 3 parties' proof and VK bytes agree and the proof byte-matches the plain
+///   (non-MPC) prover on the same witness — any sha read served with a wrong VALUE anywhere
+///   fails here;
+/// - if `U3_EVIDENCE_DIR` is set, writes each party's proof and VK bytes there for external
+///   md5 comparison across code versions (the L0e before/after gate).
+///
+/// `#[ignore]`-gated: pk-gen from shared witness replays the full sha-gadget MPC cost
+/// (~2×140 s per rep before L0e-U3; seconds after), milestone/acceptance runs only.
+#[test]
+#[ignore = "slow (full shared-witness REP3 pk-gen+prove on the sha-gadget circuit, 2 reps): \
+            L0e milestone/acceptance evidence runs only"]
+fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
+    const NAME: &str = "bb_sha256_compression";
+    let circuit_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.json");
+    let witness_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.gz");
+
+    let program_artifact =
+        co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
+            .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let witness: Vec<Fr> = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
+        .expect("failed to parse witness");
+
+    // The referee: plain (non-MPC) proof bytes on the same witness.
+    let expected = plain_proof_bytes::<Poseidon2Sponge>(NAME, ZeroKnowledge::No);
+    let evidence_dir = std::env::var_os("U3_EVIDENCE_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &evidence_dir {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+
+    let mut rep_proofs: Vec<Vec<u8>> = Vec::new();
+    let mut rep_vks: Vec<Vec<u8>> = Vec::new();
+    for (rep, seed) in [(0u32, 0x10E03Au64), (1u32, 0x10E03Bu64)] {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let witnesses = split_witness(&witness, &constraint_system.public_inputs, &mut rng);
+
+        let nets0 = LocalNetwork::new_3_parties();
+        let nets1 = LocalNetwork::new_3_parties();
+        let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+        let prover_crs = Arc::new(
+            CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+        );
+        let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+
+        let mut threads = Vec::with_capacity(3);
+        for (net0, net1, witness) in izip!(nets0, nets1, witnesses) {
+            let prover_crs = prover_crs.clone();
+            let constraint_system =
+                co_noir::get_constraint_system_from_artifact(&program_artifact);
+            threads.push(std::thread::spawn(move || {
+                let before0 = net0.get_connection_stats();
+                let before1 = net1.get_connection_stats();
+                let start = std::time::Instant::now();
+                let pk = co_noir::generate_proving_key_rep3(
+                    &constraint_system,
+                    witness,
+                    &net0,
+                    &net1,
+                    &prover_crs,
+                )
+                .unwrap();
+                let pkgen_time = start.elapsed();
+                let after0 = net0.get_connection_stats();
+                let after1 = net1.get_connection_stats();
+                let (sent_msgs, recv_msgs) = {
+                    let (s0, r0) = msg_totals(&after0);
+                    let (s1, r1) = msg_totals(&after1);
+                    let (bs0, br0) = msg_totals(&before0);
+                    let (bs1, br1) = msg_totals(&before1);
+                    (s0 + s1 - bs0 - bs1, r0 + r1 - br0 - br1)
+                };
+                let (sent_bytes, recv_bytes) = {
+                    let (s0, r0) = byte_totals(&after0);
+                    let (s1, r1) = byte_totals(&after1);
+                    let (bs0, br0) = byte_totals(&before0);
+                    let (bs1, br1) = byte_totals(&before1);
+                    (s0 + s1 - bs0 - bs1, r0 + r1 - br0 - br1)
+                };
+
+                let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+                let (proof, public_input) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                    &net0,
+                    pk,
+                    &prover_crs,
+                    ZeroKnowledge::No,
+                    &vk.inner_vk,
+                )
+                .unwrap();
+                (
+                    proof,
+                    public_input,
+                    vk,
+                    pkgen_time,
+                    (sent_msgs, recv_msgs, sent_bytes, recv_bytes),
+                )
+            }));
+        }
+
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        for (party, (_, _, _, pkgen_time, (sm, rm, sb, rb))) in results.iter().enumerate() {
+            println!(
+                "[L0e evidence] rep {rep} party {party}: pk-gen {:.3} s; pk-gen comms \
+                 (both nets): sent {sm} msgs / {sb} B, recv {rm} msgs / {rb} B",
+                pkgen_time.as_secs_f64()
+            );
+        }
+
+        let proof_u8 = Poseidon2Sponge::to_buffer(results[0].0.inner_as_ref());
+        let vk_u8 = results[0].2.inner_vk.to_buffer();
+        for (party, r) in results.iter().enumerate() {
+            let party_proof = Poseidon2Sponge::to_buffer(r.0.inner_as_ref());
+            assert_eq!(party_proof, proof_u8, "rep {rep} party {party} proof diverged");
+            let party_vk = r.2.inner_vk.to_buffer();
+            assert_eq!(party_vk, vk_u8, "rep {rep} party {party} VK diverged");
+            if let Some(dir) = &evidence_dir {
+                std::fs::write(dir.join(format!("proof_rep{rep}_party{party}")), &party_proof)
+                    .unwrap();
+                std::fs::write(dir.join(format!("vk_rep{rep}_party{party}")), &party_vk).unwrap();
+            }
+        }
+        assert_eq!(
+            proof_u8, expected,
+            "rep {rep}: REP3 proof bytes must match the plain (non-MPC) prover"
+        );
+        let is_valid = UltraHonk::<Bn254G1, Poseidon2Sponge>::verify(
+            results[0].0.clone(),
+            &results[0].1,
+            &results[0].2,
+            ZeroKnowledge::No,
+        )
+        .unwrap();
+        assert!(is_valid, "rep {rep}: proof must verify");
+
+        rep_proofs.push(proof_u8);
+        rep_vks.push(vk_u8);
+    }
+
+    // Sha-path share-rerandomization invariance: fresh sharing randomness must not move a byte.
+    assert_eq!(
+        rep_proofs[0], rep_proofs[1],
+        "proof bytes must not depend on the sharing randomness"
+    );
+    assert_eq!(
+        rep_vks[0], rep_vks[1],
+        "VK bytes must not depend on the sharing randomness"
+    );
+}
+
 /// Computes the ZK plaindriver (single-prover, `PlainUltraHonkDriver`) proof bytes for a
 /// circuit's KAT witness with the ZK masking values drawn deterministically from
 /// `zk_blinding` (seedable-ZK-blinding fence; see

@@ -14,6 +14,9 @@ use mpc_core::gadgets::poseidon2::{Poseidon2, Poseidon2Precomputations};
 use mpc_core::protocols::rep3::conversion::A2BType;
 use mpc_core::protocols::rep3::id::PartyID;
 use mpc_core::protocols::rep3::yao::circuits::SHA256Table;
+use mpc_core::protocols::rep3::yao::sha256_sparse_trace::{
+    Sha256SparseTraceRead, Sha256SparseTraceTable, sha256_block_sparse_trace_reads,
+};
 use mpc_core::protocols::rep3::{
     Rep3BigUintShare, Rep3PointShare, Rep3State, arithmetic, binary, conversion,
     network::Rep3NetworkExt, pointshare, yao,
@@ -29,6 +32,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::any::TypeId;
 use std::array;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::BitXor;
 
@@ -42,6 +46,20 @@ pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     state1: Rep3State,
     lut_provider: Rep3FieldLookupTable<F>,
     plain_solver: PlainAcvmSolver<F>,
+    /// Precomputed plookup reads of the CURRENT sha256 compression call (one-shot sparse-trace
+    /// kernel, filled by [`NoirWitnessExtensionProtocol::precompute_sha256_block`]), served FIFO
+    /// in the builder gadget's static read order by
+    /// `slice_and_get_sparse_table_with_rotation_values` /
+    /// `slice_and_get_sparse_normalization_values`. Empty whenever no sha256 compression is in
+    /// flight (or the v1 all-shared gate kept the precompute off).
+    sha256_trace_cache: VecDeque<Sha256SparseTraceRead<F>>,
+    /// Read-order-drift canary: number of times the cache front's table tag did not match the
+    /// read the gadget actually requested (each occurrence also emits a `tracing::warn!` and
+    /// drops the remaining cache, so the affected reads take the value-identical per-read
+    /// fallback kernels). Nonzero values mean the gadget's read order and the kernel's read
+    /// schedule have drifted apart — a performance bug, not a correctness bug, but one we want
+    /// to SEE.
+    sha256_trace_cache_tag_mismatches: usize,
     phantom_data: PhantomData<F>,
 }
 
@@ -57,8 +75,71 @@ impl<'a, F: PrimeField, N: Network> Rep3AcvmSolver<'a, F, N> {
             state1,
             lut_provider: Rep3FieldLookupTable::new(),
             plain_solver: PlainAcvmSolver::<F>::default(),
+            sha256_trace_cache: VecDeque::new(),
+            sha256_trace_cache_tag_mismatches: 0,
             phantom_data: PhantomData,
         })
+    }
+
+    /// The sha256 multi-table a rotation-kind driver read with these parameters belongs to, if
+    /// any. `slice_and_get_sparse_table_with_rotation_values` also serves non-sha tables (e.g.
+    /// the AES input table, base 9), which must never touch the sha256 cache — an exact match
+    /// on (base, rotations, slice sizes, total bitsize) is required.
+    fn sha256_rotation_table(
+        basis_bits: &[u64],
+        rotation: &[u32],
+        total_bitsize: usize,
+        base: u64,
+    ) -> Option<Sha256SparseTraceTable> {
+        let table = match (base, rotation, basis_bits) {
+            (28, [6, 0, 3], [2048, 2048, 1024]) => Sha256SparseTraceTable::ChInput,
+            (16, [2, 2, 0], [2048, 2048, 1024]) => Sha256SparseTraceTable::MajInput,
+            (16, [0, 4, 7, 1], [8, 128, 256, 262144]) => Sha256SparseTraceTable::WitnessInput,
+            _ => return None,
+        };
+        (total_bitsize == table.driver_total_bitsize()).then_some(table)
+    }
+
+    /// Pops the front cached sha256 read if its table tag matches `expected`. On a TAG MISMATCH
+    /// (read-order drift between the gadget and the precomputed schedule) it warns loudly,
+    /// bumps [`Self::sha256_trace_cache_tag_mismatches`] and drops the remaining cache, so this
+    /// read and all later ones of the compression fall back to the value-identical per-read
+    /// kernels.
+    fn pop_sha256_cached_read(
+        &mut self,
+        expected: Sha256SparseTraceTable,
+    ) -> Option<Sha256SparseTraceRead<F>> {
+        let front_table = match self.sha256_trace_cache.front() {
+            Some(Sha256SparseTraceRead::Rotation { table, .. })
+            | Some(Sha256SparseTraceRead::Normalization { table, .. }) => *table,
+            None => return None,
+        };
+        if front_table == expected {
+            self.sha256_trace_cache.pop_front()
+        } else {
+            self.sha256_trace_cache_tag_mismatches += 1;
+            tracing::warn!(
+                "sha256 sparse-trace cache TAG MISMATCH: the gadget requested a {expected:?} \
+                 read but the cache front is {front_table:?} — the sha gadget's read order has \
+                 drifted from the precomputed schedule; dropping {} cached reads and serving \
+                 this compression's remaining reads from the per-read fallback kernels \
+                 (value-identical, slower)",
+                self.sha256_trace_cache.len()
+            );
+            self.sha256_trace_cache.clear();
+            None
+        }
+    }
+
+    /// Number of precomputed sha256 reads currently cached (diagnostics/tests).
+    pub fn sha256_trace_cache_len(&self) -> usize {
+        self.sha256_trace_cache.len()
+    }
+
+    /// Number of sha256 cache tag mismatches seen so far (read-order-drift canary; see
+    /// [`Self::pop_sha256_cached_read`]). Diagnostics/tests.
+    pub fn sha256_trace_cache_tag_mismatches(&self) -> usize {
+        self.sha256_trace_cache_tag_mismatches
     }
 
     fn combine_grumpkin_scalar_field_limbs(
@@ -1721,6 +1802,44 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         conversion::b2a_selector(&result.clone(), self.net0, &mut self.state0)
     }
 
+    fn precompute_sha256_block(
+        &mut self,
+        h_init: &[Self::AcvmType; 8],
+        w_in: &[Self::AcvmType; 16],
+    ) -> eyre::Result<()> {
+        // v1 gate (design L0e §3.3): populate the cache only when ALL 24 gadget inputs are
+        // shared — then every one of the compression's 369 plookup reads is keyed on a shared
+        // value, reaches this driver, and does so in exactly the kernel's static read schedule.
+        // Constant/mixed inputs leave the cache empty, so every read takes the existing
+        // per-read path untouched. `is_shared` is share-TYPE metadata, identical at all three
+        // parties (the witness split assigns the same public/shared type everywhere), so all
+        // parties take the same branch and no party's RNG streams or round counts diverge.
+        if h_init.iter().chain(w_in.iter()).any(|v| !Self::is_shared(v)) {
+            return Ok(());
+        }
+        if !self.sha256_trace_cache.is_empty() {
+            self.sha256_trace_cache_tag_mismatches += 1;
+            tracing::warn!(
+                "sha256 sparse-trace cache: {} reads left over from a previous compression at \
+                 the start of a new one — the previous gadget run requested fewer reads than \
+                 the precomputed schedule (read-order drift); dropping them",
+                self.sha256_trace_cache.len()
+            );
+            self.sha256_trace_cache.clear();
+        }
+        let h_init: [ArithmeticShare<F>; 8] = array::from_fn(|i| match &h_init[i] {
+            Rep3AcvmType::Shared(share) => *share,
+            Rep3AcvmType::Public(_) => unreachable!("all inputs checked shared above"),
+        });
+        let w_in: [ArithmeticShare<F>; 16] = array::from_fn(|i| match &w_in[i] {
+            Rep3AcvmType::Shared(share) => *share,
+            Rep3AcvmType::Public(_) => unreachable!("all inputs checked shared above"),
+        });
+        let reads = sha256_block_sparse_trace_reads(&h_init, &w_in, self.net0, &mut self.state0)?;
+        self.sha256_trace_cache.extend(reads);
+        Ok(())
+    }
+
     fn slice_and_get_sparse_table_with_rotation_values(
         &mut self,
         input1: Self::ArithmeticShare,
@@ -1735,6 +1854,34 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )> {
+        // L0e: serve the read from the sha256 sparse-trace cache when one is in flight. On a
+        // tag mismatch or an empty/non-sha cache, fall through to the per-read kernel below —
+        // its values are identical (U2 referee), so the fallback is parity-safe by
+        // construction.
+        if let Some(table) = Self::sha256_rotation_table(basis_bits, rotation, total_bitsize, base)
+            && let Some(read) = self.pop_sha256_cached_read(table)
+        {
+            let Sha256SparseTraceRead::Rotation {
+                sparse,
+                rotated_sparse,
+                key_a_slices,
+                key_b_slices,
+                ..
+            } = read
+            else {
+                unreachable!("rotation-kind tables always cache Rotation reads")
+            };
+            debug_assert_eq!(sparse.len(), basis_bits.len());
+            let to_acvm =
+                |v: Vec<ArithmeticShare<F>>| v.into_iter().map(Rep3AcvmType::Shared).collect();
+            return Ok((
+                to_acvm(sparse),
+                to_acvm(rotated_sparse),
+                to_acvm(key_a_slices),
+                to_acvm(key_b_slices),
+            ));
+        }
+
         let result = yao::get_sparse_table_with_rotation_values(
             input1,
             input2,
@@ -1806,6 +1953,35 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )> {
+        // L0e: serve from the sha256 sparse-trace cache when possible; tag mismatch or empty
+        // cache falls through to the per-read kernel (value-identical, see the rotation twin
+        // above). The parameter check is belt-and-braces: this method only ever serves the
+        // three sha normalization tables.
+        let expected = match table_type {
+            SHA256Table::Choose => Sha256SparseTraceTable::ChOutput,
+            SHA256Table::Majority => Sha256SparseTraceTable::MajOutput,
+            SHA256Table::WitnessExtension => Sha256SparseTraceTable::WitnessOutput,
+        };
+        if base == expected.base()
+            && base_bits == expected.driver_slice_sizes().as_slice()
+            && total_output_bitlen_per_field == expected.driver_total_bitsize()
+            && let Some(read) = self.pop_sha256_cached_read(expected)
+        {
+            let Sha256SparseTraceRead::Normalization {
+                values,
+                key_a_slices,
+                key_b_slices,
+                ..
+            } = read
+            else {
+                unreachable!("normalization-kind tables always cache Normalization reads")
+            };
+            debug_assert_eq!(values.len(), base_bits.len());
+            let to_acvm =
+                |v: Vec<ArithmeticShare<F>>| v.into_iter().map(Rep3AcvmType::Shared).collect();
+            return Ok((to_acvm(values), to_acvm(key_a_slices), to_acvm(key_b_slices)));
+        }
+
         let result = yao::get_sparse_normalization_values(
             input1,
             input2,
@@ -2800,5 +2976,175 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         unimplemented!(
             "functionality madd_div_mod_many_acvm_limbs not implemented for Rep3 in the shared case"
         )
+    }
+}
+
+/// L0e sha256 sparse-trace cache tests: cache serving, VISIBLE tag-mismatch detection, and the
+/// parity-safe fallback to the per-read kernels (design L0e §3.3; the byte-level referee for the
+/// full gadget is the shared-witness bb_sha256_compression proof test in the `tests` crate).
+#[cfg(test)]
+mod sha256_trace_cache_tests {
+    use super::*;
+    use mpc_core::protocols::rep3::{combine_field_elements, share_field_elements};
+    use mpc_net::local::LocalNetwork;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::sync::mpsc;
+
+    type Fr = ark_bn254::Fr;
+
+    /// Three-party referee for the cache mechanics:
+    /// 1. `precompute_sha256_block` on 24 shared inputs fills the FIFO with all 369 reads;
+    /// 2. a matching rotation read is served FROM the cache;
+    /// 3. a deliberately out-of-order normalization read (the cache front is a MajInput read)
+    ///    trips the TAG MISMATCH canary — visibly, via `sha256_trace_cache_tag_mismatches` —
+    ///    drops the cache, and falls back to the real per-read kernel, whose values must equal
+    ///    an independent plain computation;
+    /// 4. re-issuing the read of step 2 on the now-empty cache runs the per-read kernel, and
+    ///    its opened values must EQUAL the cache-served ones (the parity-safety of the
+    ///    fallback, per-value).
+    #[test]
+    fn sha256_trace_cache_serve_tag_mismatch_and_fallback_parity() {
+        let mut rng = StdRng::seed_from_u64(0x10E03CAFE);
+        let h_init: [u32; 8] = array::from_fn(|_| rng.r#gen());
+        let w_in: [u32; 16] = array::from_fn(|_| rng.r#gen());
+
+        // a valid ChOutput key for the mismatch read: base-28 digits [5, 13, 26], rest 0
+        let ch_key = Fr::from(5u64 + 13 * 28 + 26 * 28 * 28);
+
+        let mut vals: Vec<Fr> = Vec::new();
+        vals.extend(h_init.iter().map(|&x| Fr::from(x)));
+        vals.extend(w_in.iter().map(|&x| Fr::from(x)));
+        vals.push(ch_key);
+        vals.push(Fr::from(0u64)); // the key_b zero share
+        let shares = share_field_elements(&vals, &mut rng);
+
+        let nets0 = LocalNetwork::new_3_parties();
+        let nets1 = LocalNetwork::new_3_parties();
+        let (txs, rxs): (Vec<_>, Vec<_>) = (0..3).map(|_| mpsc::channel()).unzip();
+
+        for (net0, net1, my_shares, tx) in izip!(nets0, nets1, shares, txs) {
+            std::thread::spawn(move || {
+                let mut driver =
+                    Rep3AcvmSolver::<Fr, _>::new(&net0, &net1, A2BType::default()).unwrap();
+                let h: [Rep3AcvmType<Fr>; 8] =
+                    array::from_fn(|i| Rep3AcvmType::Shared(my_shares[i]));
+                let w: [Rep3AcvmType<Fr>; 16] =
+                    array::from_fn(|i| Rep3AcvmType::Shared(my_shares[8 + i]));
+                let ch_key_share = my_shares[24];
+                let zero_share = my_shares[25];
+
+                // 1. precompute fills the FIFO with the whole schedule
+                driver.precompute_sha256_block(&h, &w).unwrap();
+                assert_eq!(driver.sha256_trace_cache_len(), 369);
+                assert_eq!(driver.sha256_trace_cache_tag_mismatches(), 0);
+
+                let maj_params: (&[u64], &[u32], usize, u64) =
+                    (&[2048, 2048, 1024], &[2, 2, 0], 64, 16);
+
+                // 2. the first scheduled read is MajInput(h_init[1]): served from the cache
+                let r1 = driver
+                    .slice_and_get_sparse_table_with_rotation_values(
+                        my_shares[1],
+                        zero_share,
+                        maj_params.0,
+                        maj_params.1,
+                        maj_params.2,
+                        maj_params.3,
+                    )
+                    .unwrap();
+                assert_eq!(driver.sha256_trace_cache_len(), 368, "must be cache-served");
+                assert_eq!(driver.sha256_trace_cache_tag_mismatches(), 0);
+
+                // 3. out-of-order ChOutput read: front is MajInput(h_init[2]) -> TAG MISMATCH
+                //    (visible in the counter), cache dropped, served by the fallback kernel
+                let r2 = driver
+                    .slice_and_get_sparse_normalization_values(
+                        ch_key_share,
+                        zero_share,
+                        &[784; 16],
+                        28,
+                        160,
+                        &SHA256Table::Choose,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    driver.sha256_trace_cache_tag_mismatches(),
+                    1,
+                    "the out-of-order read must trip the tag-mismatch canary"
+                );
+                assert_eq!(
+                    driver.sha256_trace_cache_len(),
+                    0,
+                    "a tag mismatch must drop the remaining cache"
+                );
+
+                // 4. same read as step 2, now with an empty cache: silent per-read fallback
+                let r3 = driver
+                    .slice_and_get_sparse_table_with_rotation_values(
+                        my_shares[1],
+                        zero_share,
+                        maj_params.0,
+                        maj_params.1,
+                        maj_params.2,
+                        maj_params.3,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    driver.sha256_trace_cache_tag_mismatches(),
+                    1,
+                    "an empty cache must fall back silently"
+                );
+
+                // one flattened tuple per call, for opening in the main thread
+                let calls: Vec<Vec<Rep3AcvmType<Fr>>> = vec![
+                    r1.0.into_iter().chain(r1.1).chain(r1.2).chain(r1.3).collect(),
+                    r2.0.into_iter().chain(r2.1).chain(r2.2).collect(),
+                    r3.0.into_iter().chain(r3.1).chain(r3.2).chain(r3.3).collect(),
+                ];
+                tx.send(calls).unwrap();
+            });
+        }
+
+        let results: [Vec<Vec<Rep3AcvmType<Fr>>>; 3] =
+            array::from_fn(|i| rxs[i].recv().unwrap());
+
+        // open every call's flattened tuple
+        let opened = |call: usize| -> Vec<Fr> {
+            let shares: [Vec<Rep3PrimeFieldShare<Fr>>; 3] = array::from_fn(|p| {
+                results[p][call]
+                    .iter()
+                    .map(|x| match x {
+                        Rep3AcvmType::Shared(s) => *s,
+                        Rep3AcvmType::Public(_) => unreachable!("sha read tuples are always shared"),
+                    })
+                    .collect()
+            });
+            combine_field_elements(&shares[0], &shares[1], &shares[2])
+        };
+        let r1 = opened(0);
+        let r2 = opened(1);
+        let r3 = opened(2);
+
+        // fallback parity: the cache-served read (r1) equals the per-read kernel (r3), value
+        // for value, across the full (sparse, rotated_sparse, key_a, key_b) tuple
+        assert_eq!(r1, r3, "cache-served values must equal the per-read kernel's");
+
+        // the served key_a slices must recombine to the key h_init[1] (slice widths 11/11/10)
+        let key = r1[6] + r1[7] * Fr::from(1u64 << 11) + r1[8] * Fr::from(1u64 << 22);
+        assert_eq!(key, Fr::from(h_init[1]), "key_a slices must recombine to the key");
+        // and key_b slices are zero
+        assert_eq!(&r1[9..12], &[Fr::from(0u64); 3]);
+
+        // the mismatch-fallback ChOutput read opens to the plain table semantics:
+        // CHOOSE_NORMALIZATION_TABLE[5,13,26,0] = [1,2,2,0]; 2 digits per slice
+        let mut expected_r2 = vec![Fr::from(0u64); 48];
+        expected_r2[0] = Fr::from(1u64 + 2 * 2); // values slice 0: table[5] + 2*table[13]
+        expected_r2[1] = Fr::from(2u64); // values slice 1: table[26] + 2*table[0]
+        expected_r2[16] = Fr::from(5u64 + 13 * 28); // key_a slice 0
+        expected_r2[17] = Fr::from(26u64); // key_a slice 1
+        assert_eq!(
+            r2, expected_r2,
+            "tag-mismatch fallback must produce the plain-table values"
+        );
     }
 }
