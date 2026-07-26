@@ -322,6 +322,31 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       transfer directly. Soundness lens (guides where to spend review effort):
       the prover carries completeness and privacy, while soundness lives in
       the verifier and the circuit builder — so negative tests belong there.
+- [ ] 4.4 **Standing test: co-snark-generated UH proofs must verify in the bb
+      UH verifier** (added 2026-07-26, session 19, Mike's ask). The proof
+      produced by the MPC prover in `~/co-snarks` (REP3/Shamir `co-noir
+      build-and-generate-proof`) is fed to the *bb* `verify` binary and must
+      pass. This is the strongest parity check we have and — for ZK and
+      recursion proofs, whose bytes are legitimately prover-specific (random
+      masking) so byte-KATs cannot apply — it is the ONLY parity guarantee.
+      **What exists today:** `co-noir/co-noir/examples/compare_mpc.sh`
+      (`run_proof_verification`) already does exactly this, 4-way (our/their
+      proof × our/their key), for poseidon + keccak in both ZK and non-ZK
+      modes — but ONLY inside the slow `--full` acceptance gate (needs the
+      3-party REP3 spin-up + the source-built bb oracle). **The delta to
+      build:** (a) promote it to a first-class, always-visible standing test
+      (dedicated harness or Rust integration test that shells to the oracle),
+      not buried in the acceptance sweep, so a silent drop is impossible;
+      (b) guarantee it covers the cases that stress paths byte-KATs miss —
+      **ZK, recursion/recursion_zk, and Shamir** MPC-generated proofs → bb
+      verify; (c) pair it with the negative direction (a co-snark proof with a
+      tampered/malicious field → bb verify MUST reject). **Motivation:** this
+      is precisely the class of check that would catch F1 in
+      `project-docs/26-uh-implementation-bug-findings.md` — co-noir's native
+      Rust verifier omits
+      the public-input pairing-point accumulator aggregation bb performs, a
+      divergence invisible to same-verifier self-checks and non-recursive
+      KATs. Local-only; not blocked by the 4.1/4.2 CI hold.
 
 ### Phase 6 — performance (opened 2026-07-24 on Mike's asks; nothing here
 ### relaxes the invariants: non-ZK proof bytes stay identical to bb, secret

@@ -2735,3 +2735,78 @@ last sha pk-gen term).
 - Phase-split parser SHAMIR gap FIXED (both protocols matched; summary
   grouped by protocol; v2.2 phase-split.csv regenerated, 228 rows).
   First Shamir prove-proper figures recorded in the bench README.
+
+## Session 19 — 2026-07-26 — full-gate PASS; session-18 pile committed; UH bug-hunt; bench v3 (netem) launched
+
+Mike's word this session: run the aborted milestone gate, commit the pile,
+launch bench v3 (netem tiers) — all via cheap Sonnet agents (mechanical work) —
+and separately **check our UH implementation for bugs**. Commit permission was
+given for the pile only; the session-19 doc edits below are left UNCOMMITTED
+(hard rule: no commits without an explicit ask).
+
+- **Milestone gate PASSED.** The session-18 `fast-check --full` that had
+  aborted (empty stdin at its confirmation prompt) was re-run to completion:
+  **rc=0, 33 circuits across 4 shards, full noir suite + sharded
+  compare.sh/compare_mpc.sh incl. slow set.** The 8-unit pile is validated
+  end-to-end.
+- **Session-18 pile COMMITTED — 8 commits on mc/update-co-noir (local only),
+  one per ch. 24 §4 unit:** `46dc448c` L8 (big-quad mul_many batching) ·
+  `f52a194b` L0e U1 (sparse-trace GC) · `66be5920` L0e U2 (kernel +
+  recombination) · `86063a1a` L0e U3 (driver FIFO cache) · `1bf3af72`
+  bench-granularity (round histogram + tier model) · `36cb6c60` bench v2.2 run
+  data · `b3d750bf` L2-1a (construct_lookup_read_counts batching) · `53a7ec5e`
+  docs. Verified byte-identical to the pre-split working tree (empty
+  `git diff <anchor b6d4ad52> HEAD`); `cargo check --workspace` clean; nothing
+  pushed. (Split notes: `l2-1a-files.patch` was a full HEAD-dump not an
+  isolated patch — L2-1a staged from the residual working diff after units 1–6,
+  spot-checked against its NOTES; the launcher same-day-guard + tier-model
+  dependency-bracket hunks were folded into unit 6 by narrative match.)
+- **UH bug-hunt DONE — see `project-docs/26-uh-implementation-bug-findings.md`
+  (durable copy; canonical scratchpad original at session
+  `9488f3f3-…/scratchpad/uh-bug-findings.md`).** Three parallel reviewers
+  (soundness / MPC-leakage / correctness), two headline items
+  coordinator-verified against bb source:
+  - **F1 (real soundness gap, coordinator-confirmed):** the native Rust
+    verifier `decider_verifier.rs:138` pairing-checks only the Shplemini/PCS
+    points; it never reconstructs + aggregates the public-input pairing-point
+    accumulator that bb's `ultra_verifier.cpp:223-240` folds in with a random
+    separator. Non-recursive circuits use the infinity default so the two agree
+    (why every KAT/cross-verify passes); the gap bites only when a **recursive**
+    circuit carries a real accumulator **and co-noir's own verifier is the final
+    arbiter** — a malicious inner accumulator would be silently accepted.
+    Prover output is unaffected (bb/aztec-nr/on-chain still verify correctly).
+    Severity medium/high. → **motivates new PLAN item 4.4** (standing test:
+    co-snark-generated proofs → bb verifier; + the malicious-accumulator
+    negative). Fix owed as a small dedicated unit with a regression test.
+  - **DoS/panic cluster (pre-existing, verified F2/F3):** keccak proof/PI parse
+    panics on non-32-aligned length (`noir-types/src/lib.rs:192`); unchecked
+    `num_public_inputs` from VK bytes drives `Vec::with_capacity`
+    (`oink_verifier.rs:55`); JSON path unwraps + keccak u128 truncation. Same
+    class as the Phase-0 off-curve panic — crash, not false-accept.
+  - **Lever pile CLEAN:** the MPC/leakage reviewer found no correctness or
+    leakage bug in L2b/L2c/L1f/L0c/L0d/L8/L0e — half-share MSM reconstructs only
+    the public commitment (type-prevented from re-entering share arithmetic),
+    seeded-ZK blinding confirmed unreachable from production, batch
+    inversion/reshare/degree-reduction preserve share invariants. One
+    cross-corroborated one-line hardening (both MPC + correctness reviewers): move
+    the L0e sha stale-cache clear above the `!is_shared` early return in
+    `co-acvm/src/mpc/rep3.rs precompute_sha256_block` (non-triggerable today).
+- **PLAN 4.4 ADDED** (Mike's ask): standing test that co-snark-generated UH
+  proofs verify in the bb UH verifier. Scoped against what already exists
+  (`compare_mpc.sh` `run_proof_verification` does the 4-way MPC-proof→bb-verify
+  for poseidon+keccak × ZK/non-ZK, but only in the slow `--full` gate) — the
+  delta is a first-class always-visible test with guaranteed ZK + recursion +
+  Shamir coverage and the negative (tampered proof → bb reject).
+- **Bench v3 (netem tiers) LAUNCHED** (Sonnet agent). Focused REP3 cells
+  (poseidon_2e17/2e20, bb_sha256_compression) under `lo` shaped to match
+  `bench-tier-model.py`'s tiers exactly (loopback control / LAN 1 Gbps 2 ms /
+  WAN 100 Mbps 40 ms; delay=RTT/2 on loopback, cleanup trap mandatory).
+  Purpose: validate the tier-model PREDICTIONS (est_pipelined + [dep_lo,dep_hi]
+  bracket) against real measured WAN/LAN cost — first-of-kind numbers.
+  Results recorded IN-REPO under `bench-results/2026-07-26-v3-netem/` with a
+  README (predicted-vs-measured table + error analysis) per Mike's ask.
+- **NEXT (queued):** on bench-v3 landing, fold results into the bench README +
+  consider explorer re-bake; the F1 fix + PLAN 4.4 standing test are the top
+  correctness follow-ups; then the pivot decision (Phase 5.0 PXE secret sharer
+  vs 5.1d TS orchestration). Session-19 doc edits (PLAN 4.4, ch. 26, README
+  index, this entry) remain UNCOMMITTED pending Mike's word.
