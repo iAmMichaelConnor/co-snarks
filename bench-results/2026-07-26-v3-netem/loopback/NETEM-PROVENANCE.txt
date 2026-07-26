@@ -1,0 +1,11 @@
+=== bench v3 tier: loopback (2026-07-26T21:12:28+00:00) ===
+netem: delay=none rate=none (RTT=2xdelay on loopback)
+tree: c5204a03fe7f43feeda0a3a5f630f0d646dedbaf  RAYON_NUM_THREADS=51
+host load1m: 27.51
+--- tc qdisc show dev lo ---
+qdisc noqueue 0: root refcnt 2 
+--- ping self RTT ---
+4 packets transmitted, 4 received, 0% packet loss, time 3092ms
+rtt min/avg/max/mdev = 0.041/0.045/0.049/0.003 ms
+--- after tier, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 

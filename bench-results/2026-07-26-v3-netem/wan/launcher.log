@@ -1,0 +1,24 @@
+2026-07-26T22:26:50+00:00 launcher started (host load1m=19.97 — HOST-wide, incl. other tenants)
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: rounds: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: rounds: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: recv: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: blocked_recv_ms: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: recv_bytes_histogram: command not found
+bench v2: 3 circuits queued; crude suite estimate ~74 min (timeout prunes cells >600s; sha rates are the least certain)
+[22:26:50] circuit 1/3: poseidon_2e17 (rows~131072, est ~8 min) — elapsed 0 min, est remaining ~74 min
+[22:37:13]   poseidon_2e17 done in 10m23s (est was ~8 min)
+[22:37:13] circuit 2/3: poseidon_2e20 (rows~1048576, est ~45 min) — elapsed 10 min, est remaining ~65 min
+[22:38:23]   poseidon_2e20 done in 1m10s (est was ~45 min)
+[22:38:23] circuit 3/3: bb_sha256_compression (rows~32768, est ~20 min) — elapsed 11 min, est remaining ~20 min
+[22:58:35]   bb_sha256_compression done in 20m12s (est was ~20 min)
+bench-0_5 v2: done — results in /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/results.csv
+2026-07-26T22:58:35+00:00 bench finished rc=0
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/site-anchors.json + /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/RESULTS.md: 3 circuits
+2026-07-26T22:58:35+00:00 site-anchors.json + RESULTS.md written
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/phase-split.csv (0 party-rows)
+
+circuit                      proto   zk      pkgen_med_s  prove_med_s
+2026-07-26T22:58:35+00:00 phase-split.csv written
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/tiers.csv (3 rows from 3/3 netstats files with histograms, incl. 0 synthesized prove_proper party-cells)
+2026-07-26T22:58:35+00:00 tiers.csv written
+BENCH_DONE rc=0 out=/mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan   (bake: read /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/wan/site-anchors.json into the explorer's ANCHOR block, then redeploy)

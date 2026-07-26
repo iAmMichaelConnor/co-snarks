@@ -1,0 +1,11 @@
+=== bench v3 tier: wan (2026-07-26T22:26:47+00:00) ===
+netem: delay=20ms rate=100mbit (RTT=2xdelay on loopback)
+tree: c5204a03fe7f43feeda0a3a5f630f0d646dedbaf  RAYON_NUM_THREADS=51
+host load1m: 20.23
+--- tc qdisc show dev lo ---
+qdisc netem 8004: root refcnt 2 limit 1000 delay 20ms rate 100Mbit
+--- ping self RTT ---
+4 packets transmitted, 4 received, 0% packet loss, time 3015ms
+rtt min/avg/max/mdev = 40.063/40.078/40.095/0.011 ms
+--- after tier, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 

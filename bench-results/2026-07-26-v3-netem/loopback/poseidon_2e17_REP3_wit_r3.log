@@ -1,0 +1,12 @@
+[2m2026-07-26T21:15:15.104132Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T21:15:15.104140Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T21:15:15.104367Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T21:15:16.433610Z[0m [32m INFO[0m Generate witness took 1329.416 ms
+[2m2026-07-26T21:15:16.434537Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/loopback/netstats/poseidon_2e17_REP3_witext_r3_p0.json
+[2m2026-07-26T21:15:16.437211Z[0m [32m INFO[0m Generate witness took 1333.019 ms
+[2m2026-07-26T21:15:16.438142Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/loopback/netstats/poseidon_2e17_REP3_witext_r3_p1.json
+[2m2026-07-26T21:15:16.439327Z[0m [32m INFO[0m Generate witness took 1334.932 ms
+[2m2026-07-26T21:15:16.440381Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-v3-netem/loopback/netstats/poseidon_2e17_REP3_witext_r3_p2.json
+[2m2026-07-26T21:15:16.460884Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e17/poseidon_2e17.gz.0.shared
+[2m2026-07-26T21:15:16.462508Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e17/poseidon_2e17.gz.1.shared
+[2m2026-07-26T21:15:16.470958Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e17/poseidon_2e17.gz.2.shared

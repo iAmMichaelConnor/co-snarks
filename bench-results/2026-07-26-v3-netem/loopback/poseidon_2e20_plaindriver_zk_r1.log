@@ -1,0 +1,6 @@
+[2m[0m [32m INFO[0m Wrote vk to file test_vectors/poseidon_2e20/vk_plaindriver
+[2m[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e20/proof_plaindriver
+[2m[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon_2e20/public_inputs_plaindriver
+[2m[0m [32m INFO[0m Proof verified successfully
+Scheme is: ultra_honk, num threads: 32 (mem: 4.55 MiB)
+Proof verified successfully (mem: 7.58 MiB)

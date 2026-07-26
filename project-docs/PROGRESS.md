@@ -2809,4 +2809,44 @@ given for the pile only; the session-19 doc edits below are left UNCOMMITTED
   consider explorer re-bake; the F1 fix + PLAN 4.4 standing test are the top
   correctness follow-ups; then the pivot decision (Phase 5.0 PXE secret sharer
   vs 5.1d TS orchestration). Session-19 doc edits (PLAN 4.4, ch. 26, README
-  index, this entry) remain UNCOMMITTED pending Mike's word.
+  index, this entry) committed as `c5204a03`.
+
+### Session 19 (cont.) — bench v3 (netem tiers) RAN; witext is the WAN bottleneck the loopback benches hid
+
+The first bench agent died mid-run and **left `lo` netem-shaped** (the hazard
+flagged in its brief; its cleanup trap didn't fire on kill) — caught and cleared
+immediately, stray smoke run killed, then the run was re-driven by the
+coordinator with a self-contained script (bulletproof trap; per-tier
+shape→verify→run→unshape→verify). `lo` confirmed `noqueue` at completion.
+Results IN-REPO: `bench-results/2026-07-26-v3-netem/` (loopback/lan/wan +
+README with the full predicted-vs-measured table + provenance).
+
+- **Method:** `tc netem` on `lo` matching `bench-tier-model.py`'s tiers exactly
+  (loopback / LAN 1 Gbps 2 ms / WAN 100 Mbps 40 ms; delay=RTT/2). REP3 cells
+  poseidon_2e17/2e20 + bb_sha256_compression, 600 s/cell timeout (censored, not
+  failed).
+- **The model is validated on latency-bound phases:** measured LAN cost lands
+  INSIDE the model's `[est_pipelined, est_dependency_hi]` bracket for every
+  round-heavy phase (poseidon_2e17 witext 35.9 s ∈ [22.6, 66.8]; poseidon_2e20
+  witext 289 s ∈ [184, 539]; sha pk-gen ~54 s ∈ [28.5, 70.5]); WAN cells hit the
+  600 s timeout exactly where the model predicted 451–3689 s pipelined. ⇒ we can
+  keep predicting WAN cost from cheap loopback histograms.
+- **🔴 HEADLINE — witext (witness extension) is the dominant WAN/LAN cost, and
+  it was invisible at loopback.** 11,276 logical rounds @ 2^17, **92,224 @ 2^20**
+  → pipelines to ~1.7 s / 12 s at loopback but becomes 36 s / 289 s at LAN and
+  blows past 600 s at WAN. Every committed lever targeted pk-gen/prove-proper
+  (what loopback showed); **witext is a NEW top-priority lever** — collapse its
+  per-element round-trips the way L8/L2-1a collapsed pk-gen. Opened as a lever
+  candidate (round-batching of the witext input-resharing path).
+- **L8 confirmed under real latency:** poseidon pk-gen now 2–3 rounds
+  (was 11,127) → predicted WAN network cost ~0.34 s, latency-immune. Exactly its
+  design goal, now validated against 40 ms RTT, not just the loopback fence.
+- **sha pk-gen still round-bound (13,135 rounds):** 8 s → 54 s LAN → ≥600 s WAN.
+  L2-1a helped but didn't finish; motivates the next sha pk-gen round-collapse.
+- **poseidon prove-proper is bandwidth-bound; the model under-predicts it
+  ~2–2.6×** because netem on one `lo` rate-limits AGGREGATE loopback throughput
+  (all parties share the pipe) vs. the model's per-link budget — an honest
+  single-`lo` artifact; a real 3-machine testbed would separate the bandwidth
+  arm. Latency arm is faithful.
+- Bench v3 committed with this entry (bench data + README, per v2.1/v2.2
+  convention; commit authorized under the steps-1–3 permission).
