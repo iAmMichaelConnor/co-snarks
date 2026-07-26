@@ -901,10 +901,18 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // on `poseidon_prove_comms_message_fence_poseidon2sponge` for the bump
     // policy (increase = investigate a regression; decrease = an
     // optimisation landed, lower deliberately).
-    // [(155,203),(185,161),(191,167)] -> current: merged GC input rounds in the
-    // Yao decompose blueprints (mpc-core L0c): -2 sends at ID2, -1 recv at
-    // ID0/ID1 per GC invocation (3 invocations in this pk-gen).
-    const PKGEN_MSGS: [(usize, usize); 3] = [(155, 200), (185, 158), (185, 167)];
+    // [(155,203),(185,161),(191,167)] -> [(155,200),(185,158),(185,167)]: merged GC
+    // input rounds in the Yao decompose blueprints (mpc-core L0c): -2 sends at ID2,
+    // -1 recv at ID0/ID1 per GC invocation (3 invocations in this pk-gen).
+    // [(155,200),(185,158),(185,167)] -> current: L2-1a batched
+    // construct_lookup_read_counts. The 12 per-gate Yao a2y2b index
+    // bit-decompositions (per-party msgs ID0 (1,4), ID1 (3,1), ID2 (3,2) each) and 12
+    // per-gate bit-injection rounds are replaced by ONE Direct a2b_many (19 reshare
+    // rounds, all parties symmetric) + ONE bit injection; the per-gate OHV recursion
+    // (116 rounds) and tag write_luts (10) are unchanged (L2-1b's target). Per party:
+    // read-counts msgs (150,186)/(174,150)/(174,162) -> (146,146) each. Values
+    // predicted exactly in advance from the round formula (session-18 l2-1a evidence).
+    const PKGEN_MSGS: [(usize, usize); 3] = [(151, 160), (157, 154), (157, 151)];
     // 199 -> 198: array_prod_inner_mul_many mul_many merge (grand product),
     // NOT a lookup-path change (see the assert message below).
     // 198 -> 204: L0d half-share commit MSMs (see the poseidon fence).
@@ -914,8 +922,13 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // serialization length wobbles by ±1 byte run-to-run (see
     // assert_byte_totals_within) — pinned as a tight band. Prove is pure
     // field flows: exact (re-pinned for L0d with PROVE_MSGS).
+    // Re-pinned for L2-1a (see PKGEN_MSGS): the per-gate a2y2b garbled adder circuits
+    // (~32.5 KB each, ID1->ID0 dominated) disappear; the Direct a2b_many adds ~15.7 KB
+    // per party per direction of masked BigUint payloads (value-length encoded, hence
+    // still banded). ID0's SENT bytes rise slightly: as the GC evaluator it mostly
+    // received; the direct adder is ring-symmetric.
     const PKGEN_BYTES: [(usize, usize); 3] =
-        [(2661703, 4507496), (4344248, 2896960), (2970928, 2572423)];
+        [(2676760, 4132506), (3969830, 2863728), (2888258, 2538614)];
     const PROVE_BYTES: [(usize, usize); 3] =
         [(21040064, 21040064), (21040096, 21040064), (21040064, 21040096)];
 
@@ -1476,9 +1489,32 @@ fn bb_sha256_compression_comms_band_fence_poseidon2sponge() {
 #[ignore = "slow (full shared-witness REP3 pk-gen+prove on the sha-gadget circuit, 2 reps): \
             L0e milestone/acceptance evidence runs only"]
 fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
-    const NAME: &str = "bb_sha256_compression";
-    let circuit_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.json");
-    let witness_file = format!("../test_vectors/noir/{NAME}/kat/{NAME}.gz");
+    shared_witness_proof_evidence_poseidon2sponge(
+        "bb_sha256_compression",
+        [(0, 0x10E03A), (1, 0x10E03B)],
+    );
+}
+
+/// `blackbox_and` analog of the shared-witness evidence test above (same helper): a SMALL
+/// lookup-path circuit (2 tables / 12 lookup gates), used as the cheap before/after
+/// md5 + pk-gen-wall evidence harness for lookup-path levers (L2-1a's "measure the
+/// plumbing early on a small circuit" gate) without paying the sha-sized run.
+#[test]
+#[ignore = "evidence harness (2 full REP3 pk-gen+prove reps from a shared witness): \
+            milestone/acceptance evidence runs only"]
+fn blackbox_and_shared_witness_proof_evidence_poseidon2sponge() {
+    shared_witness_proof_evidence_poseidon2sponge("blackbox_and", [(0, 0x10E03A), (1, 0x10E03B)]);
+}
+
+/// Shared body of the `*_shared_witness_proof_evidence_poseidon2sponge` tests: full 3-party
+/// REP3 pk-gen + prove of `name` from a SHARED KAT witness, two reps with different sharing
+/// randomness; prints per-rep pk-gen wall + comms, asserts cross-party/cross-rep proof+VK
+/// byte-identity and byte-equality to the plain prover, and (if `U3_EVIDENCE_DIR` is set)
+/// writes `{name}_proof_rep{rep}_party{party}` / `{name}_vk_rep{rep}_party{party}` files
+/// there for external md5 comparison across code versions.
+fn shared_witness_proof_evidence_poseidon2sponge(name: &str, reps: [(u32, u64); 2]) {
+    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+    let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
 
     let program_artifact =
         co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
@@ -1488,7 +1524,7 @@ fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
         .expect("failed to parse witness");
 
     // The referee: plain (non-MPC) proof bytes on the same witness.
-    let expected = plain_proof_bytes::<Poseidon2Sponge>(NAME, ZeroKnowledge::No);
+    let expected = plain_proof_bytes::<Poseidon2Sponge>(name, ZeroKnowledge::No);
     let evidence_dir = std::env::var_os("U3_EVIDENCE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &evidence_dir {
         std::fs::create_dir_all(dir).unwrap();
@@ -1496,7 +1532,7 @@ fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
 
     let mut rep_proofs: Vec<Vec<u8>> = Vec::new();
     let mut rep_vks: Vec<Vec<u8>> = Vec::new();
-    for (rep, seed) in [(0u32, 0x10E03Au64), (1u32, 0x10E03Bu64)] {
+    for (rep, seed) in reps {
         let mut rng = StdRng::seed_from_u64(seed);
         let witnesses = split_witness(&witness, &constraint_system.public_inputs, &mut rng);
 
@@ -1566,7 +1602,7 @@ fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
 
         for (party, (_, _, _, pkgen_time, (sm, rm, sb, rb))) in results.iter().enumerate() {
             println!(
-                "[L0e evidence] rep {rep} party {party}: pk-gen {:.3} s; pk-gen comms \
+                "[evidence {name}] rep {rep} party {party}: pk-gen {:.3} s; pk-gen comms \
                  (both nets): sent {sm} msgs / {sb} B, recv {rm} msgs / {rb} B",
                 pkgen_time.as_secs_f64()
             );
@@ -1580,9 +1616,13 @@ fn bb_sha256_compression_shared_witness_proof_evidence_poseidon2sponge() {
             let party_vk = r.2.inner_vk.to_buffer();
             assert_eq!(party_vk, vk_u8, "rep {rep} party {party} VK diverged");
             if let Some(dir) = &evidence_dir {
-                std::fs::write(dir.join(format!("proof_rep{rep}_party{party}")), &party_proof)
+                std::fs::write(
+                    dir.join(format!("{name}_proof_rep{rep}_party{party}")),
+                    &party_proof,
+                )
+                .unwrap();
+                std::fs::write(dir.join(format!("{name}_vk_rep{rep}_party{party}")), &party_vk)
                     .unwrap();
-                std::fs::write(dir.join(format!("vk_rep{rep}_party{party}")), &party_vk).unwrap();
             }
         }
         assert_eq!(

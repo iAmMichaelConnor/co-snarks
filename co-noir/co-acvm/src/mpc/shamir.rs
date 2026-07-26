@@ -487,6 +487,19 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for ShamirAc
         panic!("one_hot_vector_from_shared_index: Operation atm not supported")
     }
 
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        _lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        if indices.is_empty() {
+            // Mirrors the batched REP3/plain behavior: an empty batch is a no-op, so
+            // Shamir circuits without shared lookup indices still work.
+            return Ok(Vec::new());
+        }
+        panic!("one_hot_vector_from_shared_index_many: Operation atm not supported")
+    }
+
     fn write_to_shared_lut_from_ohv(
         &mut self,
         _ohv: &[Self::ArithmeticShare],

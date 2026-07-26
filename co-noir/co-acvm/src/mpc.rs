@@ -195,6 +195,25 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         len: usize,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>>;
 
+    /// Creates shared one-hot-encoded vectors from the given shared indices, where
+    /// `indices[i]` indexes a table of `lens[i]` entries (the two slices zip; each result
+    /// vector has `lens[i].next_power_of_two()` entries, exactly like
+    /// [`Self::one_hot_vector_from_shared_index`]). Implementations that can batch the
+    /// underlying communication across the whole slice should override this; the default
+    /// simply loops the singular method.
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        debug_assert_eq!(indices.len(), lens.len());
+        indices
+            .iter()
+            .zip(lens.iter())
+            .map(|(index, len)| self.one_hot_vector_from_shared_index(index.to_owned(), *len))
+            .collect()
+    }
+
     /// Writes to a shared LUT from a given shared one-hot-encoded vector.
     fn write_to_shared_lut_from_ohv(
         &mut self,

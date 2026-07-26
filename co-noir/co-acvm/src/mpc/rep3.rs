@@ -905,6 +905,21 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         )
     }
 
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        mpc_core::protocols::rep3_ring::lut_field::Rep3FieldLookupTable::<F>::ohv_from_index_many(
+            indices,
+            lens,
+            self.net0,
+            self.net1,
+            &mut self.state0,
+            &mut self.state1,
+        )
+    }
+
     fn write_to_shared_lut_from_ohv(
         &mut self,
         ohv: &[Self::ArithmeticShare],

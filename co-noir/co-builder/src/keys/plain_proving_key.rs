@@ -386,19 +386,28 @@ pub fn construct_lookup_read_counts<
 ) -> eyre::Result<()> {
     // Read counts/tags track which table entries have been read; they are aligned with the table
     // data at the lookup block's trace offset.
-    let mut table_offset = circuit.blocks.lookup.trace_offset as usize;
+    //
+    // Two-pass shape (L2 batching): pass 1 computes every gate's table index (a local
+    // linear map of the gate's keys) and collects all SHARED indices, in gate order, so
+    // that the expensive index -> one-hot-vector conversion runs as ONE batched driver
+    // call for ALL gates of ALL tables (one a2b_many bit-decomposition + one bit
+    // injection instead of one Yao conversion + one injection round PER gate). Pass 2
+    // then replays the gates in exactly the original order, consuming the precomputed
+    // OHVs: every witness write (count sums, tag assigns/cmuxes) happens with the same
+    // values in the same order as the previous per-gate implementation.
+
+    // Pass 1: collect shared indices (+ their table sizes) in gate order.
+    let mut shared_indices: Vec<T::ArithmeticShare> = Vec::new();
+    let mut shared_lens: Vec<usize> = Vec::new();
     for table in circuit.lookup_tables.iter_mut() {
         // we need the index_map hash table in this case
         if table.requires_index_map() {
             table.initialize_index_map();
         }
 
-        for (i, gate_data) in table.lookup_gates.iter().enumerate() {
-            // convert lookup gate data to an array of three field elements, one for each of the 3 columns
-            // let table_entry = gate_data.to_table_components(table.use_twin_keys); // We calculate indices from keys
-
-            // find the index of the entry in the table
-            // let index_in_table = table.index_map[table_entry]; // We calculate indices from keys
+        for gate_data in table.lookup_gates.iter() {
+            // find the index of the entry in the table (local: a public-coefficient
+            // linear map of the gate's keys)
             let index_in_table = gate_data.calculate_table_index(
                 driver,
                 table.use_twin_keys,
@@ -421,8 +430,33 @@ pub fn construct_lookup_read_counts<
                 } else {
                     T::get_shared(&index_in_table).expect("Already checked it is shared")
                 };
+                shared_indices.push(index_in_table);
+                shared_lens.push(table.len());
+            }
+        }
+    }
 
-                let ohv = driver.one_hot_vector_from_shared_index(index_in_table, table.len())?;
+    // ONE batched index -> OHV conversion for all gates of all tables. (Empty batch =>
+    // no driver call at all: circuits without shared lookup indices stay comms-free.)
+    let mut ohvs = driver
+        .one_hot_vector_from_shared_index_many(&shared_indices, &shared_lens)?
+        .into_iter();
+    drop(shared_indices);
+
+    // Pass 2: replay the gates in original order, consuming the precomputed OHVs.
+    let mut table_offset = circuit.blocks.lookup.trace_offset as usize;
+    for table in circuit.lookup_tables.iter_mut() {
+        for (i, gate_data) in table.lookup_gates.iter().enumerate() {
+            let index_in_table = gate_data.calculate_table_index(
+                driver,
+                table.use_twin_keys,
+                table.column_2_step_size,
+            );
+
+            if T::is_shared(&index_in_table) {
+                let ohv = ohvs
+                    .next()
+                    .expect("pass 1 collected an OHV for every shared-index gate");
 
                 // increment the read count at the corresponding index in the full polynomial
                 for (src, des) in ohv

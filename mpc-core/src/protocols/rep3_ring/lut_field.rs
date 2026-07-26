@@ -278,6 +278,89 @@ impl<F: PrimeField> Rep3FieldLookupTable<F> {
         conversion::bit_inject_from_bits_to_field_many::<F, _>(&e, net0, state0)
     }
 
+    /// Creates shared one-hot-encoded vectors from the given shared indices (`indices[i]`
+    /// indexes a table of `lens[i]` entries), batching the communication across the whole
+    /// slice: ONE Direct [`rep3::conversion::a2b_many`] bit-decomposition for every index
+    /// (the singular path above goes through `a2b_selector`, whose default is one garbled
+    /// Yao adder circuit PER index — size-linear garbling with nothing to amortise, see the
+    /// L0a/b measurement), the (unchanged, per-index) OHV recursion, and ONE
+    /// [`conversion::bit_inject_from_bits_to_field_many`] over all indices' concatenated
+    /// OHV bits. Values are identical to calling [`Self::ohv_from_index`] per index: both
+    /// a2b variants produce a binary sharing of the same field value, the OHV recursion is
+    /// untouched, and bit injection is elementwise.
+    pub fn ohv_from_index_many<N: Network>(
+        indices: &[Rep3PrimeFieldShare<F>],
+        lens: &[usize],
+        net0: &N,
+        _net1: &N,
+        state0: &mut Rep3State,
+        _state1: &mut Rep3State,
+    ) -> eyre::Result<Vec<Vec<Rep3PrimeFieldShare<F>>>> {
+        assert_eq!(indices.len(), lens.len());
+        if indices.is_empty() {
+            // No communication at all for an empty batch (callers with only public
+            // indices must not move any comms fence).
+            return Ok(Vec::new());
+        }
+
+        // (i) ONE batched bit-decomposition round-trip set for all indices.
+        let bits_many = rep3::conversion::a2b_many(indices, net0, state0)?;
+
+        // Per-index OHV recursion (level-synchronous batching of this recursion is the
+        // separate `ohv_many` unit; its round collapse only pays once the per-gate tag
+        // writes are batched too).
+        let mut all_bits: Vec<Rep3RingShare<Bit>> = Vec::new();
+        let mut chunk_sizes = Vec::with_capacity(lens.len());
+        for (bits, len) in bits_many.into_iter().zip(lens.iter()) {
+            let k = len.next_power_of_two().ilog2() as usize;
+            let e = if k == 1 {
+                Self::ohv_from_index_bits_internal::<Bit, _>(bits, k, net0, state0)?
+            } else if k <= 8 {
+                Self::ohv_from_index_bits_internal::<u8, _>(bits, k, net0, state0)?
+            } else if k <= 16 {
+                Self::ohv_from_index_bits_internal::<u16, _>(bits, k, net0, state0)?
+            } else if k <= 32 {
+                Self::ohv_from_index_bits_internal::<u32, _>(bits, k, net0, state0)?
+            } else {
+                panic!("Table is too large")
+            };
+            chunk_sizes.push(e.len());
+            all_bits.extend(e);
+        }
+
+        // (iii) ONE bit injection over all indices' concatenated OHV bits.
+        let injected =
+            conversion::bit_inject_from_bits_to_field_many::<F, _>(&all_bits, net0, state0)?;
+
+        // Split back per index (each chunk has lens[i].next_power_of_two() entries,
+        // exactly like the singular path's output).
+        let mut res = Vec::with_capacity(chunk_sizes.len());
+        let mut injected = injected.into_iter();
+        for size in chunk_sizes {
+            res.push(injected.by_ref().take(size).collect());
+        }
+        Ok(res)
+    }
+
+    /// The OHV-recursion step shared by [`Self::ohv_from_index`] (via
+    /// `ohv_from_index_internal`) and [`Self::ohv_from_index_many`]: casts the
+    /// bit-decomposed index into the ring type and runs the (per-index) OHV gadget.
+    fn ohv_from_index_bits_internal<T: IntRing2k, N: Network>(
+        index: Rep3BigUintShare<F>,
+        k: usize,
+        net: &N,
+        state: &mut Rep3State,
+    ) -> eyre::Result<Vec<Rep3RingShare<Bit>>>
+    where
+        Standard: Distribution<T>,
+    {
+        let a = T::cast_from_biguint(&index.a);
+        let b = T::cast_from_biguint(&index.b);
+        let bits = Rep3RingShare::new(a, b);
+
+        gadgets::ohv::ohv(k, bits, net, state)
+    }
+
     /// Writes to a shared lookup table with the index already being transformed into the shared one-hot-encoded vector
     pub fn write_to_shared_lut_from_ohv<N: Network>(
         ohv: &[Rep3PrimeFieldShare<F>],
