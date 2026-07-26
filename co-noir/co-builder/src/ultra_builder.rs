@@ -311,34 +311,60 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.create_big_mul_add_gate(mul_quad, false);
     }
 
-    pub(crate) fn create_big_quad_constraint(
+    /// Pass 1 of the batched big-quad construction (see `build_constraints`):
+    /// resolves this constraint's product operand pairs — (a, b) of every
+    /// intermediate gate — and appends them to the circuit-wide `lhs`/`rhs`
+    /// vectors, in exactly the order the per-constraint `driver.mul_many`
+    /// used to receive them. Returns the number of pairs appended.
+    ///
+    /// The `b`-index IS_CONSTANT replacement is performed here (it used to
+    /// happen while collecting `rhs` for the per-constraint `mul_many`), so
+    /// the caller must pass the SAME mutated constraint to
+    /// [`Self::create_big_quad_constraint_with_products`] afterwards.
+    ///
+    /// Hoisting the operand resolution above all gate building is sound
+    /// because the `a`/`b` indices of every big-quad constraint refer to
+    /// pre-existing witnesses (the ACIR witness map); the only wire produced
+    /// during gate building that feeds back into a big-quad gate is the
+    /// intra-constraint next-`d` chaining handled in pass 2, which never
+    /// appears as an `a`/`b` product operand.
+    pub(crate) fn collect_big_quad_product_operands(
+        &self,
+        big_constraint: &mut BigQuadConstraint<P::ScalarField>,
+        lhs: &mut Vec<T::AcvmType>,
+        rhs: &mut Vec<T::AcvmType>,
+    ) -> usize {
+        let num_products = big_constraint.len() - 1;
+        for gate in big_constraint.iter().take(num_products) {
+            assert_ne!(
+                gate.a,
+                u32::MAX,
+                "mul_quad_ gate cannot have IS_CONSTANT for witness a. An error here probably means a conversion issue in acir_to_constraint_buf."
+            );
+            lhs.push(self.get_variable(gate.a as usize));
+        }
+        for gate in big_constraint.iter_mut().take(num_products) {
+            self.replace_and_check_zero_scaling(&mut gate.b, &gate.b_scaling);
+            rhs.push(self.get_variable(gate.b as usize));
+        }
+        num_products
+    }
+
+    /// Pass 2 of the batched big-quad construction: identical to the old
+    /// per-constraint `create_big_quad_constraint` gate building, except the
+    /// intermediate products arrive precomputed (one circuit-wide
+    /// `driver.mul_many` in `build_constraints` instead of one network round
+    /// per constraint). `big_constraint` must be the same instance that
+    /// passed through [`Self::collect_big_quad_product_operands`] (its `b`
+    /// indices already have IS_CONSTANT replaced), and `products` must be its
+    /// `num_products` results in order.
+    pub(crate) fn create_big_quad_constraint_with_products(
         &mut self,
         driver: &mut T,
         big_constraint: &mut BigQuadConstraint<P::ScalarField>,
-    ) -> eyre::Result<()> {
-        let num_products = big_constraint.len() - 1;
-        let lhs = big_constraint
-            .iter()
-            .take(num_products)
-            .map(|gate| {
-                assert_ne!(
-                    gate.a,
-                    u32::MAX,
-                    "mul_quad_ gate cannot have IS_CONSTANT for witness a. An error here probably means a conversion issue in acir_to_constraint_buf."
-                );
-                self.get_variable(gate.a as usize)
-            })
-            .collect::<Vec<_>>();
-        let rhs = big_constraint
-            .iter_mut()
-            .take(num_products)
-            .map(|gate| {
-                self.replace_and_check_zero_scaling(&mut gate.b, &gate.b_scaling);
-                self.get_variable(gate.b as usize)
-            })
-            .collect::<Vec<_>>();
-        let products = driver.mul_many(&lhs, &rhs)?;
-
+        products: Vec<T::AcvmType>,
+    ) {
+        debug_assert_eq!(products.len(), big_constraint.len() - 1);
         for (j, term1) in products.into_iter().enumerate() {
             // Replace IS_CONSTANT indices with zero indices
             let (c_scaling, d_scaling) = (big_constraint[j].c_scaling, big_constraint[j].d_scaling);
@@ -381,8 +407,6 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             // Create final gate
             self.create_big_mul_add_gate(last, false);
         }
-
-        Ok(())
     }
 
     fn set_zero_idx(&self, mul_quad: &mut MulQuad<P::ScalarField>) {
@@ -4211,9 +4235,45 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         // When an expression doesn't fit into a single width-4 gate, we split it across multiple gates and we leverage
         // w4_shift to use the least possible number of intermediate witnesses. See the documentation of
         // split_into_mul_quad_gates for more information.
-        for big_constraint in constraint_system.big_quad_constraints.iter() {
-            self.create_big_quad_constraint(driver, &mut big_constraint.clone())?;
+        //
+        // The intermediate products of ALL big-quad constraints are computed in a
+        // single driver.mul_many (one network round for the whole circuit) instead
+        // of one mul_many per constraint (one round EACH — O(#constraints)
+        // sequential round-trips, the dominant pk-gen latency term over WAN).
+        // Constraints are mutually independent: the only sequential dependency is
+        // the intra-constraint next-w4 chaining, handled per constraint in pass 2.
+        // The concatenated operand order equals the order of the replaced
+        // per-constraint calls, so each REP3 party draws the identical masking
+        // sequence and the resulting shares are bit-identical to the unbatched
+        // protocol (payloads unchanged; the per-constraint frames merge into one).
+        let mut big_constraints = constraint_system.big_quad_constraints.clone();
+        let mut big_quad_lhs = Vec::new();
+        let mut big_quad_rhs = Vec::new();
+        let product_counts = big_constraints
+            .iter_mut()
+            .map(|big_constraint| {
+                self.collect_big_quad_product_operands(
+                    big_constraint,
+                    &mut big_quad_lhs,
+                    &mut big_quad_rhs,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut products = if big_constraints.is_empty() {
+            Vec::new()
+        } else {
+            driver.mul_many(&big_quad_lhs, &big_quad_rhs)?
         }
+        .into_iter();
+        for (big_constraint, num_products) in izip!(big_constraints.iter_mut(), product_counts) {
+            let constraint_products = products.by_ref().take(num_products).collect::<Vec<_>>();
+            self.create_big_quad_constraint_with_products(
+                driver,
+                big_constraint,
+                constraint_products,
+            );
+        }
+        debug_assert!(products.next().is_none());
 
         // Add logic constraint
         for constraint in constraint_system.logic_constraints.iter() {

@@ -491,6 +491,109 @@ fn assert_byte_totals_within(
     }
 }
 
+/// Share-level-identity witness for the batched big-quad pk-gen `mul_many`
+/// (the L8-class change in `build_constraints`): one `driver.mul_many` per
+/// circuit instead of one per big-quad constraint.
+///
+/// The REP3 claim backing "batching cannot move proof/VK bytes" at the SHARE
+/// level (not merely the value level) is that `arithmetic::mul_vec` draws its
+/// masks one element at a time from the correlated ChaCha streams
+/// (`masking_field_element`, a per-element `F::rand` on rng1/rng2 — NOT the
+/// length-chunked `masking_field_elements_vec` used by `local_mul_vec`), so a
+/// single call over a concatenation consumes exactly the mask sequence the
+/// per-chunk calls consumed, and the reshared output shares are
+/// bit-identical. This test pins that property directly: two identical Rep3
+/// states (same correlated seeds), same input shares — one run chunked, one
+/// run batched — must produce identical output SHARES (limb-for-limb), which
+/// must also recombine to the plain products. If this ever fails (e.g.
+/// `mul_vec` switches to length-dependent mask pre-squeezing), batching call
+/// sites stops being share-transparent and every fence downstream of such a
+/// batch must be re-justified at the value level instead.
+#[test]
+fn l8_batched_mul_vec_share_identity() {
+    use ark_ff::UniformRand;
+    use mpc_core::protocols::rep3::conversion::A2BType;
+    use mpc_core::protocols::rep3::id::PartyID;
+    use mpc_core::protocols::rep3::rngs::{Rep3CorrelatedRng, Rep3Rand, Rep3RandBitComp};
+    use mpc_core::protocols::rep3::{
+        Rep3State, arithmetic, combine_field_elements, share_field_elements,
+    };
+
+    // Chunk shape mimicking per-constraint product counts, including a
+    // zero-product chunk (a length-1 big-quad constraint used to spend a
+    // whole — empty — network frame on it).
+    const CHUNKS: &[usize] = &[5, 1, 8, 0, 2, 4, 7];
+    let total: usize = CHUNKS.iter().sum();
+
+    let mut rng = StdRng::seed_from_u64(0x158);
+    let xs: Vec<Fr> = (0..total).map(|_| Fr::rand(&mut rng)).collect();
+    let ys: Vec<Fr> = (0..total).map(|_| Fr::rand(&mut rng)).collect();
+    let x_shares = share_field_elements(&xs, &mut rng);
+    let y_shares = share_field_elements(&ys, &mut rng);
+
+    let nets = LocalNetwork::new_3_parties();
+    let mut threads = Vec::with_capacity(3);
+    for (net, x_sh, y_sh) in izip!(nets, x_shares, y_shares) {
+        threads.push(std::thread::spawn(move || {
+            let id = PartyID::try_from(net.id()).unwrap();
+            let i = net.id();
+            // Fixed correlated seeds with the production relation (each
+            // party's rng2 seed = its prev party's rng1 seed, cf.
+            // Rep3State::setup_prf + Network::reshare), so the masks are a
+            // genuine zero-sharing and the recombination check below is
+            // meaningful. The bitcomp streams are unused by mul_vec.
+            let make_state = || {
+                let prf: [[u8; 32]; 3] = [[1; 32], [2; 32], [3; 32]];
+                Rep3State {
+                    id,
+                    rngs: Rep3CorrelatedRng::new(
+                        Rep3Rand::new(prf[i], prf[(i + 2) % 3]),
+                        Rep3RandBitComp::new_2keys([4; 32], [5; 32]),
+                        Rep3RandBitComp::new_2keys([6; 32], [7; 32]),
+                    ),
+                    rng: SeedableRng::from_seed([8 + i as u8; 32]),
+                    a2b_type: A2BType::default(),
+                }
+            };
+            let mut state_chunked = make_state();
+            let mut state_batched = make_state();
+
+            // The pre-L8 shape: one mul_vec (= one reshare round) per chunk.
+            let mut chunked = Vec::with_capacity(total);
+            let mut off = 0;
+            for &n in CHUNKS {
+                chunked.extend(
+                    arithmetic::mul_vec(
+                        &x_sh[off..off + n],
+                        &y_sh[off..off + n],
+                        &net,
+                        &mut state_chunked,
+                    )
+                    .unwrap(),
+                );
+                off += n;
+            }
+            // The L8 shape: one mul_vec over the whole concatenation.
+            let batched = arithmetic::mul_vec(&x_sh, &y_sh, &net, &mut state_batched).unwrap();
+
+            assert_eq!(
+                chunked, batched,
+                "batched mul_vec must produce bit-identical SHARES to the \
+                 per-chunk calls it replaces (same mask-draw sequence)"
+            );
+            batched
+        }));
+    }
+    let outs: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+    let recombined = combine_field_elements(&outs[0], &outs[1], &outs[2]);
+    let expected: Vec<Fr> = izip!(&xs, &ys).map(|(x, y)| *x * *y).collect();
+    assert_eq!(
+        recombined, expected,
+        "recombined batched products must equal the plain products"
+    );
+}
+
 /// Everything a comms-fence test pins, measured per party (indexed by
 /// party id): framed-message totals AND payload-byte totals for the pk-gen
 /// and prove phases, plus the party-0 proof bytes for the KAT cross-check.
@@ -604,7 +707,11 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     // PKGEN_MSGS covers proving-key generation (both networks); PROVE_MSGS
     // covers Rep3CoUltraHonk::prove only. See the doc comment above for the
     // bump policy.
-    const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
+    // 116 -> 3: the big-quad constraint loop in build_constraints now issues
+    // ONE driver.mul_many for the whole circuit instead of one per constraint
+    // (poseidon KAT: 114 constraints -> 114 reshare frames merge into 1; the
+    // other 2 pk-gen frames are untouched).
+    const PKGEN_MSGS: [(usize, usize); 3] = [(3, 3), (3, 3), (3, 3)];
     // 199 -> 198: the two independent mul_many calls in array_prod_inner_mul_many
     // were merged into one (one fewer round per grand-product computation).
     // 198 -> 204: L0d half-share commit MSMs — the 6 non-ZK commit-open calls
@@ -616,7 +723,11 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     // The byte pins catch a leak that keeps the frame count intact but fattens
     // payloads (e.g. serializing both share limbs); see byte_totals. Poseidon
     // is pure-arithmetic (no Yao GC anywhere), so both phases pin EXACT totals.
-    const PKGEN_BYTES: [(usize, usize); 3] = [(30336, 30336), (30368, 30336), (30336, 30368)];
+    // 30336/30368 -> 29432/29464: the big-quad mul_many batching (see
+    // PKGEN_MSGS) merges 114 reshare frames into 1 — element payloads are
+    // byte-identical (share-level identity), only 113 ark slice length
+    // prefixes (8 B each = 904 B) disappear per direction.
+    const PKGEN_BYTES: [(usize, usize); 3] = [(29432, 29432), (29464, 29432), (29432, 29464)];
     // prove bytes re-pinned with PROVE_MSGS for L0d (broadcast opens carry the
     // same points to one extra peer).
     const PROVE_BYTES: [(usize, usize); 3] =
@@ -726,7 +837,8 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
 fn poseidon_prove_comms_message_fence_zk_poseidon2sponge() {
     // Per-party (total_sent_msgs, total_received_msgs). Measured directly via
     // `Network::get_connection_stats()`, exactly like the non-ZK fence above.
-    const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
+    // 116 -> 3: big-quad mul_many batched circuit-wide (see the non-ZK fence).
+    const PKGEN_MSGS: [(usize, usize); 3] = [(3, 3), (3, 3), (3, 3)];
     // 273 -> 272: array_prod_inner_mul_many mul_many merge (see non-ZK fence).
     // 272 -> 282: L0d half-share commit MSMs — the non-ZK fence's 6 broadcast
     // opens plus the 4 ZK-only commitments (gemini masking poly, libra
@@ -737,7 +849,10 @@ fn poseidon_prove_comms_message_fence_zk_poseidon2sponge() {
     // deterministic too (measured across repeated runs). See byte_totals'
     // doc comment for what the byte pins catch beyond the message pins.
     // pk-gen byte totals must equal the non-ZK fence's exactly.
-    const PKGEN_BYTES: [(usize, usize); 3] = [(30336, 30336), (30368, 30336), (30336, 30368)];
+    // 30336/30368 -> 29432/29464: big-quad mul_many batched circuit-wide —
+    // 113 fewer 8-byte slice length prefixes per direction (see the non-ZK
+    // fence).
+    const PKGEN_BYTES: [(usize, usize); 3] = [(29432, 29432), (29464, 29432), (29432, 29464)];
     // prove bytes re-pinned with PROVE_MSGS for L0d.
     const PROVE_BYTES: [(usize, usize); 3] =
         [(6276208, 6276208), (6276240, 6276208), (6276208, 6276240)];
