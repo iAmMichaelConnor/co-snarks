@@ -272,6 +272,35 @@ impl<P: CurveGroup<BaseField: PrimeField>> NoirUltraHonkProver<P> for Rep3UltraH
         pointshare::msm_public_points(points, scalars)
     }
 
+    // L0d half-share override: MSM only the `a` summand (one Pippenger instead
+    // of two) and open by broadcasting the partial results. Identical opened
+    // point, identical knowledge (each partial sum is learnable from the
+    // opened value and a party's own summands — the same information the
+    // reshare-based open reveals); comms shape changes from one ring reshare
+    // to a 3-way broadcast per open call (fences re-pinned for this).
+    fn commit_and_open<N: Network>(
+        points: &[P::Affine],
+        scalars: &[Self::ArithmeticShare],
+        net: &N,
+        _state: &mut Self::State,
+    ) -> eyre::Result<P> {
+        let half = pointshare::msm_public_points_half::<P>(points, scalars);
+        pointshare::open_half_point(half, net)
+    }
+
+    fn commit_and_open_many<N: Network>(
+        points: &[P::Affine],
+        scalars: &[&[Self::ArithmeticShare]],
+        net: &N,
+        _state: &mut Self::State,
+    ) -> eyre::Result<Vec<P>> {
+        let halves = scalars
+            .iter()
+            .map(|poly| pointshare::msm_public_points_half::<P>(&points[..poly.len()], poly))
+            .collect::<Vec<_>>();
+        pointshare::open_half_point_many(&halves, net)
+    }
+
     fn point_add(a: &Self::PointShare, b: &Self::PointShare) -> Self::PointShare {
         pointshare::add(a, b)
     }

@@ -643,10 +643,16 @@ impl<
             )?;
         };
 
-        let w_l = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_l().as_ref(), crs);
-        let w_r = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_r().as_ref(), crs);
-        let w_o = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_o().as_ref(), crs);
-        let open = T::open_point_many(&[w_l, w_r, w_o], self.net, self.state)?;
+        let open = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                proving_key.polynomials.witness.w_l().as_ref(),
+                proving_key.polynomials.witness.w_r().as_ref(),
+                proving_key.polynomials.witness.w_o().as_ref(),
+            ],
+            crs,
+            self.net,
+            self.state,
+        )?;
 
         let w_l: C::Affine = open[0].into();
         let w_r: C::Affine = open[1].into();
@@ -679,9 +685,8 @@ impl<
         } else {
             SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?
         };
-        let masking_poly_commitment_shared = CoUtils::commit::<T, C>(masking_poly.as_ref(), crs);
         let masking_poly_commitment =
-            T::open_point(masking_poly_commitment_shared, self.net, self.state)?;
+            CoUtils::commit_and_open::<T, C, N>(masking_poly.as_ref(), crs, self.net, self.state)?;
         transcript.send_point_to_verifier::<C>(
             "Gemini:masking_poly_comm".to_string(),
             masking_poly_commitment.into(),
@@ -724,22 +729,17 @@ impl<
         };
 
         // Commit to lookup argument polynomials and the finalized (i.e. with memory records) fourth wire polynomial
-        let lookup_read_counts = CoUtils::commit::<T, C>(
-            proving_key
-                .polynomials
-                .witness
-                .lookup_read_counts()
-                .as_ref(),
+        let opened = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                proving_key
+                    .polynomials
+                    .witness
+                    .lookup_read_counts()
+                    .as_ref(),
+                proving_key.polynomials.witness.lookup_read_tags().as_ref(),
+                self.memory.w_4.as_ref(),
+            ],
             crs,
-        );
-        let lookup_read_tags = CoUtils::commit::<T, C>(
-            proving_key.polynomials.witness.lookup_read_tags().as_ref(),
-            crs,
-        );
-        let w_4 = CoUtils::commit::<T, C>(self.memory.w_4.as_ref(), crs);
-
-        let opened = T::open_point_many(
-            &[lookup_read_counts, lookup_read_tags, w_4],
             self.net,
             self.state,
         )?;
@@ -807,11 +807,15 @@ impl<
 
         // This is from the previous round, but we open it here with z_perm
         let timer = std::time::Instant::now();
-        let lookup_inverses = CoUtils::commit::<T, C>(self.memory.lookup_inverses.as_ref(), crs);
-
-        let z_perm = CoUtils::commit::<T, C>(self.memory.z_perm.as_ref(), crs);
-
-        let open = T::open_point_many(&[lookup_inverses, z_perm], self.net, self.state)?;
+        let open = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                self.memory.lookup_inverses.as_ref(),
+                self.memory.z_perm.as_ref(),
+            ],
+            crs,
+            self.net,
+            self.state,
+        )?;
         crate::phase_timing("oink/z_perm/commit_open", timer);
 
         let lookup_inverses: C::Affine = open[0].into();

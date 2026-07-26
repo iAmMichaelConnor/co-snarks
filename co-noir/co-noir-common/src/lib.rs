@@ -72,12 +72,11 @@ pub fn compute_co_opening_proof<
     quotient[0] = T::sub(quotient[0], pair.evaluation);
     // Computes the coefficients for the quotient polynomial q(X) = (p(X) - v) / (X - r) through an FFT
     quotient.factor_roots(&pair.challenge);
-    let quotient_commitment = CoUtils::commit::<T, P>(&quotient.coefficients, crs);
     // AZTEC TODO(#479): for now we compute the KZG commitment directly to unify the KZG and IPA interfaces but in the
     // future we might need to adjust this to use the incoming alternative to work queue (i.e. variation of
     // pthreads) or even the work queue itself
-
-    let quotient_commitment = T::open_point(quotient_commitment, net, state)?;
+    let quotient_commitment =
+        CoUtils::commit_and_open::<T, P, N>(&quotient.coefficients, crs, net, state)?;
     transcript.send_point_to_verifier::<P>("KZG:W".to_string(), quotient_commitment.into());
 
     Ok(())
@@ -91,6 +90,30 @@ impl CoUtils {
         crs: &ProverCrs<P>,
     ) -> T::PointShare {
         Self::msm::<T, P>(poly, &crs.monomials)
+    }
+
+    /// Commit to a shared polynomial and immediately open the commitment.
+    /// Use this (not `commit` + `open_point`) whenever the commitment goes
+    /// straight to the transcript: replicated-sharing protocols then do half
+    /// the MSM work for the same opened point (L0d, co-groth16 pattern).
+    pub fn commit_and_open<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        poly: &[T::ArithmeticShare],
+        crs: &ProverCrs<P>,
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<P> {
+        T::commit_and_open(&crs.monomials[..poly.len()], poly, net, state)
+    }
+
+    /// Commit to many shared polynomials and immediately open all commitments
+    /// in one round. See [`Self::commit_and_open`].
+    pub fn commit_and_open_many<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        polys: &[&[T::ArithmeticShare]],
+        crs: &ProverCrs<P>,
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<Vec<P>> {
+        T::commit_and_open_many(&crs.monomials, polys, net, state)
     }
 
     pub fn msm<T: NoirUltraHonkProver<P>, P: CurveGroup>(

@@ -152,6 +152,17 @@ pub fn open_half_point<C: CurveGroup, N: Network>(a: C, net: &N) -> eyre::Result
     Ok(a + b + c)
 }
 
+/// Open a vector of half point shares (each party broadcasts its local summand
+/// and sums the three). See [`open_half_point`].
+pub fn open_half_point_many<C: CurveGroup, N: Network>(a: &[C], net: &N) -> eyre::Result<Vec<C>> {
+    let (b, c) = net.broadcast_many(a)?;
+    eyre::ensure!(
+        b.len() == a.len() && c.len() == a.len(),
+        "invalid number of broadcast elements"
+    );
+    Ok(izip!(a, b, c).map(|(a, b, c)| *a + b + c).collect_vec())
+}
+
 /// Open the vector of [`Rep3PointShare`]s
 pub fn open_point_many<C: CurveGroup, N: Network>(
     a: &[PointShare<C>],
@@ -193,6 +204,31 @@ pub fn open_point_and_field<C: CurveGroup, N: Network>(
 ) -> eyre::Result<(C, C::ScalarField)> {
     let c = net.reshare((a.b, b.b))?;
     Ok((a.a + a.b + c.0, b.a + b.b + c.1))
+}
+
+/// Perform msm between `points` and only the `a` summand of `scalars`.
+///
+/// The three parties' `a` summands add up to the plain scalar vector, so the
+/// per-party results are additive shares of the full MSM: summing them (e.g.
+/// via [`open_half_point`]) yields exactly the same opened point as
+/// [`msm_public_points`] followed by an `open_point` — for HALF the local MSM
+/// work. Only sound when the result is opened immediately: the returned point
+/// is NOT a replicated [`PointShare`] and cannot be fed back into share
+/// arithmetic. (Precedent: co-groth16's `msm_public_points_hs`.)
+pub fn msm_public_points_half<C: CurveGroup>(
+    points: &[C::Affine],
+    scalars: &[FieldShare<C::ScalarField>],
+) -> C {
+    tracing::trace!("> MSM public points (half) for {} elements", points.len());
+    debug_assert_eq!(points.len(), scalars.len());
+    let a_bigints = scalars
+        .into_par_iter()
+        .with_min_len(1 << 14)
+        .map(|share| share.a.into_bigint())
+        .collect::<Vec<_>>();
+    let res = C::msm_bigint(points, &a_bigints);
+    tracing::trace!("< MSM public points (half) for {} elements", points.len());
+    res
 }
 
 /// Perform msm between `points` and `scalars`

@@ -185,14 +185,17 @@ impl<
         crate::phase_timing("shplemini/fold_polys", timer);
 
         let timer = std::time::Instant::now();
-        let mut commitments = Vec::with_capacity(fold_polynomials.len());
-        for f_poly in fold_polynomials.iter().take(virtual_log_n - 1) {
-            commitments.push(CoUtils::commit::<T, P>(
-                &f_poly.coefficients,
-                commitment_key,
-            ));
-        }
-        let commitments = T::open_point_many(&commitments, self.net, self.state)?;
+        let fold_coeffs = fold_polynomials
+            .iter()
+            .take(virtual_log_n - 1)
+            .map(|f_poly| f_poly.coefficients.as_slice())
+            .collect::<Vec<_>>();
+        let commitments = CoUtils::commit_and_open_many::<T, P, N>(
+            &fold_coeffs,
+            commitment_key,
+            self.net,
+            self.state,
+        )?;
         crate::phase_timing("shplemini/fold_commit_open", timer);
         // If virtual_log_n >= log_n, pad the fold commitments with dummy group elements [1]_1.
         for (l, res) in commitments.into_iter().enumerate() {
@@ -510,10 +513,12 @@ impl<
         );
         crate::phase_timing("shplonk/batched_quotient", timer);
         let timer = std::time::Instant::now();
-        let batched_quotient_commitment =
-            CoUtils::commit::<T, P>(batched_quotient.as_ref(), commitment_key);
-        let batched_quotient_commitment =
-            T::open_point(batched_quotient_commitment, self.net, self.state)?;
+        let batched_quotient_commitment = CoUtils::commit_and_open::<T, P, N>(
+            batched_quotient.as_ref(),
+            commitment_key,
+            self.net,
+            self.state,
+        )?;
         transcript.send_point_to_verifier::<P>(
             "Shplonk:Q".to_string(),
             batched_quotient_commitment.into(),

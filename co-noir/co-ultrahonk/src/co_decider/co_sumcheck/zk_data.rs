@@ -4,7 +4,6 @@ use ark_ff::Field;
 use ark_ff::One;
 use ark_ff::Zero;
 use ark_poly::{EvaluationDomain, GeneralEvaluationDomain};
-use co_noir_common::CoUtils;
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::honk_proof::HonkProofError;
 use co_noir_common::honk_proof::HonkProofResult;
@@ -77,11 +76,10 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         data.compute_concatenated_libra_polynomial(net, state, zk_blinding)?;
         // If proving_key is provided, commit to the concatenated and masked libra polynomial
         if !commitment_key.is_empty() {
-            let libra_commitment_shared = CoUtils::msm::<T, P>(
-                data.libra_concatenated_monomial_form.coefficients.as_ref(),
-                commitment_key,
-            );
-            let libra_commitment = T::open_point(libra_commitment_shared, net, state)?;
+            let coeffs: &[T::ArithmeticShare] =
+                data.libra_concatenated_monomial_form.coefficients.as_ref();
+            let libra_commitment =
+                T::commit_and_open(&commitment_key[..coeffs.len()], coeffs, net, state)?;
             transcript.send_point_to_verifier::<P>(
                 "Libra:concatenation_commitment".to_string(),
                 libra_commitment.into(),

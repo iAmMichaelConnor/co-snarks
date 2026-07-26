@@ -402,7 +402,10 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
     // 199 -> 198: the two independent mul_many calls in array_prod_inner_mul_many
     // were merged into one (one fewer round per grand-product computation).
-    const PROVE_MSGS: [(usize, usize); 3] = [(198, 198), (198, 198), (198, 198)];
+    // 198 -> 204: L0d half-share MSM — each of the 6 non-ZK commit-open calls
+    // now opens via a 3-way broadcast (2 sends/2 recvs per party) instead of a
+    // ring reshare (1/1).
+    const PROVE_MSGS: [(usize, usize); 3] = [(204, 204), (204, 204), (204, 204)];
 
     let program_artifact = co_noir::program_artifact_from_reader(File::open(circuit_file).unwrap())
         .expect("failed to parse program artifact");
