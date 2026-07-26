@@ -39,11 +39,13 @@ same-window ratios for fine comparisons. Leave ~20% of cores free
 |---|---|
 | `manifest.json` | provenance: UTC start, host, kernel, CPU model, cores, thread cap, co-snarks commit/branch/dirty, bb oracle pin+provenance, nargo version, matrix, reps, timeout, CSV schema. A run without a manifest is not comparable to anything. |
 | `results.csv` | one row per timed cell: `circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m`. `rc!=0` = failed (124 = 10-min timeout); failed cells are kept, never hidden, excluded from medians. |
-| `netstats/*.json` | per MPC phase × party: bytes AND message counts per peer. `recv_msgs` from the ring predecessor ≈ **R**, the sequential round count (exact, CPU-noise-immune). |
+| `netstats/*.json` | per MPC phase × party: bytes AND message counts per peer. `recv_msgs` from the ring predecessor ≈ **R**, the sequential round count (exact, CPU-noise-immune) — but only an UPPER BOUND at scale (see the v2.2 `rounds` field below, added 2026-07-26). |
 | `mem/*.time` | per MPC phase × party: wall / peak-RSS / CPU% (`%e %M %P`) — party-skew data. |
 | `features/*.circuit-info.json` | per circuit: trace-block gate composition, lookup gates / tables / table rows, ACIR opcode histogram, public inputs, witness zero-fraction, dyadic size. |
 | `features/*.bbgates.json`, `*.nargo-info.json` | independent cross-checks of size/opcode counts. |
 | `features/*.artifact-sizes.json` | proof / VK / public-input byte sizes per prover. |
+| `phase-timings/*.json` | added 2026-07-26 (v2.2). Per REP3/SHAMIR prove cell: every co-ultrahonk `[phase-timing]` line (oink/sumcheck/pcs sub-phases, `CO_NOIR_PHASE_TIMINGS=1`) captured from the cell's combined 3-party log into structured `{phase, seconds}` entries — NOT attributed to a single party (coarse; ~3 entries per phase name is expected). |
+| `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): a MODELED transfer-time estimate (`Σ_rounds max(RTT, bytes_r/bandwidth)`) from the per-round byte histogram, plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). This is a model, not a real-network measurement — see the netem v3 follow-up in ch. 24 §3a. |
 | `RESULTS.md` | human-readable per-circuit tables (read this first). |
 | `site-anchors.json` | machine shape the explorer bakes in (nulls = unmeasured, never fabricated). |
 | `launcher.log` | progress lines with per-circuit estimate-vs-actual and suite ETA. |
@@ -154,3 +156,72 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
     known_anomalies) is hereby LOCALIZED to pk-gen (in-process pkgen
     = 116 msgs at any poseidon size vs 11k–90k over TCP). Root cause
     still open — now a much smaller haystack.
+- **Bench-granularity extension, 2026-07-26 (v2.2, ch. 24 §3a + PROGRESS
+  session-17 close-out queue item 8; uncommitted at time of writing).**
+  Mike's directive: keep extending what the suite measures. New capture,
+  purely additive to existing readers (see the layout table above for the
+  new artifacts):
+  - **Logical-round counter + per-round byte histogram** in mpc-net
+    (`mpc_net::RoundCounters`, wired through the blocking TCP/TLS and
+    in-process `local` backends — the two paths this repo actually uses).
+    A round boundary = a `recv` that found nothing queued and had to
+    actually wait for the peer (peeked via a non-blocking `try_recv`
+    before the real receive — observation-only, never adds/merges/
+    resizes/reorders a frame). `CO_NOIR_NET_STATS_JSON` now carries, per
+    peer, `rounds`, `blocked_recv_ms` (cumulative wall time blocked — the
+    busy-vs-blocked split, item 3 of the same ask), and
+    `recv_bytes_histogram` (bytes received per round). **Validated**: the
+    T2-proper comms fences (exact msg/byte pins) stayed BYTE-IDENTICAL
+    with this instrumentation in the tree (`fast-check --mpc` PASS,
+    14/14) — confirms the round counter adds no protocol traffic. Cross-
+    checked against the existing message-count metric on a live 3-party
+    poseidon prove (isolated ports, not the fixed bench-script ports):
+    prove-proper (final snapshot minus the pk-gen snapshot) recv_msgs =
+    204 at BOTH 2^11 and 2^17, exactly matching the in-process T2 fence
+    pin and the prior v2.1 finding that message count is size-flat for
+    poseidon's prove-proper phase. The NEW round-depth number is
+    genuinely finer: 121 rounds at 2^11 vs 74 at 2^17 — LOWER at the
+    bigger size, not higher, the opposite of a naive "more log n, more
+    rounds" guess. Read honestly: this says the local compute between
+    synchronisation points grows with n (more field ops per round to
+    produce the next batch), giving the peer's frames more time to
+    arrive before this party asks for them — i.e. `rounds` measures
+    actual stalling, which shrinks at loopback as compute-per-round
+    grows, not a purely protocol-structural constant like message count.
+    Only 2 sizes measured; the 2^18–2^20 continuation is queued (see
+    "remains" below), and this loopback behaviour may not hold under
+    real WAN latency where the network, not local compute, gates the
+    round.
+  - **Distance-tier transfer-time model**: `scripts/bench-tier-model.py`
+    (wired into `bench-0_5-launcher.sh`) turns the per-round histogram
+    into a Local(10 Gbps/0.1 ms) / LAN(1 Gbps/2 ms) / WAN(100 Mbps/40 ms)
+    estimate per phase (`Σ_rounds max(RTT, bytes_r/bandwidth)`), written
+    to `tiers.csv`, plus a synthesized `prove_proper` phase (pkgen is
+    provably a byte-identical PREFIX of prove's histogram — the
+    subtraction is exact, not approximate; verified on the smoke data).
+    This is a MODEL: no real network was touched. Validate against netem
+    before treating it as more than an order-of-magnitude guide (still
+    queued, ch. 24 §3a "v3").
+  - **Busy-vs-blocked wait split**: `blocked_recv_ms` per peer (summed to
+    `total_blocked_recv_ms` per phase) in the same JSON — the same
+    instrumentation as the round counter (both come from timing the
+    same `try_recv`-detected wait), so no extra cost to add.
+  - **Shamir cells, poseidon family**: `bench-0_5.sh` now runs a SHAMIR
+    prove cell per poseidon size/zk-mode via REP3-split + translate-
+    witness (reusing that rep's REP3 witext output), closing one piece
+    of the v2.1 deferral (other families still deferred). **Smoke-tested
+    only** (translate-witness + SHAMIR build-and-generate-proof + verify
+    on the base `poseidon` circuit, isolated ports): all 3 parties
+    rc=0, verify rc=0, and the SHAMIR proof came back **byte-identical
+    to the plain-driver KAT** — the real protocol ran. No full Shamir
+    sweep was launched.
+  - **Per-cell sub-phase timers**: REP3/SHAMIR prove cells now run with
+    `CO_NOIR_PHASE_TIMINGS=1`; the existing oink/sumcheck/pcs
+    `[phase-timing]` stderr lines are captured per cell into
+    `phase-timings/*.json` instead of living only in the `.log` files.
+  - **Remains** (not done this pass): the round-counter size sweep
+    beyond 2^11/2^17; wiring `tiers.csv`/`phase-timings/` into
+    `bench-ingest.py`/`bench.sqlite` and the explorer; a real netem v3
+    run to validate the tier model; widening the Shamir cells beyond
+    the poseidon family; per-peer (rather than per-connection) sent-side
+    byte histograms (this pass only tracks bytes RECEIVED per round).

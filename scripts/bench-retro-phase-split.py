@@ -20,13 +20,13 @@ from collections import defaultdict
 from pathlib import Path
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-LOGNAME = re.compile(r"^(?P<circuit>.+)_REP3_(?P<zk>nonzk|zk)_prove_r(?P<rep>\d+)\.log$")
+LOGNAME = re.compile(r"^(?P<circuit>.+)_(?P<protocol>REP3|SHAMIR)_(?P<zk>nonzk|zk)_prove_r(?P<rep>\d+)\.log$")
 PK = re.compile(r"Build proving key took ([0-9.]+) ms")
 PR = re.compile(r"Generate proof took ([0-9.]+) ms")
 
 def main(run_dir: Path) -> None:
     rows = []
-    for log in sorted(run_dir.glob("*_REP3_*_prove_r*.log")):
+    for log in sorted(run_dir.glob("*_prove_r*.log")):
         m = LOGNAME.match(log.name)
         if not m:
             continue
@@ -37,14 +37,14 @@ def main(run_dir: Path) -> None:
             continue  # timed-out cell: no completed phases to split
         for party, (pk, pr) in enumerate(zip(pks, prs)):
             rows.append({
-                "circuit": m["circuit"], "protocol": "REP3", "zk": m["zk"],
+                "circuit": m["circuit"], "protocol": m["protocol"], "zk": m["zk"],
                 "rep": int(m["rep"]), "party": party,
                 "pkgen_seconds": round(pk, 3), "prove_seconds": round(pr, 3),
             })
         # parties that logged pk-gen but died before proving (partial cells)
         for party in range(len(prs), len(pks)):
             rows.append({
-                "circuit": m["circuit"], "protocol": "REP3", "zk": m["zk"],
+                "circuit": m["circuit"], "protocol": m["protocol"], "zk": m["zk"],
                 "rep": int(m["rep"]), "party": party,
                 "pkgen_seconds": round(pks[party], 3), "prove_seconds": "",
             })
@@ -59,16 +59,16 @@ def main(run_dir: Path) -> None:
 
     med = defaultdict(lambda: {"pk": [], "pr": []})
     for r in rows:
-        key = (r["circuit"], r["zk"])
+        key = (r["circuit"], r["protocol"], r["zk"])
         med[key]["pk"].append(r["pkgen_seconds"])
         if r["prove_seconds"] != "":
             med[key]["pr"].append(r["prove_seconds"])
     print(f"wrote {out} ({len(rows)} party-rows)\n")
-    print(f"{'circuit':<28} {'zk':<6} {'pkgen_med_s':>12} {'prove_med_s':>12}")
-    for (circuit, zk), v in sorted(med.items()):
+    print(f"{'circuit':<28} {'proto':<7} {'zk':<6} {'pkgen_med_s':>12} {'prove_med_s':>12}")
+    for (circuit, proto, zk), v in sorted(med.items()):
         pk = statistics.median(v["pk"]) if v["pk"] else float("nan")
         pr = statistics.median(v["pr"]) if v["pr"] else float("nan")
-        print(f"{circuit:<28} {zk:<6} {pk:>12.3f} {pr:>12.3f}")
+        print(f"{circuit:<28} {proto:<7} {zk:<6} {pk:>12.3f} {pr:>12.3f}")
 
 if __name__ == "__main__":
     main(Path(sys.argv[1]))

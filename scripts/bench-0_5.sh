@@ -19,6 +19,25 @@
 #     instead of 3 for >=2^18 cells
 #   * Shamir cells DROPPED (v1 proved split-input is REP3-only; v2.1 =
 #     REP3-split + translate-witness)
+# v2.2 (2026-07-26, ch. 24 §3a bench-granularity extension):
+#   * CO_NOIR_NET_STATS_JSON now additionally carries, per peer: `rounds`
+#     (logical communication-round count — a stricter, generally SMALLER
+#     depth proxy than recv_msgs, since a `recv` that finds data already
+#     queued isn't a synchronisation wait; see mpc_net::RoundCounters's doc),
+#     `blocked_recv_ms` (cumulative wall time actually blocked on that peer —
+#     the busy-vs-blocked split), and `recv_bytes_histogram` (bytes received
+#     per round). Purely additive to the JSON; old readers are unaffected.
+#   * `scripts/bench-tier-model.py` (wired into the launcher) turns that
+#     histogram into a distance-tier (Local/LAN/WAN) transfer-time estimate
+#     per phase, written to tiers.csv next to phase-split.csv.
+#   * REP3 prove cells now also run with CO_NOIR_PHASE_TIMINGS=1; the
+#     [phase-timing] lines already emitted by co-ultrahonk (oink/sumcheck/
+#     pcs sub-phases) are captured per cell into phase-timings/*.json
+#     alongside the existing per-cell .log files (which still get everything).
+#   * Shamir cells: one small step out of the v2.1 deferral — the poseidon
+#     family additionally gets a SHAMIR prove cell per size/zk-mode via
+#     REP3-split + translate-witness (reusing that rep's REP3 witext
+#     output), timed as protocol=SHAMIR rows. Other families still deferred.
 # MUST run on a QUIET box — use scripts/bench-0_5-launcher.sh. Serial by design.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,7 +45,7 @@ cd "$ROOT/co-noir/co-noir/examples"
 source "$ROOT/versions.env"
 BB="${BARRETENBERG_BINARY:-${BARRETENBERG_BINARY_DEFAULT/#\$HOME/$HOME}}"
 BENCH_OUT="${BENCH_OUT:?set BENCH_OUT to a results dir}"
-mkdir -p "$BENCH_OUT" "$BENCH_OUT/netstats" "$BENCH_OUT/features" "$BENCH_OUT/mem"
+mkdir -p "$BENCH_OUT" "$BENCH_OUT/netstats" "$BENCH_OUT/features" "$BENCH_OUT/mem" "$BENCH_OUT/phase-timings"
 CSV="$BENCH_OUT/results.csv"
 echo "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m" >"$CSV"
 export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-16}"   # measured small-circuit optimum
@@ -71,15 +90,17 @@ cat >"$BENCH_OUT/manifest.json" <<MANIFEST
   "bb_provenance": "$(printf '%s' "$bb_prov" | sed 's/"/\\"/g')",
   "nargo_version": "$(printf '%s' "$nargo_v" | sed 's/"/\\"/g')",
   "circuits": "${CIRCUITS[*]}",
-  "protocols": "bb plaindriver REP3 (Shamir deferred: split-input is REP3-only; v2.1 = translate-witness)",
+  "protocols": "bb plaindriver REP3 (Shamir: v2.2 adds poseidon-family-only SHAMIR prove cells via REP3-split + translate-witness, reusing REP3 witext; other families still deferred)",
   "zk_modes": "nonzk zk",
   "reps": "3 (2 for >=2^18 circuits)",
   "cell_timeout_s": ${CELL_TIMEOUT},
-  "fairness": "bb prove uses -k (VK pregen, timed as vkgen); plaindriver prove is witness-fed; plaindriver solve+prove kept as separate phase; verify cells: bb verify per zk-mode (verifier-time baseline), plaindriver verify_bb = bb cross-verifies the plaindriver zk proof (rc=0 is the verifier-side parity invariant), REP3 verify via co-noir",
-  "netstats": "per phase x party JSONs in netstats/ when the co-noir binary supports CO_NOIR_NET_STATS_JSON; recv_msgs from one REP3 neighbour ~ sequential rounds R; v2.1: *_pkgen_* JSONs are mid-run snapshots after proving-key generation (CO_NOIR_NET_STATS_JSON_PKGEN) — subtract from the matching *_prove_* totals for true per-phase comms",
+  "fairness": "bb prove uses -k (VK pregen, timed as vkgen); plaindriver prove is witness-fed; plaindriver solve+prove kept as separate phase; verify cells: bb verify per zk-mode (verifier-time baseline), plaindriver verify_bb = bb cross-verifies the plaindriver zk proof (rc=0 is the verifier-side parity invariant), REP3/SHAMIR verify via co-noir",
+  "netstats": "per phase x party JSONs in netstats/ when the co-noir binary supports CO_NOIR_NET_STATS_JSON; recv_msgs from one REP3 neighbour ~ sequential rounds R (upper bound at scale -- see the v2.2 `rounds` field below); *_pkgen_* JSONs are mid-run snapshots after proving-key generation (CO_NOIR_NET_STATS_JSON_PKGEN) — subtract from the matching *_prove_* totals for true per-phase comms; v2.2 (2026-07-26): each peer entry additionally carries `rounds` (logical-round count: a `recv` that found nothing queued and had to wait -- a tighter round-depth proxy than recv_msgs), `blocked_recv_ms` (cumulative time blocked in those waits), and `recv_bytes_histogram` (bytes received per round) -- all purely additive, old readers unaffected",
+  "phase_timings": "v2.2: REP3/SHAMIR prove cells run with CO_NOIR_PHASE_TIMINGS=1; the co-ultrahonk [phase-timing] stderr lines (oink/sumcheck/pcs sub-phases) are captured per cell into phase-timings/*.json (not attributed to a party -- coarse, ~3x entries per phase name expected)",
+  "tiers_csv": "v2.2: scripts/bench-tier-model.py (run by the launcher) turns the per-round byte histogram into a Local/LAN/WAN transfer-time estimate per phase, written to tiers.csv",
   "features": "per circuit JSONs in features/ (co-noir circuit-info, bb gates, nargo info)",
-  "network": "loopback (single host; distance/latency NOT measured here)",
-  "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m (rc!=0 failed, rc=124 timeout, excluded from medians; max_rss_kb = peak RSS, max over the 3 parties for MPC cells; cpu_pct empty for MPC cells — per-party detail in mem/; host_load1m = HOST-wide 1-min loadavg at cell start — shared-mainframe noise context for the absolute seconds)",
+  "network": "loopback (single host; distance/latency NOT measured here — tiers.csv is a MODEL, not a real-network measurement; see project-docs ch. 24 §3a for the netem v3 follow-up)",
+  "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m (rc!=0 failed, rc=124 timeout, excluded from medians; max_rss_kb = peak RSS, max over the 3 parties for MPC cells; cpu_pct empty for MPC cells — per-party detail in mem/; host_load1m = HOST-wide 1-min loadavg at cell start — shared-mainframe noise context for the absolute seconds; SHAMIR rows add a 'translate' phase for the translate-witness step)",
   "extra_data": "mem/ per-party wall/RSS/CPU files (party skew); features/<c>.artifact-sizes.json proof/VK bytes"
 }
 MANIFEST
@@ -110,6 +131,37 @@ timed() { # circuit proto zk rep phase cmd...   (timeout + peak-RSS/CPU via /usr
 # max RSS (KB) over the 3 parties' /usr/bin/time files (format "%e %M %P")
 max_rss3() { awk 'NF==3{print $2}' "$@" 2>/dev/null | sort -n | tail -1; }
 reps_for() { if is_big "$1"; then echo 2; else echo 3; fi; }
+
+# Per-cell sub-phase timers (v2.2, ch. 24 §3a item 5): CO_NOIR_PHASE_TIMINGS=1
+# makes co-ultrahonk print "[phase-timing] name: X.XXXXXXs" lines to stderr
+# (oink/sumcheck/pcs sub-phases; see co-noir/co-ultrahonk/src/lib.rs) for
+# EVERY party. The prove cell's combined log already captures all 3 parties'
+# stdout+stderr (unattributed to a specific party -- coarse, matching the
+# "cumulative blocking-recv wall time per phase" coarseness elsewhere in this
+# extension); this pulls just the phase-timing lines into a structured JSON
+# per bench cell so per-sub-phase scaling is queryable data, not log-grepping.
+extract_phase_timings() { # circuit proto zk rep logfile
+  local c=$1 p=$2 z=$3 r=$4 log=$5
+  local out="$BENCH_OUT/phase-timings/${c}_${p}_${z}_prove_r${r}.json"
+  awk -v c="$c" -v p="$p" -v z="$z" -v r="$r" '
+    BEGIN {
+      printf "{\n  \"circuit\": \"%s\", \"protocol\": \"%s\", \"zk\": \"%s\", \"rep\": %s,\n", c, p, z, r
+      print "  \"_note\": \"one entry per [phase-timing] line seen in the combined 3-party log (v2.2, ch. 24 \xc2\xa73a item 5); NOT attributed to a party -- each phase name normally appears once per party per prove, so ~3x entries per phase name is expected, not a bug.\","
+      print "  \"entries\": ["
+      first = 1
+    }
+    /\[phase-timing\]/ {
+      line = $0
+      gsub(/\033\[[0-9;]*m/, "", line)
+      if (match(line, /\[phase-timing\] ([^:]+): ([0-9.]+)s/, m)) {
+        if (!first) print ","
+        first = 0
+        printf "    {\"phase\": \"%s\", \"seconds\": %s}", m[1], m[2]
+      }
+    }
+    END { print ""; print "  ]"; print "}" }
+  ' "$log" >"$out" 2>/dev/null
+}
 
 HAVE_CIRCUIT_INFO=0
 "$BIN" circuit-info --help >/dev/null 2>&1 && HAVE_CIRCUIT_INFO=1
@@ -273,6 +325,7 @@ for c in "${CIRCUITS[@]}"; do
             # shellcheck disable=SC2086
             CO_NOIR_NET_STATS_JSON="$BENCH_OUT/netstats/${c}_${proto}_prove_${z}_r${r}_p${i}.json" \
             CO_NOIR_NET_STATS_JSON_PKGEN="$BENCH_OUT/netstats/${c}_${proto}_pkgen_${z}_r${r}_p${i}.json" \
+            CO_NOIR_PHASE_TIMINGS=1 \
             /usr/bin/time -f "%e %M %P" -o "$BENCH_OUT/mem/${c}_${proto}_prove_${z}_r${r}_p${i}.time" \
             timeout -k 15 "$CELL_TIMEOUT" \
             "$BIN" build-and-generate-proof --witness "test_vectors/$c/$c.gz.$i.shared" \
@@ -287,12 +340,76 @@ for c in "${CIRCUITS[@]}"; do
           row "$c" "$proto" "$z" "$r" prove "$(awk "BEGIN{printf \"%.3f\", ($(now_ms)-$t0)/1000}")" "$rc" \
             "$(max_rss3 "$BENCH_OUT/mem/${c}_${proto}_prove_${z}_r${r}_p"*.time)" ""
           [[ $rc -eq 124 ]] && DEAD["$fam:$proto"]=1
+          extract_phase_timings "$c" "$proto" "$z" "$r" "$BENCH_OUT/${c}_${proto}_${z}_prove_r${r}.log"
           timed "$c" "$proto" "$z" "$r" verify \
             "$BIN" verify --proof "test_vectors/$c/cosnark_proof" \
               --vk "test_vectors/$c/cosnark_vk" \
               --public-input "test_vectors/$c/cosnark_public_input" \
               --hasher poseidon2 --crs ../../co-noir-common/src/crs/bn254_g2.dat $vflag
         done
+      fi
+
+      # ---- Shamir, poseidon family only (v2.2, ch. 24 §3a item 4 / v2.1
+      # deferral): REP3-split + translate-witness, reusing this rep's
+      # already-generated REP3 witext shares. VK is protocol-independent
+      # (CreateVKConfig has no protocol field) so REP3's cosnark_vk is
+      # reused as-is. Other families stay deferred (scope: "the poseidon
+      # size sweep", per the ask) -- extend the `$fam == poseidon` guard
+      # below to widen coverage later. ----
+      if [[ $ok -eq 1 && "$fam" == poseidon && -z ${DEAD["$fam:SHAMIR"]:-} ]]; then
+        proto2=SHAMIR
+        load_stamp
+        t0=$(now_ms)
+        for i in 0 1 2; do
+          CO_NOIR_NET_STATS_JSON="$BENCH_OUT/netstats/${c}_${proto2}_translate_r${r}_p${i}.json" \
+          timeout -k 15 "$CELL_TIMEOUT" \
+          "$BIN" translate-witness --witness "test_vectors/$c/$c.gz.$i.shared" \
+            --src-protocol REP3 --target-protocol SHAMIR \
+            --config "configs/party$((i + 1)).toml" \
+            --out "test_vectors/$c/shamir_$c.gz.$i.shared" \
+            >>"$BENCH_OUT/${c}_${proto2}_translate_r${r}.log" 2>&1 &
+          pids[$i]=$!
+        done
+        rc=0; for i in 0 1 2; do wait "${pids[$i]}" || rc=$?; done
+        row "$c" "$proto2" - "$r" translate "$(awk "BEGIN{printf \"%.3f\", ($(now_ms)-$t0)/1000}")" "$rc" "" ""
+        [[ $rc -eq 124 ]] && DEAD["$fam:SHAMIR"]=1
+        ok2=1; [[ $rc -ne 0 ]] && ok2=0
+
+        if [[ $ok2 -eq 1 ]]; then
+          for z in nonzk zk; do
+            zflag=""; vflag=""
+            [[ $z == zk ]] && { zflag="--zk"; vflag="--has-zk"; }
+            load_stamp
+            t0=$(now_ms)
+            for i in 0 1 2; do
+              out="test_vectors/$c/cosnark_proof_shamir"; pubflag="--public-input test_vectors/$c/cosnark_public_input_shamir"
+              [[ $i -ne 0 ]] && { out="test_vectors/$c/cosnark_proof_shamir.$i.proof"; pubflag=""; }
+              # shellcheck disable=SC2086
+              CO_NOIR_NET_STATS_JSON="$BENCH_OUT/netstats/${c}_${proto2}_prove_${z}_r${r}_p${i}.json" \
+              CO_NOIR_NET_STATS_JSON_PKGEN="$BENCH_OUT/netstats/${c}_${proto2}_pkgen_${z}_r${r}_p${i}.json" \
+              CO_NOIR_PHASE_TIMINGS=1 \
+              /usr/bin/time -f "%e %M %P" -o "$BENCH_OUT/mem/${c}_${proto2}_prove_${z}_r${r}_p${i}.time" \
+              timeout -k 15 "$CELL_TIMEOUT" \
+              "$BIN" build-and-generate-proof --witness "test_vectors/$c/shamir_$c.gz.$i.shared" \
+                --circuit "test_vectors/$c/target/$c.json" \
+                --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol "$proto2" \
+                --hasher poseidon2 --config "configs/party$((i + 1)).toml" \
+                --out "$out" $pubflag $zflag --vk "test_vectors/$c/cosnark_vk" \
+                >>"$BENCH_OUT/${c}_${proto2}_${z}_prove_r${r}.log" 2>&1 &
+              pids[$i]=$!
+            done
+            rc=0; for i in 0 1 2; do wait "${pids[$i]}" || rc=$?; done
+            row "$c" "$proto2" "$z" "$r" prove "$(awk "BEGIN{printf \"%.3f\", ($(now_ms)-$t0)/1000}")" "$rc" \
+              "$(max_rss3 "$BENCH_OUT/mem/${c}_${proto2}_prove_${z}_r${r}_p"*.time)" ""
+            [[ $rc -eq 124 ]] && DEAD["$fam:SHAMIR"]=1
+            extract_phase_timings "$c" "$proto2" "$z" "$r" "$BENCH_OUT/${c}_${proto2}_${z}_prove_r${r}.log"
+            timed "$c" "$proto2" "$z" "$r" verify \
+              "$BIN" verify --proof "test_vectors/$c/cosnark_proof_shamir" \
+                --vk "test_vectors/$c/cosnark_vk" \
+                --public-input "test_vectors/$c/cosnark_public_input_shamir" \
+                --hasher poseidon2 --crs ../../co-noir-common/src/crs/bn254_g2.dat $vflag
+          done
+        fi
       fi
     done
   else
@@ -303,7 +420,8 @@ for c in "${CIRCUITS[@]}"; do
     echo "{"
     first=1
     for f in proof public_inputs vk proof_plaindriver public_inputs_plaindriver \
-             vk_plaindriver cosnark_proof cosnark_public_input cosnark_vk; do
+             vk_plaindriver cosnark_proof cosnark_public_input cosnark_vk \
+             cosnark_proof_shamir cosnark_public_input_shamir; do
       p="test_vectors/$c/$f"
       [[ -f $p ]] || continue
       [[ $first -eq 0 ]] && echo ","

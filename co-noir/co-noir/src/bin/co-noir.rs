@@ -936,6 +936,22 @@ fn write_net_stats_json_pkgen_snapshot(nets: &[&TcpNetwork]) {
 
 /// Write the (summed) per-peer connection stats of the given networks as a JSON
 /// file to `path`. Reporting only; never fails the run.
+///
+/// ch. 24 §3a (bench granularity extension, 2026-07-26): adds, per peer,
+/// `rounds` (logical-round count), `blocked_recv_ms` (cumulative wall time
+/// blocked waiting on that peer), and `recv_bytes_histogram` (bytes received
+/// per round, oldest first — see `mpc_net::RoundCounters`'s doc for the
+/// exact boundary definition and the `len() >= rounds` caveat), plus a
+/// top-level `total_blocked_recv_ms` (summed over peers) for a quick
+/// busy-vs-blocked read against the phase's wall-clock `seconds` in
+/// `results.csv`. All ADDITIVE: the four original fields
+/// (`sent_bytes`/`recv_bytes`/`sent_msgs`/`recv_msgs`) and the top-level
+/// `phase`/`my_id`/`peers` shape are unchanged, so existing readers
+/// (`bench-to-site.py`, `bench-ingest.py`, `bench-retro-phase-split.py`,
+/// the T2-proper fence tests) keep working untouched. Backends that don't
+/// track rounds (none currently reachable from this CLI, which only uses
+/// `TcpNetwork`) would report `rounds: 0` / an empty histogram, exactly
+/// like untracked message counts already do.
 fn write_net_stats_json_to(path: &str, phase: &str, nets: &[&TcpNetwork]) {
     use mpc_net::Network as _;
     if path.is_empty() || nets.is_empty() {
@@ -943,22 +959,40 @@ fn write_net_stats_json_to(path: &str, phase: &str, nets: &[&TcpNetwork]) {
     }
     let my_id = nets[0].id();
     // Sum the counters over all network handles (some subcommands open two
-    // connections per peer pair).
-    let mut peers: std::collections::BTreeMap<usize, [usize; 4]> = Default::default();
+    // connections per peer pair). Round data doesn't sum as cleanly as
+    // bytes/msgs (two independent connections to the same peer id have
+    // independent round sequences), so histograms are CONCATENATED (net[0]'s
+    // rounds, then net[1]'s) and rounds/blocked time are summed — documented
+    // in the JSON's own `_note` field rather than silently merged.
+    let mut peers: std::collections::BTreeMap<usize, (usize, usize, usize, usize)> =
+        Default::default();
+    let mut round_peers: std::collections::BTreeMap<usize, (usize, u64, Vec<usize>)> =
+        Default::default();
     for net in nets {
         let stats = net.get_connection_stats();
         for (peer, (sent_bytes, recv_bytes)) in stats.iter() {
             let (sent_msgs, recv_msgs) = stats.get_msgs(peer).unwrap_or((0, 0));
             let entry = peers.entry(peer).or_default();
-            entry[0] += sent_bytes;
-            entry[1] += recv_bytes;
-            entry[2] += sent_msgs;
-            entry[3] += recv_msgs;
+            entry.0 += sent_bytes;
+            entry.1 += recv_bytes;
+            entry.2 += sent_msgs;
+            entry.3 += recv_msgs;
+
+            let rentry = round_peers.entry(peer).or_default();
+            if let Some(r) = stats.get_rounds(peer) {
+                rentry.0 += r.rounds;
+                rentry.1 += r.blocked_recv_nanos;
+                rentry.2.extend_from_slice(&r.recv_bytes_histogram);
+            }
         }
     }
+    let mut total_blocked_recv_nanos: u64 = 0;
     let peers_json = peers
         .into_iter()
-        .map(|(peer, [sent_bytes, recv_bytes, sent_msgs, recv_msgs])| {
+        .map(|(peer, (sent_bytes, recv_bytes, sent_msgs, recv_msgs))| {
+            let (rounds, blocked_recv_nanos, recv_bytes_histogram) =
+                round_peers.remove(&peer).unwrap_or_default();
+            total_blocked_recv_nanos += blocked_recv_nanos;
             (
                 peer.to_string(),
                 serde_json::json!({
@@ -966,6 +1000,9 @@ fn write_net_stats_json_to(path: &str, phase: &str, nets: &[&TcpNetwork]) {
                     "recv_bytes": recv_bytes,
                     "sent_msgs": sent_msgs,
                     "recv_msgs": recv_msgs,
+                    "rounds": rounds,
+                    "blocked_recv_ms": blocked_recv_nanos as f64 / 1_000_000.0,
+                    "recv_bytes_histogram": recv_bytes_histogram,
                 }),
             )
         })
@@ -974,6 +1011,8 @@ fn write_net_stats_json_to(path: &str, phase: &str, nets: &[&TcpNetwork]) {
         "phase": phase,
         "my_id": my_id,
         "peers": peers_json,
+        "total_blocked_recv_ms": total_blocked_recv_nanos as f64 / 1_000_000.0,
+        "_note": "rounds/blocked_recv_ms/recv_bytes_histogram added ch. 24 §3a (2026-07-26): a round = a recv that found nothing queued and had to wait; recv_bytes_histogram is bytes received per round, oldest first, len() may slightly exceed rounds (see mpc_net::RoundCounters doc) — sum the histogram for total bytes, use `rounds` for depth.",
     });
     match std::fs::File::create(path) {
         Ok(file) => {

@@ -29,5 +29,11 @@ python3 "$ROOT/scripts/bench-to-site.py" "$OUT/results.csv" "$OUT/site-anchors.j
 # needed this recovered retroactively — bench methodology fix, ch. 24 §3a).
 python3 "$ROOT/scripts/bench-retro-phase-split.py" "$OUT" >>"$LOG" 2>&1 \
   && echo "$(date -Is) phase-split.csv written" >>"$LOG"
+# Bench-granularity extension (2026-07-26, ch. 24 §3a): distance-tier
+# transfer-time model from the per-round byte histograms CO_NOIR_NET_STATS_JSON
+# now carries. Safe on older run dirs too (skips netstats files without a
+# histogram, producing an empty tiers.csv).
+python3 "$ROOT/scripts/bench-tier-model.py" "$OUT" >>"$LOG" 2>&1 \
+  && echo "$(date -Is) tiers.csv written" >>"$LOG"
 echo "BENCH_DONE rc=$rc out=$OUT   (bake: read $OUT/site-anchors.json into the explorer's ANCHOR block, then redeploy)" >>"$LOG"
 exit $rc
