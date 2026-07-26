@@ -1,0 +1,7 @@
+{
+  "circuit": "sha256_2e19", "protocol": "REP3", "zk": "nonzk", "rep": 1,
+  "_note": "one entry per [phase-timing] line seen in the combined 3-party log (v2.2, ch. 24 §3a item 5); NOT attributed to a party -- each phase name normally appears once per party per prove, so ~3x entries per phase name is expected, not a bug.",
+  "entries": [
+
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "acir_opcodes": 164,
+  "blocks": {
+    "arithmetic": 132366,
+    "delta_range": 9050,
+    "elliptic": 0,
+    "lookup": 382272,
+    "memory": 0,
+    "nnf": 0,
+    "poseidon2_external": 0,
+    "poseidon2_internal": 0,
+    "pub_inputs": 16
+  },
+  "circuit": "test_vectors/sha256_2e19/target/sha256_2e19.json",
+  "dyadic_size": 524288,
+  "finalized_rows": 523704,
+  "lookup_gates": 382272,
+  "num_lookup_tables": 12,
+  "opcode_histogram": {
+    "AssertZero": 8,
+    "BlackBoxFuncCall::range": 24,
+    "BlackBoxFuncCall::sha256_compression": 132
+  },
+  "public_inputs": 16,
+  "total_table_rows": 33944,
+  "witness_len": 1088,
+  "witness_zero_fraction": 0.0
+}

@@ -1,0 +1,65 @@
+{
+  "_note": "rounds/blocked_recv_ms/recv_bytes_histogram added ch. 24 §3a (2026-07-26): a round = a recv that found nothing queued and had to wait; recv_bytes_histogram is bytes received per round, oldest first, len() may slightly exceed rounds (see mpc_net::RoundCounters doc) — sum the histogram for total bytes, use `rounds` for depth.",
+  "my_id": 0,
+  "peers": {
+    "1": {
+      "blocked_recv_ms": 664.289696,
+      "recv_bytes": 22405440,
+      "recv_bytes_histogram": [
+        0,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152,
+        97544,
+        1396152
+      ],
+      "recv_msgs": 30,
+      "rounds": 30,
+      "sent_bytes": 488152,
+      "sent_msgs": 18
+    },
+    "2": {
+      "blocked_recv_ms": 9.350276,
+      "recv_bytes": 1951912,
+      "recv_bytes_histogram": [
+        0,
+        40,
+        910720,
+        780624,
+        130104,
+        130424
+      ],
+      "recv_msgs": 33,
+      "rounds": 5,
+      "sent_bytes": 0,
+      "sent_msgs": 0
+    }
+  },
+  "phase": "generate-witness",
+  "total_blocked_recv_ms": 673.639972
+}

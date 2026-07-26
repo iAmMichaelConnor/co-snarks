@@ -1,0 +1,136 @@
+[2m2026-07-26T16:07:55.640492Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T16:07:55.641416Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T16:07:55.645171Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T16:10:01.785754Z[0m [32m INFO[0m Build proving key took 126140.481 ms
+[2m2026-07-26T16:10:01.786204Z[0m [32m INFO[0m Build proving key took 126145.552 ms
+[2m2026-07-26T16:10:01.786314Z[0m [32m INFO[0m Build proving key took 126144.789 ms
+[2m2026-07-26T16:10:01.815804Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_pkgen_nonzk_r3_p2.json
+[2m2026-07-26T16:10:01.815972Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_pkgen_nonzk_r3_p0.json
+[2m2026-07-26T16:10:01.816869Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T16:10:01.817038Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T16:10:01.817909Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_pkgen_nonzk_r3_p1.json
+[2m2026-07-26T16:10:01.819285Z[0m [32m INFO[0m Starting proof generation...
+[phase-timing] oink/vk_and_public_inputs: 0.000671s
+[phase-timing] oink/masking_poly: 0.000000s
+[phase-timing] oink/vk_and_public_inputs: 0.000666s
+[phase-timing] oink/masking_poly: 0.000000s
+[phase-timing] oink/vk_and_public_inputs: 0.000668s
+[phase-timing] oink/masking_poly: 0.000000s
+[phase-timing] oink/wires_commit: 0.128869s
+[phase-timing] oink/wires_commit: 0.128890s
+[phase-timing] oink/wires_commit: 0.129056s
+[phase-timing] oink/lookup_w4_commit: 0.083377s
+[phase-timing] [phase-timing] oink/lookup_w4_commitoink/lookup_w4_commit: : 0.0.008349983414s
+s
+[phase-timing] oink/logderiv/row_loop: 0.002766s
+[phase-timing] oink/logderiv/row_loop: 0.003725s
+[phase-timing] oink/logderiv/row_loop: 0.003954s
+[phase-timing] oink/logderiv/mul_many: 0.012250s
+[phase-timing] oink/logderiv/mul_many: 0.[phase-timing] 0oink/logderiv/mul_many15157: s
+0.016393s
+[phase-timing] oink/logderiv/batch_invert: 0.022449s
+[phase-timing] oink/logderiv_round_total: 0.041740s
+[phase-timing] oink/logderiv/batch_invert: 0.025772s
+[phase-timing] oink/logderiv_round_total: 0.041908s
+[phase-timing] oink/logderiv/batch_invert: 0.023589s
+[phase-timing] oink/logderiv_round_total: 0.042985s
+[phase-timing] oink/gp/operands: 0.018712s
+[phase-timing] oink/gp/operands: 0.020508s
+[phase-timing] oink/gp/operands: 0.022624s
+[phase-timing] oink/gp/mul_many_pairs: 0.054300s
+[phase-timing] oink/gp/mul_many_pairs: 0.058698s
+[phase-timing] oink/gp/mul_many_pairs: 0.065823s
+[phase-timing] oink/gp/mul_many_numden: 0.019088s
+[phase-timing] oink/gp/mul_many_numden: 0.029656s
+[phase-timing] oink/gp/mul_many_numden: 0.029448s
+[phase-timing] oink/gp/array_prod: 0.197953s
+[phase-timing] oink/gp/array_prod: 0.200044s
+[phase-timing] oink/gp/array_prod: 0.203688s
+[phase-timing] oink/gp/batch_invert: 0.020144s
+[phase-timing] oink/gp/batch_invert: 0.019930s
+[phase-timing] oink/gp/batch_invert: 0.019122s
+[phase-timing] oink/gp/final_mul: 0.011520s
+[phase-timing] oink/gp/final_mul: 0.011424s
+[phase-timing] oink/gp/z_perm_writeback: 0.000663s
+[phase-timing] oink/gp/z_perm_writeback: 0.000693s
+[phase-timing] oink/gp/final_mul: 0.011695s
+[phase-timing] oink/gp/z_perm_writeback: 0.000454s
+[phase-timing] oink/z_perm/commit_open: 0.077697s
+[phase-timing] [phase-timing] [phase-timing] oink/z_perm/commit_openoink/z_perm/commit_openoink/z_perm_round_total: : : 0.0.0.004181547781677273s
+s
+s
+[phase-timing] oink/z_perm_round_total: 0.418097s
+[phase-timing] [phase-timing] oink/z_perm_round_totaloink: : 0.0.417120673213s
+s
+[phase-timing] oink: 0.673363s
+[phase-timing] oink: 0.673249s
+[phase-timing] memory_handoff: 0.004261s
+[phase-timing] memory_handoff: 0.005773s
+[phase-timing] memory_handoff: 0.006320s
+[phase-timing] sumcheck/compute_univariate_total: 2.494332s
+[phase-timing] sumcheck/open_many_total: 0.027443s
+[phase-timing] sumcheck/partially_evaluate_total: 0.029942s
+[phase-timing] sumcheck/compute_univariate_total: 2.520673s
+[phase-timing] sumcheck/open_many_total: 0.001030s
+[phase-timing] [phase-timing] sumcheck/compute_univariate_totalsumcheck/partially_evaluate_total: : 0.20.31030522706s
+s
+[phase-timing] sumcheck/open_many_total: 0.001797s
+[phase-timing] sumcheck/partially_evaluate_total: 0.030033s
+[phase-timing] sumcheck: 2.582491s
+[phase-timing] sumcheck: 2.585119s
+[phase-timing] sumcheck: 2.583559s
+[phase-timing] shplemini/batched_polys: 0.014103s
+[phase-timing] shplemini/batched_polys: 0.014091s
+[phase-timing] shplemini/batched_polys: 0.014470s
+[phase-timing] shplemini/fold_polys: 0.003073s
+[phase-timing] shplemini/fold_polys: 0.003207s
+[phase-timing] shplemini/fold_polys: 0.003203s
+[phase-timing] shplemini/fold_commit_open: 0.071367s
+[phase-timing] shplemini/fold_commit_open: 0.070812s
+[phase-timing] shplemini/fold_commit_open: 0.070527s
+[phase-timing] shplemini/partial_eval_batch: 0.001381s
+[phase-timing] shplemini/partial_eval_batch: 0.001847s
+[phase-timing] shplemini/partial_eval_batch: 0.002013s
+[phase-timing] shplemini/opening_claims: 0.001268s
+[phase-timing] shplemini/opening_claims: 0.001151s
+[phase-timing] shplemini/opening_claims: 0.001143s
+[phase-timing] shplonk/fold_pos_evals: 0.000464s
+[phase-timing] shplonk/fold_pos_evals: 0.000519s
+[phase-timing] shplonk/fold_pos_evals: 0.000557s
+[phase-timing] shplonk/batched_quotient: 0.009073s
+[phase-timing] shplonk/batched_quotient: 0.011380s
+[phase-timing] shplonk/batched_quotient: 0.017950s
+[phase-timing] shplonk/q_commit_open: 0.053759s
+[phase-timing] shplonk/q_commit_open: 0.056509s
+[phase-timing] shplonk/q_commit_open: 0.047197s
+[phase-timing] shplonk/partial_eval_quotient: 0.003963s
+[phase-timing] pcs/shplemini_batching: 0.162144s
+[phase-timing] shplonk/partial_eval_quotient: 0.004094s
+[phase-timing] pcs/shplemini_batching: 0.162749s
+[phase-timing] shplonk/partial_eval_quotient: 0.004762s
+[phase-timing] pcs/shplemini_batching: 0.162921s
+[phase-timing] pcs/opening_proof: 0.058321[phase-timing] s
+pcs/opening_proof[phase-timing] : pcs_total0.: [phase-timing] 00.pcs/opening_proof59031221316: s
+s
+0.[phase-timing] 0pcs_total59113: s
+0.[phase-timing] 221851pcs_totals
+: 0.221324s
+[phase-timing] [phase-timing] [phase-timing] transcript_get_prooftranscript_get_prooftranscript_get_proof: : : 0.0.0.000000000000324060s
+s
+s
+[phase-timing] decider_total: 2.804588s
+[phase-timing] decider_total: 2.805120s
+[2m2026-07-26T16:10:05.303701Z[0m [32m INFO[0m Generate proof took 3486.807 ms
+[phase-timing] decider_total: 2.806817s
+[2m2026-07-26T16:10:05.318627Z[0m [32m INFO[0m Generate proof took 3499.319 ms
+[2m2026-07-26T16:10:05.319290Z[0m [32m INFO[0m Generate proof took 3502.231 ms
+[2m2026-07-26T16:10:05.324344Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_prove_nonzk_r3_p0.json
+[2m2026-07-26T16:10:05.325375Z[0m [32m INFO[0m Wrote proof to file test_vectors/sha256_2e16/cosnark_proof
+[2m2026-07-26T16:10:05.325529Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/sha256_2e16/cosnark_public_input
+[2m2026-07-26T16:10:05.325600Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T16:10:05.341389Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_prove_nonzk_r3_p1.json
+[2m2026-07-26T16:10:05.342708Z[0m [32m INFO[0m Wrote proof to file test_vectors/sha256_2e16/cosnark_proof.1.proof
+[2m2026-07-26T16:10:05.342840Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T16:10:05.349170Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26-1520/netstats/sha256_2e16_REP3_prove_nonzk_r3_p2.json
+[2m2026-07-26T16:10:05.350657Z[0m [32m INFO[0m Wrote proof to file test_vectors/sha256_2e16/cosnark_proof.2.proof
+[2m2026-07-26T16:10:05.350772Z[0m [32m INFO[0m Proof generation finished successfully

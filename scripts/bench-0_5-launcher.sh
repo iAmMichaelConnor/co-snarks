@@ -13,6 +13,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # v2 (2026-07-24, Mike): results live INSIDE the repo so runs are visible in
 # git status and committable alongside the code that produced them.
 OUT="${BENCH_OUT:-$ROOT/bench-results/$(date +%Y-%m-%d)}"
+# Same-day rerun guard (added 2026-07-26 after a near-clobber of a committed
+# run dir): never write into a dir that already holds a completed run.
+if [[ -z "${BENCH_OUT:-}" && -s "$OUT/results.csv" ]]; then
+  OUT="$OUT-$(date +%H%M)"
+fi
 mkdir -p "$OUT"
 LOG="$OUT/launcher.log"
 

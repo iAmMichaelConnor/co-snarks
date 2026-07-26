@@ -45,7 +45,7 @@ same-window ratios for fine comparisons. Leave ~20% of cores free
 | `features/*.bbgates.json`, `*.nargo-info.json` | independent cross-checks of size/opcode counts. |
 | `features/*.artifact-sizes.json` | proof / VK / public-input byte sizes per prover. |
 | `phase-timings/*.json` | added 2026-07-26 (v2.2). Per REP3/SHAMIR prove cell: every co-ultrahonk `[phase-timing]` line (oink/sumcheck/pcs sub-phases, `CO_NOIR_PHASE_TIMINGS=1`) captured from the cell's combined 3-party log into structured `{phase, seconds}` entries — NOT attributed to a single party (coarse; ~3 entries per phase name is expected). |
-| `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): a MODELED transfer-time estimate (`Σ_rounds max(RTT, bytes_r/bandwidth)`) from the per-round byte histogram, plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). This is a model, not a real-network measurement — see the netem v3 follow-up in ch. 24 §3a. |
+| `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): THREE modeled transfer-time estimates that bracket reality. `est_pipelined_seconds` = `Σ_rounds max(RTT, bytes_r/bandwidth)` over the blocking-boundary histogram — OPTIMISTIC: at loopback independent messages pipeline, so blocking rounds undercount dependency depth (2^17 prove: 204 recv_msgs but only ~74 blocking rounds). `est_dependency_{lo,hi}_seconds` use `recv_msgs` (the validated round-depth proxy for today's serial protocol): lo = max(msgs·RTT, bytes/bw), hi = msgs·RTT + bytes/bw. True WAN cost for the current code lies in [lo, hi]; e.g. 2^17 pk-gen WAN ≈ 445 s of pure round latency (the ch. 24 §4 L8 lever). Plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). Models, not measurements — netem v3 validates. |
 | `RESULTS.md` | human-readable per-circuit tables (read this first). |
 | `site-anchors.json` | machine shape the explorer bakes in (nulls = unmeasured, never fabricated). |
 | `launcher.log` | progress lines with per-circuit estimate-vs-actual and suite ETA. |
@@ -193,15 +193,25 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
     real WAN latency where the network, not local compute, gates the
     round.
   - **Distance-tier transfer-time model**: `scripts/bench-tier-model.py`
-    (wired into `bench-0_5-launcher.sh`) turns the per-round histogram
-    into a Local(10 Gbps/0.1 ms) / LAN(1 Gbps/2 ms) / WAN(100 Mbps/40 ms)
-    estimate per phase (`Σ_rounds max(RTT, bytes_r/bandwidth)`), written
-    to `tiers.csv`, plus a synthesized `prove_proper` phase (pkgen is
-    provably a byte-identical PREFIX of prove's histogram — the
-    subtraction is exact, not approximate; verified on the smoke data).
-    This is a MODEL: no real network was touched. Validate against netem
-    before treating it as more than an order-of-magnitude guide (still
-    queued, ch. 24 §3a "v3").
+    (wired into `bench-0_5-launcher.sh`) turns the netstats into
+    Local(10 Gbps/0.1 ms) / LAN(1 Gbps/2 ms) / WAN(100 Mbps/40 ms)
+    estimates per phase, written to `tiers.csv`, plus a synthesized
+    `prove_proper` phase (pkgen is provably a byte-identical PREFIX of
+    prove's histogram — the subtraction is exact, not approximate;
+    verified on the smoke data). **Correction, same day (coordinator):
+    the blocking-round histogram alone underestimates WAN cost** — at
+    loopback independent messages pipeline, so blocking rounds
+    undercount dependency depth (2^17 prove: 204 recv_msgs, ~74
+    blocking rounds; and non-monotonic in size). tiers.csv therefore
+    carries THREE columns: `est_pipelined_seconds` (histogram model,
+    optimistic anchor) and `est_dependency_{lo,hi}_seconds` (recv_msgs
+    as the validated round-depth proxy; lo = max(msgs·RTT, bytes/bw),
+    hi = msgs·RTT + bytes/bw — true cost for today's serial code lies
+    in [lo, hi]). Sample output: 2^17 pk-gen WAN dep-bracket ≈ 445 s of
+    pure round latency (= the ch. 24 §4 L8 lever), prove-proper WAN
+    [32, 40] s (bandwidth-bound). This is a MODEL: no real network was
+    touched. Validate against netem before treating it as more than an
+    order-of-magnitude guide (still queued, ch. 24 §3a "v3").
   - **Busy-vs-blocked wait split**: `blocked_recv_ms` per peer (summed to
     `total_blocked_recv_ms` per phase) in the same JSON — the same
     instrumentation as the round counter (both come from timing the
@@ -225,3 +235,42 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
     run to validate the tier model; widening the Shamir cells beyond
     the poseidon family; per-peer (rather than per-connection) sent-side
     byte histograms (this pass only tracks bytes RECEIVED per round).
+
+- **v2.2 full run 2026-07-26 15:20–17:49 UTC** (`2026-07-26-1520/`, commit
+  0a6f7313 + the session-18 UNCOMMITTED levers L8 + L0e U1–U3 + the
+  granularity instrumentation — manifest records the dirty tree). Host
+  load1m ~18 at launch, the calmest window yet (v2.1 launched at 45.8) —
+  absolutes are cleaner here. rc=0, 418 rows, verify_bb **12/12** (bb
+  v5.0.1 verified a fresh co-noir proof for every circuit on the
+  optimised tree). Only prunes: sha256_2e19/2e20 REP3 (≥8× the 2^16
+  cost — legitimately over the 600 s cap). Headlines vs v2.1
+  (phase-split medians, non-ZK):
+  - **L0e SCORED: bb_sha256_compression REP3 pk-gen 136.19 → 9.03 s
+    (15.1×, cross-process TCP; 6.95 s in-process)** — inside the
+    registered 9.5 ± 2 s design band. Whole-step REP3÷bb for the sha
+    circuit (ZK): ~473× → **~47×**.
+  - **The sha size sweep is unlocked**: sha256_2e16 pk-gen 126.1 s
+    (was rc=124 at the 600 s cap; the separate uncapped run measured
+    123.9 s, registered band 140 ± 30 ✓); 2e17 265.0 s; 2e18 540.8 s —
+    ~linear in compression count, as the per-call model predicts.
+  - **L8 SCORED: poseidon pk-gen 0.69 → 0.28 s (2e17), 7.46 → 2.81 s
+    (2e20)** — the 2.4–2.7× loopback bonus on top of the real (WAN
+    round-collapse) win; fence pins had already matched the registered
+    prediction exactly.
+  - **prove-proper canary HELD**: unchanged within window noise across
+    the matrix (poseidon 2e20 65.96 → 60.39 s — quieter host; 
+    recursion_zk 65.9 → 64.7 s). The levers touched pk-gen only, as
+    designed.
+  - **First Shamir cells in the dataset** (poseidon family via
+    translate-witness): 60 results.csv rows + 105 tiers.csv rows.
+    ~~KNOWN GAP: `bench-retro-phase-split.py` skips SHAMIR logs~~ —
+    FIXED same day (parser now matches both protocols; summary groups
+    by protocol); phase-split.csv regenerated with 228 party-rows.
+    First Shamir phase-split figures: poseidon_2e17 prove-proper
+    23.5 s vs REP3 7.9 s (~3.0×; Shamir pk-gen rides L8 too, 0.31 s).
+    Shamir prove has had none of the REP3-only lever attention (L0d
+    half-share MSM is a REP3 override) — a known-unequal comparison,
+    not a surprise.
+  - **First full-run outing of the v2.2 instrumentation**: tiers.csv
+    (318 rows, 573/573 netstats carried histograms), phase-timings/,
+    per-peer rounds/blocked_recv_ms — all produced and sane.

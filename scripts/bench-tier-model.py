@@ -81,19 +81,41 @@ def tier_seconds(histogram: list, bandwidth_bps: float, rtt_s: float) -> float:
 
 
 def party_estimate(peers: dict, tier_name: str) -> tuple:
-    """Max over this party's peer connections: (seconds, rounds, recv_bytes)."""
+    """Element-wise worst over this party's peer connections:
+    (pipelined_seconds, rounds, recv_bytes, recv_msgs, dep_lo, dep_hi).
+
+    Two different round notions feed two different estimates (both kept —
+    they bracket reality):
+    - `rounds` (blocking-boundary count) feeds `pipelined_seconds`
+      (Σ_r max(RTT, bytes_r/bw) over the histogram). At loopback,
+      independent messages pipeline, so this UNDERCOUNTS dependency depth
+      (measured: poseidon_2e17 prove has 204 recv_msgs but only ~74
+      blocking rounds) — treat it as the OPTIMISTIC/pipelined estimate.
+    - `recv_msgs` is the true per-peer dependency-round proxy for the
+      CURRENT serial protocol (validated in bench-results/README.md v2.1:
+      prove-proper recv_msgs matches the in-process fence pins exactly,
+      and pk-gen is one blocking mul_many round per big-quad constraint —
+      ch. 24 §4 L8). It feeds the conservative bracket:
+        dep_lo = max(msgs·RTT, bytes/bw)   (latency- or bandwidth-bound)
+        dep_hi = msgs·RTT + bytes/bw       (no overlap at all)
+      True WAN cost for today's code lies in [dep_lo, dep_hi]; the
+      pipelined estimate is a lower anchor that assumes loopback-grade
+      overlap survives the added latency (it mostly won't).
+    """
     bandwidth_bps, rtt_s = TIERS[tier_name]
-    best_seconds, best_rounds, best_bytes = 0.0, 0, 0
+    best = (0.0, 0, 0, 0, 0.0, 0.0)
     for peer in peers.values():
         hist = peer.get("recv_bytes_histogram")
         if not hist:
             continue
         seconds = tier_seconds(hist, bandwidth_bps, rtt_s)
-        if seconds > best_seconds:
-            best_seconds = seconds
-            best_rounds = peer.get("rounds", 0)
-            best_bytes = sum(hist)
-    return best_seconds, best_rounds, best_bytes
+        nbytes = sum(hist)
+        msgs = peer.get("recv_msgs", 0)
+        dep_lo = max(msgs * rtt_s, nbytes / bandwidth_bps)
+        dep_hi = msgs * rtt_s + nbytes / bandwidth_bps
+        cand = (seconds, peer.get("rounds", 0), nbytes, msgs, dep_lo, dep_hi)
+        best = tuple(max(a, b) for a, b in zip(best, cand))
+    return best
 
 
 def subtract_prefix(prove_peers: dict, pkgen_peers: dict, cell_desc: str) -> dict:
@@ -111,9 +133,11 @@ def subtract_prefix(prove_peers: dict, pkgen_peers: dict, cell_desc: str) -> dic
             )
             continue
         tail = prove_hist[len(pkgen_hist):]
+        pkgen_peer = pkgen_peers.get(peer_id) or {}
         out[peer_id] = {
             "recv_bytes_histogram": tail,
-            "rounds": max(prove_peer.get("rounds", 0) - (pkgen_peers.get(peer_id) or {}).get("rounds", 0), 0),
+            "rounds": max(prove_peer.get("rounds", 0) - pkgen_peer.get("rounds", 0), 0),
+            "recv_msgs": max(prove_peer.get("recv_msgs", 0) - pkgen_peer.get("recv_msgs", 0), 0),
         }
     return out
 
@@ -194,6 +218,9 @@ def main(run_dir: Path) -> None:
             seconds_med = statistics.median(v[0] for v in vals)
             rounds_med = statistics.median(v[1] for v in vals)
             bytes_med = statistics.median(v[2] for v in vals)
+            msgs_med = statistics.median(v[3] for v in vals)
+            dep_lo_med = statistics.median(v[4] for v in vals)
+            dep_hi_med = statistics.median(v[5] for v in vals)
             bandwidth_bps, rtt_s = TIERS[tier_name]
             rows.append(
                 {
@@ -205,16 +232,21 @@ def main(run_dir: Path) -> None:
                     "bandwidth_mbps": round(bandwidth_bps * 8 / 1e6, 3),
                     "rtt_ms": round(rtt_s * 1000, 3),
                     "rounds": round(rounds_med),
+                    "recv_msgs": round(msgs_med),
                     "recv_bytes": round(bytes_med),
                     "n_reps": len(vals),
-                    "estimated_seconds": round(seconds_med, 6),
+                    "est_pipelined_seconds": round(seconds_med, 6),
+                    "est_dependency_lo_seconds": round(dep_lo_med, 6),
+                    "est_dependency_hi_seconds": round(dep_hi_med, 6),
                 }
             )
 
     out = run_dir / "tiers.csv"
     fields = [
         "circuit", "protocol", "phase", "zk", "tier", "bandwidth_mbps",
-        "rtt_ms", "rounds", "recv_bytes", "n_reps", "estimated_seconds",
+        "rtt_ms", "rounds", "recv_msgs", "recv_bytes", "n_reps",
+        "est_pipelined_seconds", "est_dependency_lo_seconds",
+        "est_dependency_hi_seconds",
     ]
     with out.open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
