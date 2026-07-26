@@ -554,6 +554,12 @@ fn get_choose_rotation_multipliers<F: PrimeField>() -> [F; 3] {
     ]
 }
 
+// U1 referee tests for the one-shot sha256 sparse-trace garbled circuit (L0e). A child module of
+// this file because it re-verifies the private rotation-multiplier functions below.
+#[cfg(test)]
+#[path = "sha_compression_sparse_trace_tests.rs"]
+mod sha_compression_sparse_trace_tests;
+
 fn get_majority_rotation_multipliers<F: PrimeField>() -> [F; 3] {
     let base: u64 = 16;
 
