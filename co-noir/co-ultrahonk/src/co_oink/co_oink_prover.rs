@@ -34,6 +34,7 @@ use co_noir_common::{
     },
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
+    zk_masking::{SeededZkBlinding, site as zk_site},
 };
 use mpc_core::MpcState as _;
 use mpc_net::Network;
@@ -54,6 +55,10 @@ pub(crate) struct CoOink<
     phantom_data: PhantomData<C>,
     phantom_hasher: PhantomData<H>,
     has_zk: ZeroKnowledge,
+    /// TESTING ONLY (cross-driver determinism tests): when `Some`, all ZK masking values are
+    /// drawn deterministically from this source instead of the driver's secure randomness.
+    /// `None` (the production path) leaves behavior exactly as before.
+    zk_blinding: Option<&'a SeededZkBlinding>,
 }
 
 impl<
@@ -64,7 +69,12 @@ impl<
     N: Network,
 > CoOink<'a, T, C, H, N>
 {
-    pub(crate) fn new(net: &'a N, state: &'a mut T::State, has_zk: ZeroKnowledge) -> Self {
+    pub(crate) fn new(
+        net: &'a N,
+        state: &'a mut T::State,
+        has_zk: ZeroKnowledge,
+        zk_blinding: Option<&'a SeededZkBlinding>,
+    ) -> Self {
         Self {
             net,
             state,
@@ -72,12 +82,14 @@ impl<
             phantom_data: PhantomData,
             phantom_hasher: PhantomData,
             has_zk,
+            zk_blinding,
         }
     }
 
     fn mask_polynomial(
         &mut self,
         polynomial: &mut Polynomial<T::ArithmeticShare>,
+        zk_site: &str,
     ) -> HonkProofResult<()> {
         tracing::trace!("mask polynomial");
 
@@ -87,8 +99,19 @@ impl<
             polynomial.coefficients.len() >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
             "Insufficient space for masking"
         );
-        for i in NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize {
-            polynomial.coefficients[i] = T::rand(self.net, self.state)?;
+        if let Some(blinding) = self.zk_blinding {
+            // TESTING ONLY: deterministic masking values, promoted to trivial shares (proof
+            // bytes depend on the underlying values, not the share representation).
+            let values = blinding.site_fields::<C::ScalarField>(zk_site, NUM_MASKED_ROWS as usize);
+            let id = self.state.id();
+            for (i, value) in (NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize).zip(values)
+            {
+                polynomial.coefficients[i] = T::promote_to_trivial_share(id, value);
+            }
+        } else {
+            for i in NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize {
+                polynomial.coefficients[i] = T::rand(self.net, self.state)?;
+            }
         }
 
         Ok(())
@@ -606,9 +629,18 @@ impl<
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.w_l_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_r_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_o_mut())?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_l_mut(),
+                zk_site::OINK_MASK_W_L,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_r_mut(),
+                zk_site::OINK_MASK_W_R,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_o_mut(),
+                zk_site::OINK_MASK_W_O,
+            )?;
         };
 
         let w_l = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_l().as_ref(), crs);
@@ -638,7 +670,15 @@ impl<
         }
 
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?;
+        let masking_poly = if let Some(blinding) = self.zk_blinding {
+            // TESTING ONLY: deterministic Gemini masking polynomial, promoted to trivial
+            // shares (coefficient-index draw order, matching SharedPolynomial::random).
+            let values = blinding
+                .site_fields::<C::ScalarField>(zk_site::OINK_GEMINI_MASKING_POLY, polynomial_size);
+            SharedPolynomial::new(T::promote_to_trivial_shares(self.state.id(), &values))
+        } else {
+            SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?
+        };
         let masking_poly_commitment_shared = CoUtils::commit::<T, C>(masking_poly.as_ref(), crs);
         let masking_poly_commitment =
             T::open_point(masking_poly_commitment_shared, self.net, self.state)?;
@@ -669,11 +709,17 @@ impl<
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_counts_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_tags_mut())?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.lookup_read_counts_mut(),
+                zk_site::OINK_MASK_LOOKUP_READ_COUNTS,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.lookup_read_tags_mut(),
+                zk_site::OINK_MASK_LOOKUP_READ_TAGS,
+            )?;
             // we do std::mem::take here to avoid borrowing issues with self
             let mut w_4_tmp = std::mem::take(&mut self.memory.w_4);
-            self.mask_polynomial(&mut w_4_tmp)?;
+            self.mask_polynomial(&mut w_4_tmp, zk_site::OINK_MASK_W_4)?;
             std::mem::swap(&mut self.memory.w_4, &mut w_4_tmp);
         };
 
@@ -752,10 +798,10 @@ impl<
         if self.has_zk == ZeroKnowledge::Yes {
             // we do std::mem::take here to avoid borrowing issues with self
             let mut lookup_inverses_mut = std::mem::take(&mut self.memory.lookup_inverses);
-            self.mask_polynomial(&mut lookup_inverses_mut)?;
+            self.mask_polynomial(&mut lookup_inverses_mut, zk_site::OINK_MASK_LOOKUP_INVERSES)?;
             std::mem::swap(&mut self.memory.lookup_inverses, &mut lookup_inverses_mut);
             let mut z_perm_mut = std::mem::take(&mut self.memory.z_perm);
-            self.mask_polynomial(&mut z_perm_mut)?;
+            self.mask_polynomial(&mut z_perm_mut, zk_site::OINK_MASK_Z_PERM)?;
             std::mem::swap(&mut self.memory.z_perm, &mut z_perm_mut);
         };
 

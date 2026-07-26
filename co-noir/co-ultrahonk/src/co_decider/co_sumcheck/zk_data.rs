@@ -13,6 +13,7 @@ use co_noir_common::mpc::NoirUltraHonkProver;
 use co_noir_common::polynomials::shared_polynomial::SharedPolynomial;
 use co_noir_common::transcript::Transcript;
 use co_noir_common::transcript::TranscriptHasher;
+use co_noir_common::zk_masking::{SeededZkBlinding, site as zk_site};
 use mpc_core::MpcState as _;
 use mpc_net::Network;
 
@@ -37,13 +38,24 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         commitment_key: &[P::Affine],
         net: &N,
         state: &mut T::State,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<Self> {
-        let constant_term = T::rand(net, state)?;
+        // TESTING ONLY when `zk_blinding` is `Some`: deterministic masking values, promoted
+        // to trivial shares. `None` is the production path (secure driver randomness).
+        let constant_term = if let Some(blinding) = zk_blinding {
+            T::promote_to_trivial_share(
+                state.id(),
+                blinding.site_fields::<P::ScalarField>(zk_site::LIBRA_CONSTANT_TERM, 1)[0],
+            )
+        } else {
+            T::rand(net, state)?
+        };
         let libra_univariates = Self::generate_libra_univariates(
             multivariate_d,
             P::LIBRA_UNIVARIATES_LENGTH,
             net,
             state,
+            zk_blinding,
         )?;
         let log_circuit_size = multivariate_d;
 
@@ -62,7 +74,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         };
 
         data.create_interpolation_domain();
-        data.compute_concatenated_libra_polynomial(net, state)?;
+        data.compute_concatenated_libra_polynomial(net, state, zk_blinding)?;
         // If proving_key is provided, commit to the concatenated and masked libra polynomial
         if !commitment_key.is_empty() {
             let libra_commitment_shared = CoUtils::msm::<T, P>(
@@ -105,7 +117,21 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         univariate_length: usize,
         net: &N,
         state: &mut T::State,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> eyre::Result<Vec<SharedPolynomial<T, P>>> {
+        if let Some(blinding) = zk_blinding {
+            // TESTING ONLY: one deterministic stream for all Libra univariates, drawn
+            // polynomial-major, coefficient-index order within each polynomial.
+            let values = blinding.site_fields::<P::ScalarField>(
+                zk_site::LIBRA_UNIVARIATES,
+                number_of_polynomials * univariate_length,
+            );
+            let id = state.id();
+            return Ok(values
+                .chunks_exact(univariate_length)
+                .map(|coeffs| SharedPolynomial::new(T::promote_to_trivial_shares(id, coeffs)))
+                .collect());
+        }
         (0..number_of_polynomials)
             .map(|_| SharedPolynomial::random(univariate_length, net, state))
             .collect()
@@ -191,6 +217,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         &mut self,
         net: &N,
         state: &mut T::State,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<()> {
         let mut coeffs_lagrange_subgroup = vec![T::ArithmeticShare::default(); P::SUBGROUP_SIZE];
         coeffs_lagrange_subgroup[0] = self.constant_term;
@@ -207,7 +234,19 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
             coefficients: coeffs_lagrange_subgroup,
         };
 
-        let masking_scalars = SharedUnivariate::<T, P, 2>::get_random(net, state)?;
+        let masking_scalars = if let Some(blinding) = zk_blinding {
+            // TESTING ONLY: deterministic masking scalars (evaluation-index draw order,
+            // matching SharedUnivariate::get_random), promoted to trivial shares.
+            let values = blinding.site_fields::<P::ScalarField>(zk_site::LIBRA_CONCAT_MASKING, 2);
+            let id = state.id();
+            let mut univariate = SharedUnivariate::<T, P, 2>::default();
+            for (eval, value) in univariate.evaluations.iter_mut().zip(values) {
+                *eval = T::promote_to_trivial_share(id, value);
+            }
+            univariate
+        } else {
+            SharedUnivariate::<T, P, 2>::get_random(net, state)?
+        };
 
         let domain = GeneralEvaluationDomain::<P::ScalarField>::new(P::SUBGROUP_SIZE)
             .ok_or(HonkProofError::LargeSubgroup)?;

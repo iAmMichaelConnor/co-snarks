@@ -11,6 +11,7 @@ use co_noir_common::{
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
     utils::Utils,
+    zk_masking::SeededZkBlinding,
 };
 use mpc_net::Network;
 use noir_types::HonkProof;
@@ -27,6 +28,10 @@ pub(crate) struct CoDecider<
     pub(crate) state: &'a mut T::State,
     pub(super) memory: ProverMemory<T, P>,
     pub(crate) has_zk: ZeroKnowledge,
+    /// TESTING ONLY (cross-driver determinism tests): when `Some`, all ZK masking values are
+    /// drawn deterministically from this source instead of the driver's secure randomness.
+    /// `None` (the production path) leaves behavior exactly as before.
+    zk_blinding: Option<&'a SeededZkBlinding>,
     phantom_data: PhantomData<(P, H)>,
 }
 
@@ -43,12 +48,14 @@ impl<
         state: &'a mut T::State,
         memory: ProverMemory<T, P>,
         has_zk: ZeroKnowledge,
+        zk_blinding: Option<&'a SeededZkBlinding>,
     ) -> Self {
         Self {
             net,
             state,
             memory,
             has_zk,
+            zk_blinding,
             phantom_data: PhantomData,
         }
     }
@@ -80,6 +87,7 @@ impl<
                     commitment_key,
                     self.net,
                     self.state,
+                    self.zk_blinding,
                 )?;
 
             Ok((
@@ -141,6 +149,7 @@ impl<
                     .expect("We have ZK"),
                 transcript,
                 crs,
+                self.zk_blinding,
             )?;
             let witness_polynomials = small_subgroup_ipa_prover.into_witness_polynomials();
             crate::phase_timing("pcs/small_subgroup_ipa", phase_start);

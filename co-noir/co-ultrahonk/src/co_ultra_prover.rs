@@ -21,6 +21,7 @@ use co_noir_common::{
     },
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
+    zk_masking::SeededZkBlinding,
 };
 use mpc_core::protocols::{
     rep3::{Rep3State, conversion::A2BType},
@@ -57,6 +58,9 @@ impl<
             .get_powers_of_challenge::<C>("Sumcheck:gate_challenge".to_string(), virtual_log_n)
     }
 
+    /// Inner proving flow. `zk_blinding` must be `None` in production: `Some` deterministically
+    /// seeds the ZK masking values and exists ONLY for cross-driver determinism testing (a
+    /// seeded proof is not zero-knowledge). See [`co_noir_common::zk_masking`].
     pub fn prove_inner<N: Network>(
         net: &N,
         state: &mut T::State,
@@ -64,13 +68,14 @@ impl<
         crs: &ProverCrs<C>,
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<HonkProof<H::DataType>> {
         tracing::trace!("CoUltraHonk prove");
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
 
         let phase_start = std::time::Instant::now();
-        let oink = CoOink::new(net, state, has_zk);
+        let oink = CoOink::new(net, state, has_zk, zk_blinding);
         let oink_result = oink.prove(&mut proving_key, &mut transcript, crs, verifying_key)?;
         crate::phase_timing("oink", phase_start);
 
@@ -89,7 +94,7 @@ impl<
         crate::phase_timing("memory_handoff", phase_start);
 
         let phase_start = std::time::Instant::now();
-        let decider = CoDecider::new(net, state, memory, has_zk);
+        let decider = CoDecider::new(net, state, memory, has_zk, zk_blinding);
         let proof = decider.prove(circuit_size, crs, transcript, virtual_log_n);
         crate::phase_timing("decider_total", phase_start);
         proof
@@ -109,7 +114,48 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
         let mut state = Rep3State::new(net, A2BType::default())?;
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
-        let proof = Self::prove_inner(net, &mut state, proving_key, crs, has_zk, verifying_key)?;
+        let proof = Self::prove_inner(
+            net,
+            &mut state,
+            proving_key,
+            crs,
+            has_zk,
+            verifying_key,
+            None,
+        )?;
+        let (proof, public_inputs) =
+            proof.separate_proof_and_public_inputs(num_public_inputs as usize);
+        Ok((proof, public_inputs))
+    }
+
+    /// Like [`Self::prove`], but with the ZK masking values drawn deterministically from
+    /// `zk_blinding`.
+    ///
+    /// TESTING ONLY: this exists so tests can prove cross-driver determinism (same witness +
+    /// same injected blinding randomness => byte-identical proofs across drivers). Seeding
+    /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
+    /// It must never be used in production and is deliberately not reachable from the
+    /// co-noir CLI.
+    #[expect(clippy::type_complexity)]
+    pub fn prove_with_seeded_zk_blinding<N: Network>(
+        net: &N,
+        proving_key: ProvingKey<Rep3UltraHonkDriver, C>,
+        crs: &ProverCrs<C>,
+        has_zk: ZeroKnowledge,
+        verifying_key: &VerifyingKeyBarretenberg<C>,
+        zk_blinding: &SeededZkBlinding,
+    ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        let mut state = Rep3State::new(net, A2BType::default())?;
+        let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
+        let proof = Self::prove_inner(
+            net,
+            &mut state,
+            proving_key,
+            crs,
+            has_zk,
+            verifying_key,
+            Some(zk_blinding),
+        )?;
         let (proof, public_inputs) =
             proof.separate_proof_and_public_inputs(num_public_inputs as usize);
         Ok((proof, public_inputs))
@@ -143,7 +189,15 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let preprocessing = ShamirPreprocessing::new(num_parties, threshold, num_pairs, net)?;
         let mut state = ShamirState::from(preprocessing);
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
-        let proof = Self::prove_inner(net, &mut state, proving_key, crs, has_zk, verifying_key)?;
+        let proof = Self::prove_inner(
+            net,
+            &mut state,
+            proving_key,
+            crs,
+            has_zk,
+            verifying_key,
+            None,
+        )?;
         let (proof, public_inputs) =
             proof.separate_proof_and_public_inputs(num_public_inputs as usize);
         Ok((proof, public_inputs))
@@ -168,6 +222,36 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             crs,
             has_zk,
             verifying_key,
+            None,
+        )?;
+        Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
+    }
+
+    /// Like [`Self::prove`], but with the ZK masking values drawn deterministically from
+    /// `zk_blinding`.
+    ///
+    /// TESTING ONLY: this exists so tests can prove cross-driver determinism (same witness +
+    /// same injected blinding randomness => byte-identical proofs across drivers). Seeding
+    /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
+    /// It must never be used in production and is deliberately not reachable from the
+    /// co-noir CLI.
+    #[expect(clippy::type_complexity)]
+    pub fn prove_with_seeded_zk_blinding(
+        proving_key: ProvingKey<PlainUltraHonkDriver, C>,
+        crs: &ProverCrs<C>,
+        has_zk: ZeroKnowledge,
+        verifying_key: &VerifyingKeyBarretenberg<C>,
+        zk_blinding: &SeededZkBlinding,
+    ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
+        let proof = Self::prove_inner(
+            &(),
+            &mut Default::default(),
+            proving_key,
+            crs,
+            has_zk,
+            verifying_key,
+            Some(zk_blinding),
         )?;
         Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
     }

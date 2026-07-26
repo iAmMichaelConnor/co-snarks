@@ -376,6 +376,7 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
             crs,
             has_zk,
             &vk,
+            None,
         )?
         .inner();
 

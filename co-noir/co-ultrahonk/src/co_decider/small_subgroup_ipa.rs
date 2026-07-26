@@ -17,6 +17,7 @@ use co_noir_common::polynomials::polynomial::Polynomial;
 use co_noir_common::polynomials::shared_polynomial::SharedPolynomial;
 use co_noir_common::transcript::Transcript;
 use co_noir_common::transcript::TranscriptHasher;
+use co_noir_common::zk_masking::{SeededZkBlinding, site as zk_site};
 use mpc_core::MpcState;
 use mpc_net::Network;
 
@@ -51,6 +52,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
     // Length of the big sum identity polynomial C. It is equal to the length of the highest degree term X * F(X) * G(X)
     const GRAND_SUM_IDENTITY_LENGTH: usize =
         Self::MASKED_CONCATENATED_WITNESS_LENGTH + Self::SUBGROUP_SIZE;
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new<H: TranscriptHasher<TranscriptFieldType>, N: Network>(
         net: &N,
         state: &mut T::State,
@@ -59,6 +61,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         claimed_ipa_eval: P::ScalarField,
         transcript: &mut Transcript<TranscriptFieldType, H>,
         commitment_key: &ProverCrs<P>,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<Self> {
         let mut prover = SharedSmallSubgroupIPAProver {
             interpolation_domain: zk_sumcheck_data.interpolation_domain,
@@ -79,7 +82,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
             phantom_data: PhantomData,
         };
         prover.compute_challenge_polynomial(multivariate_challenge);
-        prover.compute_grand_sum_polynomial(net, state)?;
+        prover.compute_grand_sum_polynomial(net, state, zk_blinding)?;
 
         let libra_grand_sum_commitment_shared = CoUtils::commit::<T, P>(
             prover.grand_sum_polynomial.coefficients.as_ref(),
@@ -183,6 +186,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         &mut self,
         net: &N,
         state: &mut T::State,
+        zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<()> {
         self.grand_sum_lagrange_coeffs[0] = T::ArithmeticShare::default();
 
@@ -204,7 +208,22 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         };
 
         //  Generate random masking_term of degree 2, add Z_H(X) * masking_term
-        let masking_term = SharedUnivariate::<T, P, 3>::get_random(net, state)?;
+        let masking_term = if let Some(blinding) = zk_blinding {
+            // TESTING ONLY: deterministic masking term (evaluation-index draw order,
+            // matching SharedUnivariate::get_random), promoted to trivial shares.
+            let values = blinding.site_fields::<P::ScalarField>(
+                zk_site::IPA_GRAND_SUM_MASKING,
+                Self::GRAND_SUM_MASKING_TERM_LENGTH,
+            );
+            let id = state.id();
+            let mut univariate = SharedUnivariate::<T, P, 3>::default();
+            for (eval, value) in univariate.evaluations.iter_mut().zip(values) {
+                *eval = T::promote_to_trivial_share(id, value);
+            }
+            univariate
+        } else {
+            SharedUnivariate::<T, P, 3>::get_random(net, state)?
+        };
         self.grand_sum_polynomial
             .add_assign_slice(&self.grand_sum_polynomial_unmasked.coefficients);
 

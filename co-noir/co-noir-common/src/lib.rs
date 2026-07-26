@@ -31,6 +31,7 @@ pub mod sponge_hasher;
 pub mod transcript;
 pub mod types;
 pub mod utils;
+pub mod zk_masking;
 
 pub fn compute_opening_proof<
     P: HonkCurve<TranscriptFieldType>,
