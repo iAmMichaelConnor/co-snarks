@@ -6,6 +6,7 @@ pub mod bristol_fashion;
 pub mod circuits;
 pub mod evaluator;
 pub mod garbler;
+pub mod sha256_sparse_trace;
 pub mod streaming_evaluator;
 pub mod streaming_garbler;
 
@@ -1264,80 +1265,63 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
     }};
 }
 
-// Returns the output as binary share
-#[expect(unused_macros)]
+/// Binary-output variant of [`decompose_circuit_compose_blueprint`]: runs a garbled circuit on
+/// jointly-input arithmetic shares and returns the circuit's raw output wires as ONE binary
+/// (XOR) sharing of all output bits via [`y2b_many`](crate::protocols::rep3::conversion::y2b_many),
+/// instead of recomposing masked field elements inside the circuit. Consequently there are NO
+/// output-resharing values (x23) and no `wires_c` mask inputs: the circuit callable takes only
+/// `(g, &x01, &x2, args...)`, and no `bitcomp1`/`bitcomp2` RNG draws happen at all (those belong
+/// to the masked-output blueprints).
+///
+/// Output bit `i` of the circuit becomes bit `i` of the returned
+/// [`Rep3BigUintShare`](crate::protocols::rep3::Rep3BigUintShare).
+///
+/// Per-stream RNG draw order (identical structure to the masked blueprint minus the bitcomp
+/// draws; both garblers draw identically):
+/// 1. `rngs.generate_random_garbler_delta` (ID1/ID2),
+/// 2. `state.rng` wire-label encodes inside [`joint_input_arithmetic_added_many`] (ID1: x01
+///    bits, ID2: x2 bits),
+/// 3. `rngs.generate_garbler_randomness` (garbler seed) in `Rep3Garbler::new_with_delta`
+///    (ID1/ID2),
+/// 4. `rngs.rand.random_biguint_rng1` (ID0) / `random_biguint_rng2` (ID1) inside `y2b_many`.
+///
+/// Expects a `PrimeField` type `F` in scope for the input encoding and the output share type,
+/// like the sibling blueprint macros.
 macro_rules! decompose_circuit_compose_blueprint_to_binary {
-    ($inputs:expr, $io_context:expr, $output_size:expr, $circuit:expr, ($( $args:expr ),*)) => {{
-   use $crate::protocols::rep3::yao;
-        use mpc_types::protocols::rep3::{id::PartyID, };
-        use crate::protocols::rep3::conversion::y2b_many;
+    ($inputs:expr, $net:expr, $state:expr, $circuit:expr, ($( $args:expr ),*)) => {{
+        use $crate::protocols::rep3::yao;
+        use $crate::protocols::rep3::PartyID;
+        use $crate::protocols::rep3::conversion;
 
-        let delta = $io_context
-            .rngs
-            .generate_random_garbler_delta($io_context.id);
+        let delta = $state.rngs
+            .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $io_context)?;
+        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
 
-      let res=  match $io_context.id {
+        let mut converted = match $state.id {
             PartyID::ID0 => {
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $io_context)?;
-
-                let mut evaluator = yao::evaluator::Rep3Evaluator::new($io_context);
+                let mut evaluator = yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
 
-                let x1 = $circuit(&mut evaluator, &x01, &x2, &x23, $($args),*);
-                let x1 = yao::GCUtils::garbled_circuits_error(x1)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                 y2b_many(x1_vec,  $io_context)?
+                let output = $circuit(&mut evaluator, &x01, &x2, $($args),*);
+                let output = yao::GCUtils::garbled_circuits_error(output)?;
+                conversion::y2b_many::<F, _>(vec![output], $net, $state)?
             }
-            PartyID::ID1 => {
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $io_context)?;
+            PartyID::ID1 | PartyID::ID2 => {
+                let mut garbler = yao::garbler::Rep3Garbler::new_with_delta(
+                    $net, $state, delta.expect("Delta not provided"));
 
-                let mut garbler =
-                    yao::garbler::Rep3Garbler::new_with_delta($io_context, delta.expect("Delta not provided"));
-
-                let x1 = $circuit(&mut garbler, &x01, &x2, &x23, $($args),*);
-                let x1 = yao::GCUtils::garbled_circuits_error(x1)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                y2b_many(x1_vec,  $io_context)?
-            }
-            PartyID::ID2 => {
-                let mut x23 = Vec::with_capacity($output_size);
-                for _ in 0..$output_size {
-                    let k2 = $io_context.rngs.bitcomp1.random_fes_3keys::<F>();
-                    let k3 = $io_context.rngs.bitcomp2.random_fes_3keys::<F>();
-                    let k2_comp = k2.0 + k2.1 + k2.2;
-                    let k3_comp = k3.0 + k3.1 + k3.2;
-                    x23.push(k2_comp + k3_comp);
-                }
-
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many(Some(x23), delta, $output_size, $io_context)?;
-
-                let mut garbler =
-                   yao::garbler::Rep3Garbler::new_with_delta($io_context, delta.expect("Delta not provided"));
-
-                let x1 = $circuit(&mut garbler, &x01, &x2, &x23, $($args),*);
-                let x1 = yao::GCUtils::garbled_circuits_error(x1)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                y2b_many(x1_vec,  $io_context)?
+                let output = $circuit(&mut garbler, &x01, &x2, $($args),*);
+                let output = yao::GCUtils::garbled_circuits_error(output)?;
+                garbler.send_circuit()?;
+                conversion::y2b_many::<F, _>(vec![output], $net, $state)?
             }
         };
-
-        Ok(res)
+        debug_assert_eq!(converted.len(), 1);
+        Ok::<_, eyre::Report>(converted.pop().expect("one bundle was converted"))
     }};
 }
+pub(crate) use decompose_circuit_compose_blueprint_to_binary;
 
 // TODO implement with a2b/b2a as well
 
