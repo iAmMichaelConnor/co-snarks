@@ -400,7 +400,9 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
     // covers Rep3CoUltraHonk::prove only. See the doc comment above for the
     // bump policy.
     const PKGEN_MSGS: [(usize, usize); 3] = [(116, 116), (116, 116), (116, 116)];
-    const PROVE_MSGS: [(usize, usize); 3] = [(199, 199), (199, 199), (199, 199)];
+    // 199 -> 198: the two independent mul_many calls in array_prod_inner_mul_many
+    // were merged into one (one fewer round per grand-product computation).
+    const PROVE_MSGS: [(usize, usize); 3] = [(198, 198), (198, 198), (198, 198)];
 
     let program_artifact = co_noir::program_artifact_from_reader(File::open(circuit_file).unwrap())
         .expect("failed to parse program artifact");

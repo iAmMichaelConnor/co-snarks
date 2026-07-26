@@ -149,9 +149,16 @@ impl CoUtils {
         let r_inv = T::inv_many(&r, net, state)?;
         let r_inv0 = vec![r_inv[0]; len];
 
-        let mut unblind = T::mul_many(&r_inv0, &r[1..], net, state)?;
+        // The unblind (r_inv0 x r[1..]) and mul (r[..len] x inp) products are
+        // independent (neither consumes the other's output), so batch them into
+        // a single mul_many to save one communication round.
+        let mut lhs = r_inv0;
+        lhs.extend_from_slice(&r[..len]);
+        let mut rhs = r[1..].to_vec();
+        rhs.extend_from_slice(inp);
+        let mut unblind = T::mul_many(&lhs, &rhs, net, state)?;
+        let mul = unblind.split_off(len);
 
-        let mul = T::mul_many(&r[..len], inp, net, state)?;
         let mut open = T::mul_open_many(&mul, &r_inv[1..], net, state)?;
 
         for i in 1..open.len() {
@@ -195,11 +202,18 @@ impl CoUtils {
             r_invs_mul.extend(r_inv_[1..].to_vec());
         }
 
-        let mut unblind = T::mul_many(&r_inv0s, &r_chunks, net, state)?;
-
         let input = inp.iter().flatten().cloned().collect::<Vec<_>>();
 
-        let mul = T::mul_many(&mul_r, &input, net, state)?;
+        // The unblind (r_inv0s x r_chunks) and mul (mul_r x input) products are
+        // independent (neither consumes the other's output), so batch them into
+        // a single mul_many to save one communication round.
+        let mut lhs = r_inv0s;
+        lhs.extend_from_slice(&mul_r);
+        let mut rhs = r_chunks;
+        rhs.extend_from_slice(&input);
+        let mut unblind = T::mul_many(&lhs, &rhs, net, state)?;
+        let mul = unblind.split_off(depth * width);
+
         let mut open = T::mul_open_many(&mul, &r_invs_mul, net, state)?;
 
         for open_ in open.chunks_mut(width) {
