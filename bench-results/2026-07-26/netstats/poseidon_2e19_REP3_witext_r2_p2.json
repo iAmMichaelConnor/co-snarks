@@ -1,0 +1,18 @@
+{
+  "my_id": 2,
+  "peers": {
+    "0": {
+      "recv_bytes": 0,
+      "recv_msgs": 0,
+      "sent_bytes": 5387048,
+      "sent_msgs": 134676
+    },
+    "1": {
+      "recv_bytes": 5387080,
+      "recv_msgs": 134676,
+      "sent_bytes": 0,
+      "sent_msgs": 0
+    }
+  },
+  "phase": "generate-witness"
+}

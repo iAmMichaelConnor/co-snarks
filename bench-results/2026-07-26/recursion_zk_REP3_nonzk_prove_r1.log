@@ -1,0 +1,25 @@
+[2m2026-07-26T02:05:26.607196Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T02:05:26.612001Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T02:05:26.674388Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T02:05:33.006005Z[0m [32m INFO[0m Build proving key took 6393.758 ms
+[2m2026-07-26T02:05:33.006309Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_pkgen_nonzk_r1_p0.json
+[2m2026-07-26T02:05:33.006320Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T02:05:33.089183Z[0m [32m INFO[0m Build proving key took 6414.55 ms
+[2m2026-07-26T02:05:33.089466Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_pkgen_nonzk_r1_p2.json
+[2m2026-07-26T02:05:33.089477Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T02:05:33.436408Z[0m [32m INFO[0m Build proving key took 6828.977 ms
+[2m2026-07-26T02:05:33.436685Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_pkgen_nonzk_r1_p1.json
+[2m2026-07-26T02:05:33.436697Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T02:06:38.953100Z[0m [32m INFO[0m Generate proof took 65946.762 ms
+[2m2026-07-26T02:06:38.953347Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_prove_nonzk_r1_p0.json
+[2m2026-07-26T02:06:38.953461Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof
+[2m2026-07-26T02:06:38.953501Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/recursion_zk/cosnark_public_input
+[2m2026-07-26T02:06:38.953518Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T02:06:38.985992Z[0m [32m INFO[0m Generate proof took 65549.273 ms
+[2m2026-07-26T02:06:38.986233Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_prove_nonzk_r1_p1.json
+[2m2026-07-26T02:06:38.986333Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof.1.proof
+[2m2026-07-26T02:06:38.986343Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T02:06:38.989428Z[0m [32m INFO[0m Generate proof took 65899.923 ms
+[2m2026-07-26T02:06:38.989712Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_prove_nonzk_r1_p2.json
+[2m2026-07-26T02:06:38.989834Z[0m [32m INFO[0m Wrote proof to file test_vectors/recursion_zk/cosnark_proof.2.proof
+[2m2026-07-26T02:06:38.989846Z[0m [32m INFO[0m Proof generation finished successfully

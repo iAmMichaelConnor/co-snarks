@@ -1,0 +1,49 @@
+2026-07-26T01:12:02+00:00 launcher started (host load1m=45.77 — HOST-wide, incl. other tenants)
+bench v2: 12 circuits queued; crude suite estimate ~1011 min (timeout prunes cells >600s; sha rates are the least certain)
+[01:13:16] circuit 1/12: poseidon (rows~2048, est ~0 min) — elapsed 0 min, est remaining ~1011 min
+[01:13:22]   poseidon done in 0m6s (est was ~0 min)
+[01:13:22] circuit 2/12: poseidon_2e17 (rows~131072, est ~8 min) — elapsed 0 min, est remaining ~1011 min
+[01:14:46]   poseidon_2e17 done in 1m24s (est was ~8 min)
+[01:14:46] circuit 3/12: poseidon_2e18 (rows~262144, est ~11 min) — elapsed 1 min, est remaining ~1003 min
+[01:16:29]   poseidon_2e18 done in 1m43s (est was ~11 min)
+[01:16:29] circuit 4/12: poseidon_2e19 (rows~524288, est ~22 min) — elapsed 3 min, est remaining ~991 min
+[01:19:51]   poseidon_2e19 done in 3m22s (est was ~22 min)
+[01:19:51] circuit 5/12: poseidon_2e20 (rows~1048576, est ~45 min) — elapsed 6 min, est remaining ~969 min
+[01:27:00]   poseidon_2e20 done in 7m9s (est was ~45 min)
+[01:27:00] circuit 6/12: bb_sha256_compression (rows~32768, est ~20 min) — elapsed 13 min, est remaining ~923 min
+[01:41:10]   bb_sha256_compression done in 14m10s (est was ~20 min)
+[01:41:10] circuit 7/12: sha256_2e16 (rows~65536, est ~40 min) — elapsed 27 min, est remaining ~903 min
+[02:01:24]   sha256_2e16 done in 20m14s (est was ~40 min)
+[02:01:24] circuit 8/12: sha256_2e17 (rows~131072, est ~81 min) — elapsed 48 min, est remaining ~862 min
+[02:01:44]   sha256_2e17 done in 0m20s (est was ~81 min)
+[02:01:44] circuit 9/12: sha256_2e18 (rows~262144, est ~109 min) — elapsed 48 min, est remaining ~780 min
+[02:02:00]   sha256_2e18 done in 0m16s (est was ~109 min)
+[02:02:00] circuit 10/12: sha256_2e19 (rows~524288, est ~218 min) — elapsed 48 min, est remaining ~671 min
+[02:02:29]   sha256_2e19 done in 0m29s (est was ~218 min)
+[02:02:29] circuit 11/12: sha256_2e20 (rows~1048576, est ~436 min) — elapsed 49 min, est remaining ~453 min
+[02:03:27]   sha256_2e20 done in 0m58s (est was ~436 min)
+[02:03:27] circuit 12/12: recursion_zk (rows~704000, est ~17 min) — elapsed 50 min, est remaining ~17 min
+[02:12:59]   recursion_zk done in 9m32s (est was ~17 min)
+bench-0_5 v2: done — results in /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/results.csv
+2026-07-26T02:12:59+00:00 bench finished rc=0
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/site-anchors.json + /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/RESULTS.md: 12 circuits
+2026-07-26T02:12:59+00:00 site-anchors.json + RESULTS.md written
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/phase-split.csv (108 party-rows)
+
+circuit                      zk      pkgen_med_s  prove_med_s
+bb_sha256_compression        nonzk       136.188        3.007
+bb_sha256_compression        zk          135.820        3.273
+poseidon                     nonzk         0.010        0.248
+poseidon                     zk            0.010        0.303
+poseidon_2e17                nonzk         0.695        7.733
+poseidon_2e17                zk            0.710        8.069
+poseidon_2e18                nonzk         1.428       15.008
+poseidon_2e18                zk            1.390       16.629
+poseidon_2e19                nonzk         2.973       31.404
+poseidon_2e19                zk            3.225       31.446
+poseidon_2e20                nonzk         7.462       65.961
+poseidon_2e20                zk            7.289       66.217
+recursion_zk                 nonzk         6.325       65.900
+recursion_zk                 zk            6.221       67.134
+2026-07-26T02:12:59+00:00 phase-split.csv written
+BENCH_DONE rc=0 out=/mnt/user-data/mike/co-snarks/bench-results/2026-07-26   (bake: read /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/site-anchors.json into the explorer's ANCHOR block, then redeploy)

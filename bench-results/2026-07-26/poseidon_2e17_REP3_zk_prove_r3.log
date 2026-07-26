@@ -1,0 +1,25 @@
+[2m2026-07-26T01:14:37.429061Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:14:37.431329Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:14:37.433012Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:14:38.131836Z[0m [32m INFO[0m Build proving key took 667.592 ms
+[2m2026-07-26T01:14:38.132083Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_pkgen_zk_r3_p0.json
+[2m2026-07-26T01:14:38.132092Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:14:38.135506Z[0m [32m INFO[0m Build proving key took 667.919 ms
+[2m2026-07-26T01:14:38.135558Z[0m [32m INFO[0m Build proving key took 669.013 ms
+[2m2026-07-26T01:14:38.135740Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_pkgen_zk_r3_p2.json
+[2m2026-07-26T01:14:38.135750Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:14:38.135784Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_pkgen_zk_r3_p1.json
+[2m2026-07-26T01:14:38.135791Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:14:46.201477Z[0m [32m INFO[0m Generate proof took 8069.342 ms
+[2m2026-07-26T01:14:46.201787Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_prove_zk_r3_p0.json
+[2m2026-07-26T01:14:46.201922Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e17/cosnark_proof
+[2m2026-07-26T01:14:46.202079Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon_2e17/cosnark_public_input
+[2m2026-07-26T01:14:46.202141Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T01:14:46.202995Z[0m [32m INFO[0m Generate proof took 8067.209 ms
+[2m2026-07-26T01:14:46.203207Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_prove_zk_r3_p2.json
+[2m2026-07-26T01:14:46.203325Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e17/cosnark_proof.2.proof
+[2m2026-07-26T01:14:46.203398Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T01:14:46.204733Z[0m [32m INFO[0m Generate proof took 8068.925 ms
+[2m2026-07-26T01:14:46.204856Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/poseidon_2e17_REP3_prove_zk_r3_p1.json
+[2m2026-07-26T01:14:46.204938Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e17/cosnark_proof.1.proof
+[2m2026-07-26T01:14:46.205005Z[0m [32m INFO[0m Proof generation finished successfully

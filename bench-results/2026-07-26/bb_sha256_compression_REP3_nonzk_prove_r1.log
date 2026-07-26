@@ -1,0 +1,25 @@
+[2m2026-07-26T01:27:09.909348Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:27:09.909399Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:27:09.910493Z[0m [32m INFO[0m Starting proving key generation...
+[2m2026-07-26T01:29:28.201948Z[0m [32m INFO[0m Build proving key took 138292.476 ms
+[2m2026-07-26T01:29:28.202006Z[0m [32m INFO[0m Build proving key took 138291.451 ms
+[2m2026-07-26T01:29:28.202115Z[0m [32m INFO[0m Build proving key took 138292.655 ms
+[2m2026-07-26T01:29:28.202197Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_pkgen_nonzk_r1_p2.json
+[2m2026-07-26T01:29:28.202209Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:29:28.202309Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_pkgen_nonzk_r1_p0.json
+[2m2026-07-26T01:29:28.202317Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:29:28.202382Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_pkgen_nonzk_r1_p1.json
+[2m2026-07-26T01:29:28.202393Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-26T01:29:31.204789Z[0m [32m INFO[0m Generate proof took 3002.563 ms
+[2m2026-07-26T01:29:31.204996Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_prove_nonzk_r1_p2.json
+[2m2026-07-26T01:29:31.205096Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof.2.proof
+[2m2026-07-26T01:29:31.205106Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T01:29:31.206021Z[0m [32m INFO[0m Generate proof took 3003.615 ms
+[2m2026-07-26T01:29:31.206274Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_prove_nonzk_r1_p1.json
+[2m2026-07-26T01:29:31.206384Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof.1.proof
+[2m2026-07-26T01:29:31.206395Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-26T01:29:31.209047Z[0m [32m INFO[0m Generate proof took 3006.714 ms
+[2m2026-07-26T01:29:31.209307Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/bb_sha256_compression_REP3_prove_nonzk_r1_p0.json
+[2m2026-07-26T01:29:31.209435Z[0m [32m INFO[0m Wrote proof to file test_vectors/bb_sha256_compression/cosnark_proof
+[2m2026-07-26T01:29:31.209488Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/bb_sha256_compression/cosnark_public_input
+[2m2026-07-26T01:29:31.209505Z[0m [32m INFO[0m Proof generation finished successfully

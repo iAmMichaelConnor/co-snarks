@@ -1,0 +1,18 @@
+{
+  "my_id": 2,
+  "peers": {
+    "0": {
+      "recv_bytes": 56468368,
+      "recv_msgs": 109,
+      "sent_bytes": 83877860,
+      "sent_msgs": 37963
+    },
+    "1": {
+      "recv_bytes": 174717212,
+      "recv_msgs": 38081,
+      "sent_bytes": 128976480,
+      "sent_msgs": 218
+    }
+  },
+  "phase": "build-proving-key"
+}

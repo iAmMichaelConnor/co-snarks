@@ -1,0 +1,12 @@
+[2m2026-07-26T02:10:23.940880Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T02:10:23.941280Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T02:10:23.941342Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-26T02:10:23.941866Z[0m [32m INFO[0m Generate witness took 0.948 ms
+[2m2026-07-26T02:10:23.941969Z[0m [32m INFO[0m Generate witness took 0.658 ms
+[2m2026-07-26T02:10:23.941987Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_witext_r3_p0.json
+[2m2026-07-26T02:10:23.942005Z[0m [32m INFO[0m Generate witness took 0.649 ms
+[2m2026-07-26T02:10:23.942146Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_witext_r3_p1.json
+[2m2026-07-26T02:10:23.942177Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-26/netstats/recursion_zk_REP3_witext_r3_p2.json
+[2m2026-07-26T02:10:23.942361Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.0.shared
+[2m2026-07-26T02:10:23.942423Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.2.shared
+[2m2026-07-26T02:10:23.942453Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.1.shared

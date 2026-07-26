@@ -119,3 +119,38 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
   is the ch. 24 backlog fix. Genuinely round-deep by contrast: poseidon
   witext (sequential hash chain — 39 B/msg, 270k real dependency rounds
   at 2e20; a WAN latency killer that no bandwidth fixes).
+- **v2.1 full run 2026-07-26** (`2026-07-26/`, commit 049d3435 + the
+  session-17 UNCOMMITTED optimisation tree — manifest records the dirty
+  worktree; levers in tree: L2b, L2c, L1-followup, L0c, L0d,
+  perm-lagrange rayon; L0a/L0b implemented-then-reverted, ch. 24 §4.
+  Host load1m 45.8 at launch decaying to ~13–30 during the run — read
+  absolutes with the per-row load stamps; 60 min, rc=0, 314 rows, only
+  failures = the designed sha timeout pruning; verify_bb 12/12 rc=0).
+  Suite additions this run (capture-only): native `phase-split.csv`
+  (launcher post-step) and per-phase netstats — `netstats/*_pkgen_*`
+  is a mid-run snapshot after pk-gen (CO_NOIR_NET_STATS_JSON_PKGEN);
+  subtract from `*_prove_*` totals for true prove-proper comms.
+  Headlines vs v2 (phase-split medians):
+  - **REP3 prove-proper −20…−30% across every measured size**:
+    poseidon 2^17 10.6→7.7 s (nonzk), 2^20 zk 90.2→66.2 s,
+    recursion_zk zk 85.2→67.1 s. REP3÷bb (zk, 2^20) ~11.4×→**8.8×**;
+    REP3÷plaindriver (zk, 2^20) ~4.7×→3.9×. The cumulative
+    L2b+L2c+L1f+L0d effect, now measured on the full matrix.
+  - **sha pk-gen unchanged** (136.7→136.2 s, −0.4%) — as predicted
+    post-L0a/b-refutation: the per-call Yao tax is garbling COMPUTE,
+    not per-call setup or RTTs (at loopback). ch. 24 L0e is the
+    remaining sha lever.
+  - **v2's R-column caveat RESOLVED by the phase split**: the
+    size-linear frame growth belonged to PK-GEN (tiny ~253 B frames:
+    89.9k at poseidon 2^20 zk, 11.1k at 2^17); PROVE-PROPER recv_msgs
+    is a true round-depth proxy after all — a few hundred,
+    ~10·log n + const (204 at 2^17 nonzk — byte-for-byte equal to the
+    in-process T2 fence pin incl. L0d's +6; 336 at 2^20 zk;
+    recursion_zk 627). v2's "constant ~37 KB/msg" was the bimodal
+    average of pk-gen's tiny frames and prove's ~2 MB frames. WAN
+    implication: prove-proper is latency-bound by only ~300–600
+    rounds; pk-gen/witext carry the frame-count problem.
+  - The in-process-vs-TCP frame-count anomaly (floor-table
+    known_anomalies) is hereby LOCALIZED to pk-gen (in-process pkgen
+    = 116 msgs at any poseidon size vs 11k–90k over TCP). Root cause
+    still open — now a much smaller haystack.
