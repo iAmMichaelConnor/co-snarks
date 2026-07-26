@@ -207,14 +207,14 @@ pub fn build_finalized_circuit_plain<P: HonkCurve<TranscriptFieldType>>(
     // An empty witness puts the builder into write-vk mode, exactly like the
     // vk-generation path: the circuit structure is built and finalized without
     // requiring witness values.
-    Ok(UltraCircuitBuilder::<P>::create_circuit(
+    UltraCircuitBuilder::<P>::create_circuit(
         constraint_system,
         0,
         vec![],
         HonkRecursion::UltraHonk,
         &ProverCrs::<P>::default(),
         &mut driver,
-    )?)
+    )
 }
 
 /// Generate a REP3 shared proving key

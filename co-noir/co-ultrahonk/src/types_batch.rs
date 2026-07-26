@@ -1,5 +1,4 @@
 use ark_ec::{CurveGroup, PrimeGroup};
-use rayon::prelude::*;
 use co_noir_common::{
     honk_curve::HonkCurve,
     honk_proof::TranscriptFieldType,
@@ -8,6 +7,7 @@ use co_noir_common::{
         AllEntities, PrecomputedEntities, ShiftedWitnessEntities, WitnessEntities,
     },
 };
+use rayon::prelude::*;
 use ultrahonk::prelude::Univariate;
 
 pub(crate) type WitnessEntitiesBatch<T> = WitnessEntities<Vec<T>>;

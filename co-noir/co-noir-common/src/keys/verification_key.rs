@@ -203,19 +203,29 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let log_circuit_size: u64 = log_circuit_size.to_u64_digits().first().copied().unwrap_or(0);
+        let log_circuit_size: u64 = log_circuit_size
+            .to_u64_digits()
+            .first()
+            .copied()
+            .unwrap_or(0);
         let num_public_inputs: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let num_public_inputs: u64 =
-            num_public_inputs.to_u64_digits().first().copied().unwrap_or(0);
+        let num_public_inputs: u64 = num_public_inputs
+            .to_u64_digits()
+            .first()
+            .copied()
+            .unwrap_or(0);
         let pub_inputs_offset: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
-        let pub_inputs_offset: u64 =
-            pub_inputs_offset.to_u64_digits().first().copied().unwrap_or(0);
+        let pub_inputs_offset: u64 = pub_inputs_offset
+            .to_u64_digits()
+            .first()
+            .copied()
+            .unwrap_or(0);
 
         // Untrusted input: a VK with log_circuit_size = 0 (or out of range) is invalid for any
         // circuit and, if accepted, drives the verifier's round count to 0 — reject it cleanly

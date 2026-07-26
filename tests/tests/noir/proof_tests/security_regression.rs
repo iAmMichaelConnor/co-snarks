@@ -10,7 +10,6 @@ use crate::proof_tests::CRS_PATH_G2;
 use ark_bn254::Bn254;
 use ark_ff::PrimeField;
 use ark_ff::Zero;
-use num_bigint::BigUint;
 use co_acvm::PlainAcvmSolver;
 use co_builder::prelude::constraint_system_from_reader;
 use co_builder::prelude::HonkRecursion;
@@ -24,6 +23,7 @@ use co_noir_common::transcript::Poseidon2Sponge;
 use co_noir_common::types::Bn254G1;
 use co_noir_common::types::ZeroKnowledge;
 use noir_types::HonkProof;
+use num_bigint::BigUint;
 use std::fs::File;
 
 const CIRCUIT_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.json";
@@ -565,7 +565,10 @@ fn noncanonical_vk_coordinate_limbs_rejected() {
         res1 >= BigUint::from(1u8),
         "honest x1 (high limb) must be non-zero for this construction"
     );
-    assert!(value < q, "honest recombined coordinate must be canonical (< q)");
+    assert!(
+        value < q,
+        "honest recombined coordinate must be canonical (< q)"
+    );
 
     // (a) IDENTICAL recombined value, low limb pushed out of range.
     let a_res0 = &res0 + &two_pow_136;
