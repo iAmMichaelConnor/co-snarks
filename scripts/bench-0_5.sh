@@ -76,7 +76,7 @@ cat >"$BENCH_OUT/manifest.json" <<MANIFEST
   "reps": "3 (2 for >=2^18 circuits)",
   "cell_timeout_s": ${CELL_TIMEOUT},
   "fairness": "bb prove uses -k (VK pregen, timed as vkgen); plaindriver prove is witness-fed; plaindriver solve+prove kept as separate phase; verify cells: bb verify per zk-mode (verifier-time baseline), plaindriver verify_bb = bb cross-verifies the plaindriver zk proof (rc=0 is the verifier-side parity invariant), REP3 verify via co-noir",
-  "netstats": "per phase x party JSONs in netstats/ when the co-noir binary supports CO_NOIR_NET_STATS_JSON; recv_msgs from one REP3 neighbour ~ sequential rounds R",
+  "netstats": "per phase x party JSONs in netstats/ when the co-noir binary supports CO_NOIR_NET_STATS_JSON; recv_msgs from one REP3 neighbour ~ sequential rounds R; v2.1: *_pkgen_* JSONs are mid-run snapshots after proving-key generation (CO_NOIR_NET_STATS_JSON_PKGEN) — subtract from the matching *_prove_* totals for true per-phase comms",
   "features": "per circuit JSONs in features/ (co-noir circuit-info, bb gates, nargo info)",
   "network": "loopback (single host; distance/latency NOT measured here)",
   "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m (rc!=0 failed, rc=124 timeout, excluded from medians; max_rss_kb = peak RSS, max over the 3 parties for MPC cells; cpu_pct empty for MPC cells — per-party detail in mem/; host_load1m = HOST-wide 1-min loadavg at cell start — shared-mainframe noise context for the absolute seconds)",
@@ -272,6 +272,7 @@ for c in "${CIRCUITS[@]}"; do
             [[ $i -ne 0 ]] && { out="test_vectors/$c/cosnark_proof.$i.proof"; pubflag=""; }
             # shellcheck disable=SC2086
             CO_NOIR_NET_STATS_JSON="$BENCH_OUT/netstats/${c}_${proto}_prove_${z}_r${r}_p${i}.json" \
+            CO_NOIR_NET_STATS_JSON_PKGEN="$BENCH_OUT/netstats/${c}_${proto}_pkgen_${z}_r${r}_p${i}.json" \
             /usr/bin/time -f "%e %M %P" -o "$BENCH_OUT/mem/${c}_${proto}_prove_${z}_r${r}_p${i}.time" \
             timeout -k 15 "$CELL_TIMEOUT" \
             "$BIN" build-and-generate-proof --witness "test_vectors/$c/$c.gz.$i.shared" \

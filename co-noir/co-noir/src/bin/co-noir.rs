@@ -909,13 +909,35 @@ fn main() -> color_eyre::Result<ExitCode> {
 /// MPC protocol has finished.
 const NET_STATS_JSON_ENV: &str = "CO_NOIR_NET_STATS_JSON";
 
+/// Env var: if set, `build-and-generate-proof` additionally snapshots the
+/// per-peer connection stats right after proving-key generation to the given
+/// path (phase `build-proving-key`). Subtracting this snapshot from the final
+/// `CO_NOIR_NET_STATS_JSON` totals gives true per-phase comms for the
+/// otherwise-conflated pk-gen/prove run (bench v2.1 measurement fix).
+const NET_STATS_JSON_PKGEN_ENV: &str = "CO_NOIR_NET_STATS_JSON_PKGEN";
+
 /// If `CO_NOIR_NET_STATS_JSON` is set, write the (summed) per-peer connection stats of
 /// the given networks as a JSON file to that path. Reporting only; never fails the run.
 fn write_net_stats_json(phase: &str, nets: &[&TcpNetwork]) {
-    use mpc_net::Network as _;
     let Ok(path) = std::env::var(NET_STATS_JSON_ENV) else {
         return;
     };
+    write_net_stats_json_to(&path, phase, nets)
+}
+
+/// Like [`write_net_stats_json`] but keyed by [`NET_STATS_JSON_PKGEN_ENV`]:
+/// the mid-run snapshot taken right after proving-key generation.
+fn write_net_stats_json_pkgen_snapshot(nets: &[&TcpNetwork]) {
+    let Ok(path) = std::env::var(NET_STATS_JSON_PKGEN_ENV) else {
+        return;
+    };
+    write_net_stats_json_to(&path, "build-proving-key", nets)
+}
+
+/// Write the (summed) per-peer connection stats of the given networks as a JSON
+/// file to `path`. Reporting only; never fails the run.
+fn write_net_stats_json_to(path: &str, phase: &str, nets: &[&TcpNetwork]) {
+    use mpc_net::Network as _;
     if path.is_empty() || nets.is_empty() {
         return;
     }
@@ -953,7 +975,7 @@ fn write_net_stats_json(phase: &str, nets: &[&TcpNetwork]) {
         "my_id": my_id,
         "peers": peers_json,
     });
-    match std::fs::File::create(&path) {
+    match std::fs::File::create(path) {
         Ok(file) => {
             if let Err(e) = serde_json::to_writer_pretty(BufWriter::new(file), &json) {
                 tracing::warn!("failed to write network stats to {path}: {e}");
@@ -1690,6 +1712,7 @@ fn run_build_and_generate_proof(
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
+            write_net_stats_json_pkgen_snapshot(&[&net0, &net1]);
 
             tracing::info!("Starting proof generation...");
             match hasher {
@@ -1736,6 +1759,9 @@ fn run_build_and_generate_proof(
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
+            // Same handle set as the final build-and-generate-proof dump, so
+            // subtracting the snapshot from the totals is well-defined.
+            write_net_stats_json_pkgen_snapshot(&[&net0, &net1]);
 
             tracing::info!("Starting proof generation...");
             match hasher {

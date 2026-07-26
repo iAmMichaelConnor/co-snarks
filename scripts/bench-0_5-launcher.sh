@@ -25,5 +25,9 @@ echo "$(date -Is) bench finished rc=$rc" >>"$LOG"
 # artifact URL (ch. 22 §5/V7). Never fabricates: absent cells stay modeled.
 python3 "$ROOT/scripts/bench-to-site.py" "$OUT/results.csv" "$OUT/site-anchors.json" >>"$LOG" 2>&1 \
   && echo "$(date -Is) site-anchors.json + RESULTS.md written" >>"$LOG"
+# v2.1: pk-gen/prove phase split is now produced with every run (the v2 run
+# needed this recovered retroactively — bench methodology fix, ch. 24 §3a).
+python3 "$ROOT/scripts/bench-retro-phase-split.py" "$OUT" >>"$LOG" 2>&1 \
+  && echo "$(date -Is) phase-split.csv written" >>"$LOG"
 echo "BENCH_DONE rc=$rc out=$OUT   (bake: read $OUT/site-anchors.json into the explorer's ANCHOR block, then redeploy)" >>"$LOG"
 exit $rc
