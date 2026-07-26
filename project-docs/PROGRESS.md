@@ -2516,3 +2516,34 @@ and new lever L0e are the surviving value.
 6. In-process-vs-TCP frame anomaly: now localized to pk-gen (~253 B
    frames, 116 in-process vs 11k–90k TCP) — root-cause when touching
    mpc-net next.
+
+## Session 18 — 2026-07-26 — commit split executed (Mike's word); next lever round launched
+
+**Mike's word received**: commit the uncommitted work, split per ch. 24 §4
+unit boundaries; keep going with optimisations; extend bench granularity;
+identify non-optimisation work (always: proofs must not deviate from bb).
+
+**Commit split EXECUTED — 11 commits on mc/update-co-noir (local only)**:
+`9c03757a` L1-followup · `2b08d1c9` seeded-ZK plumbing · `dfa4a510` L0c ·
+`9e5935ee` L0d · `471e0b62` perm-lagrange rayon · `09f2f45b` T2-proper +
+T4 + byte pins + floor table (+ the seeded-ZK byte-parity test) ·
+`f4011baf` clippy/fmt tidy · `74158193` bench v2.1 instrumentation ·
+`a085f424` bench v2.1 run data + findings · `cb8509d7` ch. 25 ·
+`b5f3c5b0` session-17 docs.
+
+Reconstruction notes (for the audit trail): several files interleaved
+multiple units (tests/rep3.rs; co-noir-common lib.rs; oink/zk_data/ssipa
+mixed seeded-ZK + L0d). Intermediate states were rebuilt from the session
+scratchpad patches + a classifier over difflib opcodes (seeded regions kept,
+L0d call-site swaps reverted; the one genuinely mixed region — oink's Gemini
+masking block — handled explicitly). Fence pins carry their historical
+values through the sequence (199→198 at L1f, 198→204 at L0d, full pins at
+the tests commit). The working yao.rs differs from the saved l0c.patch only
+by a later rustfmt reflow (verified; L0a/b revert left no residue).
+
+**Verification (all green)**: reconstructed original tree vs new HEAD =
+EMPTY diff (byte-identical, incl. untracked-file additions); intermediate
+compile checks at C1/C2/C3/C4 in a throwaway worktree all pass;
+fast-check --all-fast PASS on the final tree (bb v5.0.1 cross-verify VK +
+proof byte-identical; recursion VK KATs green). Verification worktree
+removed.
