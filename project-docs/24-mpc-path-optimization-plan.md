@@ -339,6 +339,22 @@ its job. The prove-side pain must come from the lookup machinery.)*
   infrastructure (already landed); explorer gets the per-tier
   upload/download columns.
 
+**[RESOLVED 2026-07-26 (session 18): the in-process-vs-TCP pk-gen
+frame-count "anomaly" was a CONFOUND, not a measurement gap.** Both
+backends count identically (1 send = 1 frame = 1 counted msg; no
+backend-conditional chunking — mpc-net local.rs/blocking.rs verified,
+and a real 3-process TCP run of the SAME small poseidon KAT circuit
+reproduces the in-process fence pins byte-for-byte, msgs AND bytes).
+The "116 at any size vs 11k–90k over TCP" compared different CIRCUITS:
+the fixed 2048-dyadic KAT fixture in-process vs the poseidon_2e17..2e20
+family over TCP. pk-gen msgs = big_quad_constraints + 2 in BOTH
+harnesses (see lever L8, which is the real finding: those size-linear
+frames are one mul_many round per big-quad constraint — a WAN lever).
+Caveat: the bb_sha256_compression entry in the floor table's
+known_anomalies exercises the lookup/Yao path and was NOT
+re-investigated — that one stays open. Floor-table/README provenance
+text correction rides the next docs pass.]**
+
 ## 4. Optimisation levers (all parity-preserving, ranked)
 
 - **L1 — batch the marked TODOs**: grand-product quartet → 1 round;
@@ -451,6 +467,58 @@ its job. The prove-side pain must come from the lookup machinery.)*
   the MAESTRO-style LUT path (in-tree since PR #307) instead of
   per-value Yao conversion blueprints. Effort L, engine-level; the
   only path with headroom to approach witext's 0.1 s ceiling.
+  **[DESIGN DONE + U1 LANDED 2026-07-26 session 18 (uncommitted).**
+  Full design: session-18 scratchpad l0e-design/L0E-DESIGN.md —
+  recommendation = design (a), one GC per compression emitting ~42,016
+  carry-free bits (all 369 read values are public-weight linear maps of
+  them; carry-freeness forced by the 16/28/16 normalization table
+  sizes), served to the untouched builder via a driver FIFO cache with
+  parity-safe fallback. Registered predictions: pk-gen 136.7 → 9.5 s
+  ± 2; sha256_2e16 2,039.6 → ~140 s ± 30. U1 (pure circuit +
+  referee) landed: GarbledCircuits::sha256_block_sparse_trace
+  (mpc-core yao/circuits.rs:3549) + cleartext referee mirroring the
+  REAL plain plookup machinery + real-garbling equivalence test.
+  Verified: bit-equality on 22 inputs × 42,016 bits; carry-freeness
+  EXHAUSTIVE; ChInput C3 linearity PROVEN coefficient-by-coefficient
+  (xor_result(1<<k) = 28^k + 7·Σ 28^((k−rot)%32), rot ∈ {6,11,25});
+  measured AND count 92,941 (fence-pinned; ~30% below the design's
+  130–200k) ⇒ ~84 ms garble/eval + ~2.8 MB tables per compression.
+  fast-check --all-fast PASS (agent + coordinator re-run). BONUS
+  FINDING: latent bug in half_adder_const (circuits.rs:105) — returns
+  carry = a for b=false (should be 0); currently harmless (all callers
+  add odd constant 15) but ticketed in ch. 15; U2+ must not use
+  bin_addition_constant_no_carry with even constants. Patch:
+  session-18 scratchpad l0e-u1/. **U2 LANDED same day** (kernel
+  sha256_block_sparse_trace_kernel + read recombination in new
+  mpc-core yao/sha256_sparse_trace.rs; 3-party referee value-equal to
+  the 369 singular kernels + U1 cleartext trace on identical shared
+  inputs, red-validated by the coordinator, #[ignore]d as the explicit
+  L0e-gate referee; all existing fences untouched — kernel unreachable
+  from production paths; patch + coordinator report: scratchpad
+  l0e-u2/). **U3 LANDED same day — THE SHA HEADLINE IS CLOSED:
+  bb_sha256_compression REP3 pk-gen 145.4 → 6.95 s (20.4×), proof+VK
+  md5-IDENTICAL before/after across parties and sharing seeds, byte-
+  equal to plain and live bb v5.0.1; sha256_2e16 pk-gen 2,039.6 →
+  123.9 s (design band 140±30), prove 3.55 s — the timeout-pruned
+  bench cell is now feasible.** Registered predictions BEATEN (design
+  9.5±2 by ~0.6 s; the 369 calls carried ~8 s of driver/framing
+  overhead beyond the garbling attribution). Shape: trait hook
+  default-no-op (co-acvm mpc.rs:410), ONE gadget line
+  (sha_compression.rs:126), FIFO cache with exact-param tag matching
+  (AES excluded), tag-mismatch ⇒ warn + drop-cache + parity-safe
+  fallback (force-tested). key_b trivial-zero shares kept (§4a
+  analysis: the zero is public circuit structure). U2 debts paid:
+  kernel 83.9–87.7 ms/compression, ~3 MB + ≤2–3 blocking rounds
+  (≈ design's 4-round shape); RNG-discipline argued from code.
+  BONUS FINDING — floor-table sha anomaly CLOSED: the in-process sha
+  KAT proves on a PUBLIC witness (Prover.toml enters as public
+  AcvmTypes), so its sha gadget takes the public plookup branch — the
+  in-process-vs-TCP sha frame gap was public-vs-shared witness, not
+  measurement; NO fence re-pin was needed anywhere (predicted in
+  writing before measuring). Evidence + patch: scratchpad l0e-u3/.
+  REMAINING: U4 = bench rerun (quantify L8+L0e on the full matrix),
+  U5 optional (overflow/bitand cache, ~1 s), L2 now the last sha
+  pk-gen term (~8 s of read-counts at 2^16-scale).]**
 - **L0d — half-share MSM for immediately-opened commitments (NEW,
   from co-groth16 precedent; prove-path, all circuits).**
   `CoUtils::commit` (co-noir-common/src/lib.rs:88-101) runs TWO
@@ -528,6 +596,27 @@ its job. The prove-side pain must come from the lookup machinery.)*
   (1d) binary-domain tags. Needs `ohv_many` in mpc-core + a `_many`
   trait method on `NoirWitnessExtensionProtocol` (plain impl trivial;
   Shamir already panics on the singular version — no regression).
+  **[1a LANDED 2026-07-26 session 18 (uncommitted). Two-pass rework of
+  construct_lookup_read_counts: per-gate Yao a2y2b (254-bit garbled
+  adder PER GATE) → ONE Direct a2b_many + ONE
+  bit_inject_from_bits_to_field_many; ohv_many deferred to 1b (agent's
+  delegated call, measurement-confirmed). Proof+VK md5 identical
+  (sha + blackbox_and, 3 parties × 2 seeds); msg predictions hit
+  12/12 EXACTLY; blackbox_and pk-gen fences re-pinned old→new
+  in-code; all canaries + L0e referee green.
+  HONEST MISS: the in-process wall prediction (3.0–4.5 s) did not
+  materialize — sha pk-gen flat ~7 s. Mechanism: the removed Yao
+  adders cost only ~0.3–0.7 s in-process; the phase is dominated by
+  ~490 MB/party of field payloads 1a doesn't touch (OHV-bit inject
+  ~249 MB + per-gate tag write_luts ~240 MB / 7.5 M field muls).
+  1a's real value is STRUCTURE: sha msgs −25%/party, −90.6 MB/party
+  GC bytes, ~5,800 serial rounds removed (~3.6 min at 25 ms WAN RTT
+  per compression circuit; ×15 for sha256_2e16) — a WAN lever, like
+  L8. The in-process wall win lives in 1b: ohv_many
+  (Σ(k−1)=28,304→13 rounds) + OR-tree tags (kills the 240 MB write_lut
+  term), with 1d binary-domain tags considered simultaneously; also
+  chunk the inject frame (single ~3.7 GB at 2^16 scale). Patch +
+  registered predictions + evidence: session-18 scratchpad l2-1a/.]**
 - **L2b — batch-inverse the post-open scalar loops (C2 class, MPC side;
   code-verified 2026-07-25).** `inv_many_in_place{,_leaking_zeros}`
   (co-noir-common/src/mpc/rep3.rs:212–253, shamir.rs same pattern) and
@@ -589,6 +678,40 @@ its job. The prove-side pain must come from the lookup machinery.)*
 - **L7 — literature tricks** (survey: §6): only those that leave the
   transcript untouched qualify (e.g. cheaper correlated randomness,
   round-compression of openings); anything changing proof bytes is opt-out.
+- **L8 — batch pk-gen's big-quad mul_many across constraints (NEW
+  2026-07-26, found by the frame-"anomaly" root-cause; WAN-tier).**
+  `build_constraints` loops over `big_quad_constraints` one at a time
+  (ultra_builder.rs:4214-4216) and each `create_big_quad_constraint`
+  issues its own `driver.mul_many` (:340) → one full network round per
+  constraint. Confirmed formula (instrumented, disposable worktree):
+  **pk-gen msgs per party/direction = big_quad_constraints.len() + 2**,
+  exact at both sizes tested (poseidon KAT 114+2=116; poseidon_2e17
+  11,125+2=11,127 — byte-equal to the committed v2.1 netstats). That is
+  O(#constraints) sequential rounds — 11k at 2^17, ~90k at 2^20:
+  loopback-invisible (~253 B frames, µs RTT) but ~30–45 min of pure
+  latency at 2^20 under ~25 ms WAN RTT, dwarfing the ~23 MB moved.
+  Fix shape: two-pass — collect all constraints' (lhs, rhs) product
+  pairs (constraints are independent; the only sequential dep, next-w4
+  chaining at :374, is intra-constraint), ONE mul_many, then run the
+  unchanged per-constraint gate building in original order consuming
+  precomputed products. Expected share-level byte-identity, not just
+  value-identity: the mask draws come from the same per-element stream
+  in the same total order (verify at implementation). Referees: byte-
+  KATs; pk-gen fences will collapse ~116→~O(1)+2 and must be re-pinned
+  consciously; poseidon prove canary untouched. Effort S-M.
+  **[LANDED 2026-07-26 session 18 (uncommitted; agent + coordinator
+  close-out after the agent died at the session limit). Share-level
+  identity PROVEN (driver mul_many draws masks per-element sequentially
+  → identical sequence when batched; seeded chunked-vs-batched unit
+  test + exact byte-pin arithmetic). Fences re-pinned to the
+  pre-registered predictions and pass live: poseidon pk-gen
+  (116,116)→(3,3) msgs, bytes −904/direction (8 B framing × 113 merged
+  frames); blackbox_and/add3u64 pk-gen UNCHANGED (0 big-quad
+  constraints — their pk-gen traffic is GC, not big-quad rounds).
+  Proof+VK md5 identical before/after; poseidon_2e17 pk-gen
+  ~730 → ~306 ms loopback (registered band 250–550); WAN rounds
+  11,127 → 3 at 2^17 (~90k → 3 at 2^20 ≈ the ~37 min the tier model
+  quantified). §4a in l8/REPORT.md. Patch: scratchpad l8/.]**
 
 Sequencing (updated 2026-07-25 post-PROFILE; supersedes the post-audit
 order): **L2b → L2c (incl. mul_open_vec) → L1-followup** (small, safe,

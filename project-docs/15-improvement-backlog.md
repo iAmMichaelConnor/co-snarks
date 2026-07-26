@@ -492,3 +492,16 @@ context where a co-noir verifier and bb gate the same artifact (and before
 holding co-noir out as a drop-in verifier) — mechanical, ~half day incl.
 the regression test, no parity risk (honest proofs unaffected). R2/R3 are
 low-priority robustness. None affect the byte-parity results or block 5.1d.
+
+## §5 additions (2026-07-26, session 18)
+
+- **§5.1 half_adder_const carry bug (mpc-core yao/circuits.rs:105)**:
+  returns carry = a unconditionally; correct carry for b=false is 0
+  (c = a AND b). Currently UNREACHABLE-harmless: every existing caller
+  (bin_addition_constant_no_carry via :255) only ever adds the odd
+  constant 15, so ys[0]=true always. Found by the L0e U1 agent when even
+  round-constants miscomputed; U1 sidestepped via its own
+  sha256_add_constant_low32. Fix = return a AND b (or constant-fold:
+  b=false ⇒ carry=0 wire), add a KAT exercising an even constant, and
+  audit callers. Do as its own tiny gated unit — it touches an audited
+  GC helper.

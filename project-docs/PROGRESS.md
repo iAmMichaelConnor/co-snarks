@@ -2547,3 +2547,191 @@ compile checks at C1/C2/C3/C4 in a throwaway worktree all pass;
 fast-check --all-fast PASS on the final tree (bb v5.0.1 cross-verify VK +
 proof byte-identical; recursion VK KATs green). Verification worktree
 removed.
+
+### Session 18 (cont.) — optimisation round 2 in flight; anomaly RESOLVED; L0e design verified
+
+- **L0e design pass DONE + coordinator-spot-verified** (scratchpad
+  l0e-design/L0E-DESIGN.md): sha gadget's ~369 lookup-read values are
+  public-weight linear maps of ~42k carry-free bits (proof: normalization
+  table sizes 16/28/16) → design (a) = ONE ~130–200k-AND GC per compression
+  (vs ~126M across today's calls), binary outputs + one batched bit-inject,
+  ~4 rounds; values served to the UNTOUCHED builder via a driver FIFO cache
+  with parity-safe fallback. §4a answered in writing. REGISTERED
+  PREDICTIONS: pk-gen 136.7 → 9.5 s ± 2; sha256_2e16 2,039.6 → ~140 s ± 30.
+  All spot-checked citations accurate. **U1 (pure GC + cleartext-trace KAT +
+  carry-freeness assertions + C3 linearity re-proof + real AND count) agent
+  IN FLIGHT.**
+- **pk-gen frame "anomaly" RESOLVED — it was a circuit confound, not a
+  measurement gap** (agent report coordinator-verified against
+  ultra_builder.rs:4214/:340 and the committed v2.1 netstats):
+  both net backends count identically; a real TCP run of the small KAT
+  circuit reproduces the in-process fence pins byte-for-byte. pk-gen msgs
+  = big_quad_constraints + 2 (exact at both sizes tested). The REAL
+  finding: one mul_many round PER big-quad constraint → **new lever L8**
+  (batch across constraints, O(#constraints)→O(1) rounds; ~30–45 min of
+  pure WAN latency at 2^20 today). ch. 24 §3a resolution + §4 L8 entry
+  written. sha's floor-table anomaly entry (lookup/Yao path) stays open.
+- **Bench-granularity agent IN FLIGHT** (logical-round counter, per-round
+  byte histogram, tier model, busy-vs-blocked, Shamir cells).
+- All session-18 round-2 work UNCOMMITTED pending Mike's word (commit
+  split earlier this session was Mike-authorized and is committed).
+
+### Session 18 (cont. 2) — bench-granularity landed (agent + coordinator fix); tier model now brackets WAN cost
+
+- **Bench-granularity agent LANDED (uncommitted, coordinator-reviewed)**:
+  (1) logical-round counter + per-round recv-byte histogram +
+  busy-vs-blocked split in mpc-net (observation-only via try_recv;
+  all T2 fences byte-identical, fast-check --all-fast PASS, agent-run);
+  (2) scripts/bench-tier-model.py → tiers.csv (wired into the launcher);
+  (3) Shamir cells for the poseidon family via translate-witness —
+  smoke: SHAMIR proof BYTE-IDENTICAL to the plaindriver KAT;
+  (4) per-cell sub-phase timers captured to phase-timings/*.json;
+  (5) bench-results/README.md v2.2 section. Patch: session-18 scratchpad
+  bench-granularity/.
+- **Coordinator correction to the tier model (same day)**: the
+  blocking-round histogram measures loopback PIPELINING, not dependency
+  depth (2^17 prove: 204 recv_msgs vs ~74 blocking rounds,
+  non-monotonic in size — agent's own honest finding). tiers.csv now
+  carries est_pipelined_seconds (optimistic anchor) AND
+  est_dependency_{lo,hi}_seconds computed from recv_msgs (the
+  v2.1-validated round-depth proxy): lo = max(msgs·RTT, bytes/bw),
+  hi = msgs·RTT + bytes/bw. Validated on the agent's smoke netstats:
+  2^17 pk-gen WAN dep-bracket ≈ 445 s pure round latency — the L8
+  lever quantified; prove-proper WAN [32, 40] s, bandwidth-bound.
+- Still in flight: L0e U1 agent (sparse-trace GC + cleartext KAT).
+  Remaining bench-granularity follow-ups listed in README v2.2
+  (round-counter size sweep, SQLite/explorer wiring, netem v3, Shamir
+  non-poseidon, sent-side histogram).
+
+### Session 18 (cont. 3) — L0e U1 LANDED + coordinator-verified; U2 + L8 launched
+
+- **L0e U1 LANDED (uncommitted, coordinator-verified)**: pure sparse-trace
+  GC circuit (mpc-core yao/circuits.rs:3549, 42,016 output bits) +
+  cleartext referee against the REAL plain plookup machinery +
+  real-garbling equivalence. Bit-equality 22 inputs; carry-freeness
+  EXHAUSTIVE; C3 linearity PROVEN coefficient-by-coefficient; measured
+  AND count 92,941 (fence-pinned; design predicted 130–200k) ⇒ ~84 ms +
+  ~2.8 MB per compression at the kernel level. Coordinator re-ran
+  fast-check --all-fast on the full combined tree (U1 + bench-granularity
+  + tier-model fix): PASS, bb cross-verify byte-identical. BONUS: latent
+  half_adder_const carry bug found (harmless today; ticketed ch. 15 §5.1;
+  do NOT fix inside L0e units). Patch: scratchpad l0e-u1/. ch. 24 L0e
+  entry updated.
+- **IN FLIGHT: U2 agent** (binary-output blueprint kernel + 3-party
+  value-equality referee vs the 369 singular kernels; mpc-core only) and
+  **L8 agent** (batch pk-gen big-quad mul_many across constraints;
+  co-builder + fence re-pins; before-proofs first, registered timing
+  prediction, §4a in writing). File-disjoint by brief.
+
+### Session 18 (cont. 4) — U2 + L8 agents died at the usage limit; both units recovered, finished, and verified by the coordinator
+
+Both agents were killed mid-flight by the session limit (the session-16
+pattern). Forensics + close-out done inline:
+
+- **L8 LANDED (uncommitted, coordinator-completed)**: the agent had
+  implemented the two-pass batching (ultra_builder.rs, +89/−29), re-pinned
+  the pk-gen fences to its pre-registered predictions, written the seeded
+  share-identity unit test, and saved before-evidence — then died before
+  the after-measurement. Coordinator: no debug leftovers in the diff;
+  fences PASS live at exactly the predicted pins ((116,116)→(3,3) msgs,
+  −904 B/direction; blackbox_and/add3u64 UNCHANGED — they have 0 big-quad
+  constraints, correcting the launch brief's expectation);
+  l8_batched_mul_vec_share_identity PASS (share-LEVEL identity);
+  proof+VK md5 sets IDENTICAL before/after (same witness shares);
+  poseidon_2e17 pk-gen 722.9–741.0 ms → **290.0–322.9 ms** (registered
+  band 250–550 ms; ~2.4× loopback; WAN: 11,127 rounds → 3);
+  fast-check --all-fast PASS incl. bb cross-verify. §4a written
+  retroactively (in l8/REPORT.md). Patch: scratchpad l8/l8.patch.
+- **L0e U2 LANDED (uncommitted, coordinator-completed)**: kernel + read
+  recombination + full 3-party referee were in-tree (the agent died
+  before its report/patch). Coordinator: referee PASS (130 s; every
+  derived read tuple value-equal to the 369 singular kernels AND U1's
+  cleartext trace); RED-VALIDATED (flipped ChOutput weight → FAIL at the
+  equality assert, reverted); marked #[ignore] per slow-test convention
+  (run explicitly at L0e unit gates + milestones); all existing fences
+  untouched; fast-check --all-fast PASS. Patch + coordinator report:
+  scratchpad l0e-u2/. Owed from U2 (rides U3): kernel wall-time/comms
+  measurement, written RNG-discipline argument.
+- Coordinator judgement: with the tree gated green end-to-end and both
+  units matching their pre-registered predictions, L0e proceeds to U3
+  (driver FIFO cache — the byte-KAT-refereed unit where the ~130 s sha
+  pk-gen win materializes).
+
+### Session 18 (cont. 5) — L0e U3 LANDED: sha pk-gen 145.4 → 6.95 s, bytes identical; bench v2.2 launched
+
+- **U3 (driver FIFO cache) LANDED (uncommitted, coordinator re-gated)**:
+  bb_sha256_compression REP3 pk-gen **145.4 → 6.95 s (20.4×)** with
+  proof+VK md5 IDENTICAL before/after (all parties, 2 sharing seeds) and
+  byte-equal to plain + live bb v5.0.1; **sha256_2e16 pk-gen 2,039.6 →
+  123.9 s** (design band 140±30) — the bench's timeout-pruned sha cells
+  are now feasible. Registered predictions beaten. Fallback red-tested;
+  U2 debts (kernel timing ~84–88 ms/compression, comms ≈ design shape;
+  RNG-discipline argument) delivered. NO fence re-pin needed — and the
+  agent predicted why in writing: the in-process sha KAT proves on a
+  PUBLIC witness, which ALSO closes the floor-table's last
+  in-process-vs-TCP anomaly (public-vs-shared witness, not
+  measurement). Coordinator re-ran fast-check --all-fast: PASS.
+  Patch + evidence: scratchpad l0e-u3/. ch. 24 L0e entry updated.
+- **Bench v2.2 full run LAUNCHED** on the optimised tree (L8 + L0e U1–U3
+  + all committed levers) with the new granularity instrumentation
+  (round counter, tiers.csv, phase-timings, Shamir poseidon cells).
+  Expectations registered in ch. 24/bench README terms: sha REP3 cells
+  no longer prune at 2^16 (~124 s pk-gen); poseidon pk-gen ~2.4× faster
+  (L8); prove-proper unchanged vs v2.1; new artifacts present and sane.
+- **Bench v2.2 launch correction**: the first launch NEARLY CLOBBERED the
+  committed v2.1 dir (launcher defaults to bench-results/<date>/ — same
+  day). Killed in the build phase, the two touched files restored from
+  HEAD (verified clean), launcher gained a same-day rerun guard (suffix
+  -HHMM when results.csv already exists), relaunched →
+  `bench-results/2026-07-26-1520/`. Host load1m ~18 at launch (calmer
+  than v2.1's 45.8). sha cells no longer expected to prune.
+
+### Session 18 (cont. 6) — bench v2.2 RAN CLEAN; L8 + L0e scored on the full matrix
+
+`bench-results/2026-07-26-1520/`, 15:20–17:49 UTC, rc=0, 418 rows,
+verify_bb 12/12, load ~18 (cleanest window yet). Full findings in
+bench-results/README.md. Headlines: **sha compression REP3 pk-gen
+136.19 → 9.03 s cross-process (design band 9.5±2 ✓); sha 2^16–2^18
+cells now measurable (126/265/541 s — the sweep was timeout-pruned
+before); poseidon pk-gen 2.4–2.7× (L8 ✓); prove-proper canary held;
+first Shamir cells in the dataset; tiers.csv/phase-timings/rounds all
+produced on a full run.** Whole-step sha ZK ratio vs bb: ~473× → ~47×.
+Known gap: phase-split parser skips SHAMIR logs (queued). Next:
+explorer re-bake (same URL) with v2.2 anchors, then the L2 lever (the
+last sha pk-gen term).
+
+### Session 18 (cont. 7) — explorer V10 published (same URL); L2-1a in flight
+
+- **Explorer re-baked + republished (same URL)** with the v2.2 anchors:
+  agent-baked (programmatic field-by-field anchor diff = exact match;
+  all historical dated blocks byte-identical), coordinator-reviewed.
+  Two coordinator fixes before publish: (i) banner §5 re-framed — the
+  new blocking-rounds counter measures loopback PIPELINING, not
+  dependency depth; it does NOT reopen the msgs≈round-depth result
+  (which was validated byte-for-byte against fence pins) — tiers.csv
+  reports both quantities as a bracket; (ii) added the directly-verified
+  L8 collapse fact (poseidon 2^17 pk-gen = exactly 3 msgs per party per
+  direction in the v2.2 netstats, was 11,127). New banner records
+  L8+L0e scored, sha sweep unlocked, whole-step poseidon 2^20 zk ratio
+  re-derived 10.4× → 9.8× (prove-proper ~8.8× flat), first Shamir
+  cells (Shamir÷REP3 ≈ 2.55–2.7× on poseidon prove). Source:
+  session-18 scratchpad site/explorer-v5.html.
+- **IN FLIGHT: L2 unit 1a agent** (batch construct_lookup_read_counts —
+  the dominant remaining sha pk-gen term; L0a plumbing-cost lesson +
+  registered fence predictions in the brief).
+
+### Session 18 (cont. 8) — L2-1a landed (WAN-structural win; wall-flat at loopback, honestly scored); milestone full sweep launched
+
+- **L2-1a LANDED (uncommitted, coordinator re-verified: fences + all-fast
+  green)**: batched read-counts path (details + honest prediction miss
+  recorded in ch. 24 §4 L2 — the in-process wall win moved to 1b;
+  1a delivers −25% sha msgs, −90 MB GC bytes, ~5,800 serial rounds =
+  the WAN term). Msg predictions 12/12 exact; proof/VK md5 identical;
+  §4a recorded. Patch: scratchpad l2-1a/.
+- Session-18 uncommitted pile is now 8 verified units (L8, L0e U1–U3,
+  bench-granularity+tier-bracket+launcher-guard, bench v2.2 data,
+  L2-1a, docs+explorer V10). MILESTONE: fast-check --full launched as
+  the whole-pile gate ahead of Mike's review/commit word.
+- Phase-split parser SHAMIR gap FIXED (both protocols matched; summary
+  grouped by protocol; v2.2 phase-split.csv regenerated, 228 rows).
+  First Shamir prove-proper figures recorded in the bench README.
