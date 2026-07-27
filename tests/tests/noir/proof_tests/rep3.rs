@@ -516,7 +516,7 @@ fn l8_batched_mul_vec_share_identity() {
     use mpc_core::protocols::rep3::id::PartyID;
     use mpc_core::protocols::rep3::rngs::{Rep3CorrelatedRng, Rep3Rand, Rep3RandBitComp};
     use mpc_core::protocols::rep3::{
-        Rep3State, arithmetic, combine_field_elements, share_field_elements,
+        arithmetic, combine_field_elements, share_field_elements, Rep3State,
     };
 
     // Chunk shape mimicking per-constraint product counts, including a
@@ -904,15 +904,21 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // [(155,203),(185,161),(191,167)] -> [(155,200),(185,158),(185,167)]: merged GC
     // input rounds in the Yao decompose blueprints (mpc-core L0c): -2 sends at ID2,
     // -1 recv at ID0/ID1 per GC invocation (3 invocations in this pk-gen).
-    // [(155,200),(185,158),(185,167)] -> current: L2-1a batched
+    // [(155,200),(185,158),(185,167)] -> [(151,160),(157,154),(157,151)]: L2-1a batched
     // construct_lookup_read_counts. The 12 per-gate Yao a2y2b index
     // bit-decompositions (per-party msgs ID0 (1,4), ID1 (3,1), ID2 (3,2) each) and 12
     // per-gate bit-injection rounds are replaced by ONE Direct a2b_many (19 reshare
     // rounds, all parties symmetric) + ONE bit injection; the per-gate OHV recursion
-    // (116 rounds) and tag write_luts (10) are unchanged (L2-1b's target). Per party:
-    // read-counts msgs (150,186)/(174,150)/(174,162) -> (146,146) each. Values
-    // predicted exactly in advance from the round formula (session-18 l2-1a evidence).
-    const PKGEN_MSGS: [(usize, usize); 3] = [(151, 160), (157, 154), (157, 151)];
+    // (116 rounds) and tag write_luts (10) were unchanged (L2-1b's target). Per party
+    // read-counts msgs after 1a = a2b_many(19)+inject(1)+ohv(116)+tags(10) = (146,146).
+    // [(151,160),(157,154),(157,151)] -> current: L2-1b batches the last two terms.
+    // The per-gate OHV recursion becomes ONE level-synchronous `ohv_many`
+    // (Σ(k-1)=116 -> k_max-1=11 rounds) and the per-gate tag cmux chain becomes ONE
+    // batched field OR-tree (Σ(g-1)=10 -> max⌈log2 g⌉=4 rounds). read-counts msgs
+    // per party = a2b_many(19)+inject(1)+ohv_many(11)+or_tree(4) = (35,35), i.e. -111
+    // symmetric in both directions. Predicted exactly in advance from the round
+    // formula (session-19 l2-1b evidence); a2b_many(19)+inject(1) untouched.
+    const PKGEN_MSGS: [(usize, usize); 3] = [(40, 49), (46, 43), (46, 40)];
     // 199 -> 198: array_prod_inner_mul_many mul_many merge (grand product),
     // NOT a lookup-path change (see the assert message below).
     // 198 -> 204: L0d half-share commit MSMs (see the poseidon fence).
@@ -927,10 +933,22 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // per party per direction of masked BigUint payloads (value-length encoded, hence
     // still banded). ID0's SENT bytes rise slightly: as the GC evaluator it mostly
     // received; the direct adder is ring-symmetric.
+    // Re-pinned for L2-1b (see PKGEN_MSGS): OHV-recursion and OR-tree PAYLOADS are
+    // byte-identical to 1a (same reshared ring bits, same Σ(g-1)·L field muls); only
+    // the per-frame length prefixes shrink as 116->11 ohv frames + 10->4 tag frames
+    // merge, dropping ~1.1 KB per party per direction from the 1a pin
+    // [(2676760,4132506),(3969830,2863728),(2888258,2538614)]. Band widened 8->64:
+    // the blackbox_and AND lowering's Yao GC serialization (variable-length random
+    // wire labels) was measured to drift up to ~13 B/run here (4 runs); ±64 still sits
+    // ~20,000x below a real share-limb leak (~32 B x 40,992 elems ≈ 1.3 MB). Prove is
+    // pure field flows: exact.
     const PKGEN_BYTES: [(usize, usize); 3] =
-        [(2676760, 4132506), (3969830, 2863728), (2888258, 2538614)];
-    const PROVE_BYTES: [(usize, usize); 3] =
-        [(21040064, 21040064), (21040096, 21040064), (21040064, 21040096)];
+        [(2675639, 4131384), (3968714, 2862608), (2887134, 2537498)];
+    const PROVE_BYTES: [(usize, usize); 3] = [
+        (21040064, 21040064),
+        (21040096, 21040064),
+        (21040064, 21040096),
+    ];
 
     let m = rep3_prove_comms_fence::<Poseidon2Sponge>("blackbox_and", ZeroKnowledge::No, 0xFE_ACE);
 
@@ -953,7 +971,7 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     assert_byte_totals_within(
         m.pkgen_bytes,
         PKGEN_BYTES,
-        8,
+        64,
         "pk-gen (GC-bearing, banded) byte totals",
     );
     assert_eq!(
@@ -1017,8 +1035,11 @@ fn add3u64_prove_comms_message_fence_poseidon2sponge() {
     // L0d with PROVE_MSGS).
     const PKGEN_BYTES: [(usize, usize); 3] =
         [(1702780, 2578388), (3449228, 2590420), (2508360, 2491560)];
-    const PROVE_BYTES: [(usize, usize); 3] =
-        [(16249680, 16249680), (16249712, 16249680), (16249680, 16249712)];
+    const PROVE_BYTES: [(usize, usize); 3] = [
+        (16249680, 16249680),
+        (16249712, 16249680),
+        (16249680, 16249712),
+    ];
 
     let m = rep3_prove_comms_fence::<Poseidon2Sponge>("add3u64", ZeroKnowledge::No, 0xFE_ACE);
 
@@ -1547,8 +1568,7 @@ fn shared_witness_proof_evidence_poseidon2sponge(name: &str, reps: [(u32, u64); 
         let mut threads = Vec::with_capacity(3);
         for (net0, net1, witness) in izip!(nets0, nets1, witnesses) {
             let prover_crs = prover_crs.clone();
-            let constraint_system =
-                co_noir::get_constraint_system_from_artifact(&program_artifact);
+            let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
             threads.push(std::thread::spawn(move || {
                 let before0 = net0.get_connection_stats();
                 let before1 = net1.get_connection_stats();
@@ -1612,7 +1632,10 @@ fn shared_witness_proof_evidence_poseidon2sponge(name: &str, reps: [(u32, u64); 
         let vk_u8 = results[0].2.inner_vk.to_buffer();
         for (party, r) in results.iter().enumerate() {
             let party_proof = Poseidon2Sponge::to_buffer(r.0.inner_as_ref());
-            assert_eq!(party_proof, proof_u8, "rep {rep} party {party} proof diverged");
+            assert_eq!(
+                party_proof, proof_u8,
+                "rep {rep} party {party} proof diverged"
+            );
             let party_vk = r.2.inner_vk.to_buffer();
             assert_eq!(party_vk, vk_u8, "rep {rep} party {party} VK diverged");
             if let Some(dir) = &evidence_dir {
@@ -1621,8 +1644,11 @@ fn shared_witness_proof_evidence_poseidon2sponge(name: &str, reps: [(u32, u64); 
                     &party_proof,
                 )
                 .unwrap();
-                std::fs::write(dir.join(format!("{name}_vk_rep{rep}_party{party}")), &party_vk)
-                    .unwrap();
+                std::fs::write(
+                    dir.join(format!("{name}_vk_rep{rep}_party{party}")),
+                    &party_vk,
+                )
+                .unwrap();
             }
         }
         assert_eq!(
