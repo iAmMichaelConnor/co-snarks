@@ -2530,6 +2530,57 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
             .collect::<Vec<Self::AcvmType>>())
     }
 
+    fn use_level_batched_witext(&self) -> bool {
+        true
+    }
+
+    fn solve_mul_terms(
+        &mut self,
+        terms: Vec<(F, Self::AcvmType, Self::AcvmType)>,
+    ) -> eyre::Result<Vec<Self::AcvmType>> {
+        // Split the shared×shared products (which each cost one reshare on the
+        // serial path) from the mixed public/shared products (which are local).
+        // The shared×shared products are proven mutually independent by the
+        // level scheduler, so they can all reshare in a single batched round.
+        let mut results: Vec<Option<Self::AcvmType>> = vec![None; terms.len()];
+        let mut ss_indices = Vec::new();
+        let mut ss_coeffs = Vec::new();
+        let mut ss_lhs = Vec::new();
+        let mut ss_rhs = Vec::new();
+        for (i, (c, lhs, rhs)) in terms.into_iter().enumerate() {
+            match (lhs, rhs) {
+                (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
+                    ss_indices.push(i);
+                    ss_coeffs.push(c);
+                    ss_lhs.push(lhs);
+                    ss_rhs.push(rhs);
+                }
+                (lhs, rhs) => {
+                    // Public×shared / public×public: local, no network round.
+                    results[i] = Some(self.solve_mul_term(c, lhs, rhs)?);
+                }
+            }
+        }
+
+        if !ss_lhs.is_empty() {
+            // One batched reshare for the whole level's shared×shared products.
+            // `local_mul_vec` squeezes all correlated masks up front (the
+            // pre-squeezed vector path); the resulting shares are therefore not
+            // bit-identical to the serial `mul`'s (which draws one mask per
+            // product), but every reconstructed product value is identical.
+            let local = arithmetic::local_mul_vec(&ss_lhs, &ss_rhs, &mut self.state0);
+            let products = arithmetic::reshare_vec(local, self.net0)?;
+            for ((i, c), prod) in ss_indices.into_iter().zip(ss_coeffs).zip(products) {
+                results[i] = Some(Rep3AcvmType::Shared(arithmetic::mul_public(prod, c)));
+            }
+        }
+
+        Ok(results
+            .into_iter()
+            .map(|r| r.expect("every product slot is filled"))
+            .collect())
+    }
+
     fn get_as_shared(&mut self, value: &Self::AcvmType) -> Self::ArithmeticShare {
         if Self::is_shared(value) {
             Self::get_shared(value).expect("Already checked it is shared")

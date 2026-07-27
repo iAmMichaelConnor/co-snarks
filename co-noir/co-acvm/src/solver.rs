@@ -1,7 +1,7 @@
 use acir::{
     acir_field::GenericFieldElement,
     circuit::{Circuit, Opcode},
-    native_types::{Witness, WitnessMap, WitnessStack},
+    native_types::{Expression, Witness, WitnessMap, WitnessStack},
 };
 use ark_ff::PrimeField;
 use co_brillig::CoBrilligVM;
@@ -428,8 +428,17 @@ where
 
         self.maybe_print_witext_diagnostics(&functions[self.function_index]);
 
-        for opcode in functions[self.function_index].opcodes.iter() {
-            self.solve_single_opcode(opcode)?;
+        if self.driver.use_level_batched_witext() {
+            // Two-pass level-scheduled solve: group the opcode DAG into
+            // independence levels and batch each level's shared×shared products
+            // into a single network round (collapses the witext round count on
+            // latency-bound networks). Falls back to the serial per-opcode path
+            // for drivers that do not opt in.
+            self.solve_levels(&functions[self.function_index])?;
+        } else {
+            for opcode in functions[self.function_index].opcodes.iter() {
+                self.solve_single_opcode(opcode)?;
+            }
         }
         tracing::trace!("we are done! Opening results...");
         let output = self.open_results(&functions[self.function_index])?;
@@ -462,6 +471,98 @@ where
         for &idx in order {
             self.solve_single_opcode(&opcodes[idx])?;
         }
+        let output = self.open_results(&functions[self.function_index])?;
+        self.value_store.set_output(output);
+
+        let mut witness_stack = WitnessStack::default();
+        for (idx, witness) in self.witness_map.into_iter().rev().enumerate() {
+            witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
+        }
+        Ok(witness_stack)
+    }
+
+    /// Set of witness indices already populated before the solve begins: the
+    /// private + public ABI parameters, which live at level 0 of the schedule.
+    fn initial_witnesses(
+        function: &Circuit<GenericFieldElement<F>>,
+    ) -> std::collections::HashSet<u32> {
+        let mut initial: std::collections::HashSet<u32> =
+            function.private_parameters.iter().map(|w| w.0).collect();
+        initial.extend(function.public_parameters.0.iter().map(|w| w.0));
+        initial
+    }
+
+    /// Pass-1 + Pass-2 of the level-scheduled solve: compute the comms-free
+    /// dependency levels of the opcode stream, then solve level by level,
+    /// batching each level's independent shared×shared products into one
+    /// network round via [`NoirWitnessExtensionProtocol::solve_mul_terms`].
+    fn solve_levels(&mut self, function: &Circuit<GenericFieldElement<F>>) -> CoAcvmResult<()> {
+        let opcodes = &function.opcodes;
+        let initial = Self::initial_witnesses(function);
+        let schedule = level_schedule::schedule_levels(opcodes, &initial);
+        for level in &schedule.levels {
+            self.solve_level(opcodes, level)?;
+        }
+        Ok(())
+    }
+
+    /// Solve one independence level. Non-`AssertZero` opcodes are solved via the
+    /// serial per-opcode path (they carry their own communication and the level
+    /// guarantees they are mutually independent, so order within the level does
+    /// not matter). All `AssertZero` opcodes are pre-simplified with their
+    /// shared×shared products deferred, then a single batched round resolves
+    /// every deferred product at once before each opcode is finished.
+    fn solve_level(
+        &mut self,
+        opcodes: &[Opcode<GenericFieldElement<F>>],
+        level: &[usize],
+    ) -> CoAcvmResult<()> {
+        // Pre-simplify the AssertZero opcodes, collecting deferred products;
+        // solve every other opcode kind on the serial path.
+        let mut accs: Vec<Expression<T::AcvmType>> = Vec::new();
+        let mut counts: Vec<usize> = Vec::new();
+        let mut pending: Vec<(F, T::AcvmType, T::AcvmType)> = Vec::new();
+        for &idx in level {
+            match &opcodes[idx] {
+                Opcode::AssertZero(expr) => {
+                    let (acc, deferred) = self.presimplify_expression(expr, &mut pending)?;
+                    accs.push(acc);
+                    counts.push(deferred);
+                }
+                other => self.solve_single_opcode(other)?,
+            }
+        }
+
+        if accs.is_empty() {
+            return Ok(());
+        }
+
+        // One batched round for every independent shared×shared product.
+        let products = self.driver.solve_mul_terms(pending)?;
+
+        // Scatter the batched products back into each opcode's accumulator, then
+        // finish each opcode (solve its single remaining unknown, if any).
+        let mut off = 0usize;
+        for (mut acc, count) in accs.into_iter().zip(counts) {
+            for _ in 0..count {
+                let prod = products[off].clone();
+                off += 1;
+                self.driver.add_assign(&mut acc.q_c, prod);
+            }
+            self.finish_assert_zero(acc)?;
+        }
+        debug_assert_eq!(off, products.len());
+        Ok(())
+    }
+
+    /// Solve the current function using the level-scheduled batched path
+    /// unconditionally (i.e. regardless of the driver's
+    /// [`NoirWitnessExtensionProtocol::use_level_batched_witext`] flag). Used by
+    /// the plain-driver equivalence referee to check the batched grouping yields
+    /// a witness bit-identical to the serial solve.
+    pub fn solve_via_levels(mut self) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
+        let functions = std::mem::take(&mut self.functions);
+        self.solve_levels(&functions[self.function_index])?;
         let output = self.open_results(&functions[self.function_index])?;
         self.value_store.set_output(output);
 

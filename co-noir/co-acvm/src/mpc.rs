@@ -139,6 +139,35 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         rhs: Self::AcvmType,
     ) -> eyre::Result<Self::AcvmType>;
 
+    /// Whether this driver benefits from level-batched witness extension: the
+    /// solver groups the opcode DAG into independence levels and issues one
+    /// batched network round per level instead of one per opcode. The default
+    /// is `false` (the serial, opcode-at-a-time solve loop), which the plain and
+    /// Shamir drivers keep. REP3 overrides this to `true`.
+    fn use_level_batched_witext(&self) -> bool {
+        false
+    }
+
+    /// Batch-solve a set of `c·lhs·rhs` products that the solver has proven are
+    /// mutually independent (no product's operands depend on another's result),
+    /// returning `c·lhs·rhs` for each term in input order.
+    ///
+    /// The default loops [`Self::solve_mul_term`] — the per-opcode path the plain
+    /// and Shamir drivers keep. REP3 overrides this to collect every
+    /// shared×shared product into a single reshare, collapsing one network round
+    /// per solve level. The returned values are identical to the serial loop's;
+    /// only the number of network rounds (and, for REP3, the per-element masking
+    /// draw order) changes.
+    fn solve_mul_terms(
+        &mut self,
+        terms: Vec<(F, Self::AcvmType, Self::AcvmType)>,
+    ) -> eyre::Result<Vec<Self::AcvmType>> {
+        terms
+            .into_iter()
+            .map(|(c, lhs, rhs)| self.solve_mul_term(c, lhs, rhs))
+            .collect()
+    }
+
     /// Solves the equation \[q_l\] * w_l + \[c\] = 0, by computing \[-c\]/\[q_l\] and returning the result.
     fn solve_equation(
         &mut self,

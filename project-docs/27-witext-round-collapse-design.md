@@ -612,3 +612,44 @@ chains get nothing. DO NOT assume real Aztec circuits are independence-rich.
 diagnostics) on a REAL Aztec kernel/membership circuit and read the measured DAG
 width vs depth** — that turns the assumption into a number. Added as the gating
 measurement for the U2 go/no-go.
+
+---
+
+## 10. U2 RESULTS (implemented 2026-07-27, session 20, coordinator-verified — uncommitted)
+
+U2 (REP3 per-level `mul_many` batching, Design A Pass-2) is in-tree.
+- Files: `co-acvm/src/mpc.rs` (trait `use_level_batched_witext()` default-false +
+  `solve_mul_terms()` default=serial), `co-acvm/src/mpc/rep3.rs` (REP3 overrides:
+  shared×shared products batched via `local_mul_vec`+`reshare_vec`, one reshare;
+  mixed stay local), `solver.rs` + `assert_zero_solver.rs` (`solve_levels`/
+  `solve_level`, deferred mul-term eval), new `co-acvm/tests/witext_batch_referee.rs`,
+  `tests/…/proof_tests/witext_fence.rs`, nargo vector `poseidon_indep8/`.
+  Memory/brillig/unhandled opcodes → per-opcode serial within their level (U1 barrier).
+- **Measured (every prediction hit):** base poseidon 3-party product-reshares
+  363→195, frames 366→198, **f = 1.862** (chain). Independent-hash
+  `poseidon_indep8` (K=8 disjoint hashes): serial 2904 → batched **195**, depth
+  unchanged 259, **f = 14.892 = 8×1.862** — the cross-proof K× collapse on a REAL
+  compiled vector. 2e17/2e20 f=1.862 constant (analysis).
+- **Loopback did NOT regress** (U1's 🔴 caveat did not materialize): batched
+  blocked-recv rounds ~95 vs serial ~150 — one larger `reshare_many`/level beats
+  363 tiny back-to-back reshares. WAN not bench-run (multi-hour budget); tier-model
+  projection ≈1.86× chain / ~K× independent, anchored to the measured base frames.
+- **Cross-level pipelining NOT done** — infeasible without a large async rewrite
+  (adjacent levels are data-dependent, reshare is synchronous). Within-level
+  batching only, as scoped. Not a regression; the WAN win stands.
+- **Mask-order = Case 2**: shares change bit-for-bit (local_mul_vec length-chunked
+  sampling ≠ serial per-element draw; level-major ≠ stream order); proof/VK bytes
+  UNCHANGED (T3). New witext round/byte fence pinned to batched counts;
+  proof/VK KATs did not move.
+- **Gates green:** fast-check --all-fast (live bb VK+proof byte-identical), U1
+  referee 6/6, U2 referee 4/4, T3 + T4 clean, 4 pk-gen/prove canary fences
+  UNCHANGED, 30/30 witness_extension rep3 tests, cargo check/clippy/fmt clean.
+- **Verdict:** the witext lever is COMPLETE for the poseidon family (U1+U2; U3
+  division-batching is a no-op — zero divisions). The chain win is modest (1.86×,
+  WAN-tier); the real payoff is the demonstrated ~K× on independent proofs. The
+  open go/no-go input remains: measure the DAG independence of REAL Aztec circuits.
+
+### Session 20 (cont.) PROGRESS — witext U2 landed
+See ch. 27 §10 for U2 results. Uncommitted; ready for a commit alongside a future
+witext-lever commit. Next: measure real-Aztec-circuit DAG independence (the
+go/no-go for how much U1+U2 help production workloads).

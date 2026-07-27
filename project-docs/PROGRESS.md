@@ -3201,3 +3201,44 @@ regenerable); .aztec/versions 14G; .vscode-server 13G; .npm/_cacache 7.5G +
 one-off repo checkouts: ap-tx-shape-reporter 16G, ap-new-specs 13G,
 ap-addresses-and-keys 9.9G (investigation clones — Mike to judge). Full ranked
 list captured this session.
+
+### Session 20 (cont.) — committed (6 commits) + disk cleanup
+
+- **Session-20 work COMMITTED on mc/update-co-noir (local only, NO push), 6
+  commits:** `0b8ed37d` co-acvm robustness (F5+F7) · `2afc7e3b` verifier
+  hardening (F1 + F2/F3/F4) · `6941f132` L2-1b · `87584eee` witext U1 ·
+  `ac5abaf0` PLAN 4.4 · `d687252a` docs (incl. bench recursion-open caveat,
+  folded in). File-whole 6-way split (not 8) because this env has no interactive
+  `git add -p`; F5+F7 share rep3.rs, F1+DoS share security_regression.rs.
+  `rust-toolchain.toml` (pre-existing rust-analyzer add) left uncommitted.
+- **Disk cleanup (~106 GB reclaimed; Mike's ask):** removed
+  bisect-nextfix-real-e2e (26G — worktrees were detached-HEAD checkouts of
+  commits still in aztec-packages-private; harness+result preserved at
+  `~/bisect-nextfix-keepsake.tgz`, git worktree registry pruned); 9 stale aztec
+  nightlies (kept 5.0.1 = the active `current` pin); npm _cacache 7.5G; .cache
+  5.2G; .yarn/berry/cache 5.8G; .foundry/anvil/tmp 5.5G; ALL cargo target/ dirs
+  (~44G across co-snarks + monty-hall/mpc + the ap-* / noir-repo / barretenberg
+  rust builds — regenerable). **Noir circuit targets preserved** (discriminated
+  by debug/|release/ subdir; 88 .json/.gz artifacts intact). Next fast-check
+  will cold-rebuild co-snarks/target.
+
+### Session 20 (cont.) — witext U2 LANDED (Design A Pass-2); lever complete for poseidon
+
+- **Witext U2 LANDED (uncommitted, coordinator-verified; full results ch. 27 §10).**
+  REP3 per-level `mul_many` batching. Base poseidon product-reshares 363→195
+  (f=1.862); **independent-hash `poseidon_indep8` (K=8): 2904→195 msgs, f=14.89
+  = 8×1.862 on a REAL compiled vector** — the cross-proof K× collapse demonstrated,
+  not projected. Loopback did NOT regress (~150→~95 blocked rounds; one big
+  reshare beats 363 tiny ones). Cross-level pipelining not done (adjacent levels
+  data-dependent — infeasible without async rewrite); within-level batching only,
+  as scoped. Mask-order Case 2 (shares change bit-for-bit, proof/VK unchanged,
+  T3-backed); new witext fence pinned. Gates: fast-check --all-fast PASS (live bb
+  byte-identical), U1 6/6 + U2 4/4 referees, T3/T4 clean, canary fences unchanged,
+  30/30 witext rep3 tests. WAN not bench-run (multi-hour budget) — tier-model
+  projection ~1.86× chain / ~K× independent.
+- **Witext lever COMPLETE for poseidon** (U1 committed + U2 uncommitted; U3 =
+  no-op, zero divisions). U2 ready for a commit on Mike's word.
+- **OPEN (awaiting Mike):** (a) measure real-Aztec-circuit DAG independence — the
+  go/no-go for U1+U2's production value (the DAG measurement is PURE STRUCTURE,
+  needs only a compiled circuit .json, no valid inputs); (b) commit U2;
+  (c) the Phase 5 pivot decision (5.0 PXE secret sharer vs 5.1d TS orchestration).
