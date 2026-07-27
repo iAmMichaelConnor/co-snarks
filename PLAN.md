@@ -322,8 +322,17 @@ local co-snarks tree (4.3, ch. 15 §4 items) may proceed.**
       transfer directly. Soundness lens (guides where to spend review effort):
       the prover carries completeness and privacy, while soundness lives in
       the verifier and the circuit builder — so negative tests belong there.
-- [ ] 4.4 **Standing test: co-snark-generated UH proofs must verify in the bb
-      UH verifier** (added 2026-07-26, session 19, Mike's ask). The proof
+- [x] 4.4 **Standing test: co-snark-generated UH proofs must verify in the bb
+      UH verifier** (added 2026-07-26, session 19, Mike's ask). **DONE
+      2026-07-27 session 20 (uncommitted):** harness
+      `co-noir/co-noir/examples/bb_verify_standing.sh` — FAST tier (default,
+      ~2.5 s: poseidon REP3 non-ZK+ZK → bb verify × {our VK, bb VK} + tamper
+      + public-input negatives vs both bb and co-noir verify) wired into
+      `fast-check.sh --bb-mpc`; FULL tier (`--full`, ~90 s) adds recursion,
+      recursion_zk, Shamir (REP3-split→translate-witness). NOT folded into
+      --all-fast (only tier that builds the co-noir binary, ~70 s cold);
+      --all-fast prints a reminder. Red-validated. Surfaced the pre-existing
+      plain-recursion REP3 panic (PROGRESS s20; a tracked follow-up). The proof
       produced by the MPC prover in `~/co-snarks` (REP3/Shamir `co-noir
       build-and-generate-proof`) is fed to the *bb* `verify` binary and must
       pass. This is the strongest parity check we have and — for ZK and

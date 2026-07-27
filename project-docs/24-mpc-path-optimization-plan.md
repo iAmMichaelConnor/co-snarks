@@ -617,6 +617,30 @@ text correction rides the next docs pass.]**
   term), with 1d binary-domain tags considered simultaneously; also
   chunk the inject frame (single ~3.7 GB at 2^16 scale). Patch +
   registered predictions + evidence: session-18 scratchpad l2-1a/.]**
+  **[1b LANDED 2026-07-27 session 20 (uncommitted; two agents — first died
+  from a connection error mid-validation, second finished in place +
+  coordinator re-gated). `ohv_many` (mpc-core rep3_ring/gadgets/ohv.rs;
+  level-synchronous batched reshare, values identical to serial ohv) + field
+  OR-tree read-tags `tag = 1 − Π(1−ohv)` in construct_lookup_read_counts
+  (co-builder plain_proving_key.rs; equal to the old serial OR by
+  commutativity/associativity/idempotence on {0,1}) + inject-frame chunking
+  (2^24). AES 1c path preserved verbatim. Predictions 6/6 hit: blackbox_and
+  pk-gen fence re-pinned [(151,160),(157,154),(157,151)] → [(40,49),(46,43),
+  (46,40)] (read-counts 146→35 rounds/party, −111 symmetric); proof+VK
+  byte-identical (2 seeds × 3 parties, single md5/group, = plain prover);
+  poseidon/add3u64 canaries UNCHANGED; L0e sha referee PASS (134.7 s, bounded
+  timeout, no hang); aes128 PASS; fast-check --all-fast PASS incl. live bb
+  cross-verify (coordinator re-ran on the fully reconciled tree: PASS).
+  HONEST FINDING (same shape as 1a): NO in-process wall win —
+  bb_sha256_compression pk-gen stays ~10.3–11.0 s (the OR-tree does the same
+  (g−1)·L field muls as the old serial write_lut; inject untouched; phase is
+  field-payload-bound ~500–540 MB/party). The payoff is WAN: ~28,291
+  RTT-dominated OHV rounds removed per compression → first-cut ~707 s @ 25 ms
+  / ~1,130 s @ 40 ms RTT (bench-model caveat applies; the −111/party is exactly
+  measured on blackbox_and). 1d (binary-domain tags) evaluated on paper →
+  DEFERRED: byte-only lever, same round count, strictly riskier, no WAN payoff
+  beyond the field OR-tree. Patch + §4a=PASS: session-20 scratchpad
+  l2-1b/l2-1b-final.patch.]**
 - **L2b — batch-inverse the post-open scalar loops (C2 class, MPC side;
   code-verified 2026-07-25).** `inv_many_in_place{,_leaking_zeros}`
   (co-noir-common/src/mpc/rep3.rs:212–253, shamir.rs same pattern) and

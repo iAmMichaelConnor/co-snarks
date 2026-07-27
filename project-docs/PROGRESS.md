@@ -2850,3 +2850,354 @@ README with the full predicted-vs-measured table + provenance).
   arm. Latency arm is faithful.
 - Bench v3 committed with this entry (bench data + README, per v2.1/v2.2
   convention; commit authorized under the steps-1–3 permission).
+
+## Session 20 — 2026-07-27 — F1 fix + PLAN 4.4 test + witext design + L2-1b (Mike: "do 1,2,3,4,5")
+
+Mike's word: execute the session-19 queue items 1–5 (F1 fix, PLAN 4.4 standing
+test, witext lever, sha pk-gen round-collapse continuation = L2-1b, F5
+hardening). No commit word given — ALL session-20 work stays UNCOMMITTED.
+
+- **F5 hardening LANDED (uncommitted)**: stale-cache purge in
+  `co-acvm/src/mpc/rep3.rs precompute_sha256_block` moved ABOVE the
+  all-shared early return (ch. 26 F5, both reviewers' one-liner).
+  fast-check --all-fast PASS incl. live bb v5.0.1 cross-verify.
+- **Agents launched in parallel on the green post-F5 tree** (main tree,
+  file-disjoint by brief; no worktrees — base trap):
+  1. F1 fix — native verifier pairing-point accumulator aggregation
+     (decider_verifier.rs) mirroring bb ultra_verifier.cpp:223-240, +
+     red-validated malicious-accumulator regression (real recursion
+     circuit over a tampered inner proof; bb oracle as fixture referee).
+  2. PLAN 4.4 standing test — first-class MPC-proof→bb-verify coverage
+     (REP3 ZK fast case; recursion/recursion_zk/Shamir as explicit slow
+     cases; tampered-proof→bb-reject negative), wired into fast-check.
+  3. Witext lever DESIGN PASS (read-only) — root-cause the 11,276 @2^17 /
+     92,224 @2^20 witext rounds (bench v3 headline), batching design +
+     registered predictions + unit boundaries → scratchpad
+     WITEXT-DESIGN.md before any code.
+  4. L2-1b — ohv_many (Σ(k−1)=28,304→13 rounds) + OR-tree tags (the
+     ~240 MB write_lut term) + inject-frame chunking, per ch. 24 §4 L2;
+     registered predictions, conscious fence re-pins, md5 referees.
+
+### Session 20 (cont.) — F1 + PLAN 4.4 landed & coordinator-verified; witext/L2-1b relaunched on Opus
+
+Mike switched the session model Fable 5 → Opus 4.8 mid-run (two agents had
+died at the Fable usage limit). All work remains UNCOMMITTED.
+
+- **F1 FIX LANDED (uncommitted, coordinator-verified)** — native verifier now
+  aggregates the public-input pairing-point accumulator before the pairing
+  check, mirroring bb `ultra_verifier.cpp`. Touched (verifier-only; prover /
+  proof bytes / VK untouched): `decider_verifier.rs` (new
+  reconstruct_pairing_point / reconstruct_accumulator / aggregate_pairing_points;
+  verify() reconstructs the accumulator from the last PAIRING_POINT_ACCUMULATOR_SIZE
+  public inputs, aggregates PCS points with a random separator, pairing-checks
+  the AGGREGATE), `oink_verifier.rs` + `ultra_verifier.rs` (thread parsed
+  public inputs through). `UltraHonk::verify` is the single native entry point
+  (generic over hasher → poseidon2+keccak, ZK+non-ZK, CLI all covered);
+  co-ultrahonk has no separate verifier. Semantics: both-infinity accumulator
+  → adopt PCS (non-recursive, unchanged — why all KATs stay byte-identical);
+  mixed-infinity or PCS-at-infinity → reject; else random-linear-combination.
+  - **RED-VALIDATED** (real proving over the `recursion` circuit; malicious =
+    honest outer proof over a TAMPERED inner proof): bb oracle discriminates on
+    the committed fixture (accepts honest, rejects malicious "failed at pairing
+    check"); pre-fix co-noir FALSE-ACCEPTS (EXIT=0, cargo + CLI); post-fix
+    REJECTS malicious, still ACCEPTS honest.
+  - Regression test always-on ~0.03 s in `--sec`:
+    `security_regression::f1_pairing_point_accumulator::{honest_recursive_accumulator_accepts,
+    malicious_recursive_accumulator_rejected}`. Committed fixtures in NEW dir
+    `test_vectors/noir/recursion_malicious_accumulator/` (+README with exact
+    regen + bb-referee commands); no existing fixtures touched.
+  - **DESIGN NOTE for Mike**: the native verify() now draws a random separator
+    (rand::thread_rng), so it is bb-faithful but non-deterministic in its RNG.
+    A deterministic transcript-derived separator is an option if we ever want
+    reproducible native verification — flagged, not changed.
+  - Gates: cargo check --workspace, fmt+clippy -D (ultrahonk & tests),
+    `./fast-check.sh --sec` (13/13 incl. the two F1 tests) and `--all-fast`
+    (non-recursive KATs byte-identical to bb; recursion VK KATs green) all PASS
+    on the COMBINED tree (F5 + F1 + PLAN 4.4 together).
+- **PLAN 4.4 STANDING TEST LANDED (uncommitted, coordinator-verified)** — new
+  harness `co-noir/co-noir/examples/bb_verify_standing.sh` (MPC-generated proofs
+  → real bb verify). FAST tier (default, ~2.5 s warm): poseidon REP3 non-ZK+ZK
+  → bb verify with our VK and a bb-written VK, + tamper/byte-flip + public-input
+  negatives against BOTH bb verify and co-noir verify (19 checks). FULL tier
+  (`--full`, ~90 s): adds recursion, recursion_zk, and Shamir (REP3-split →
+  translate-witness). Own mesh ports 12000-12002, absolute TLS paths, every
+  circuit copied to a temp workdir (committed test_vectors never written).
+  Wired into `fast-check.sh` as `--bb-mpc` (Tier 5), installed via
+  write-temp + atomic mv (concurrent-reader safe). **Deliberately NOT folded
+  into --all-fast** (it is the only tier that builds the co-noir binary — ~70 s
+  cold — and could blow the ~90 s budget under multi-agent contention);
+  --all-fast prints a one-line reminder instead (verified rendering above).
+  Red-validated: staged an untampered proof into a reject-check and a tampered
+  proof into a pass-check → harness FAILS loudly both ways; restored.
+  Fixed a real self-bug found mid-validation: a missing-proof-file made
+  negative checks pass for the wrong reason → new require_artifact() guard
+  reports [FAIL]/[SKIP] instead.
+  - **🔴 DISCOVERY (pre-existing, flagged not fixed — same bug-class as F1's
+    motivation): plain `recursion` circuit (HONK_IDENTIFIER=0) REP3 proving
+    PANICS** at `co-acvm/src/mpc/rep3.rs:2774`
+    (`acvm_type_limbs_to_other_acvm_type ... not implemented for Rep3 in the
+    shared case`). recursion_zk (HONK_IDENTIFIER=6) is unaffected and fully
+    passes. Confirmed reproducible + not a stale-fixture artifact (byte-identical
+    ACIR to the repo fixture). Pre-existing: compare_mpc.sh's matrix already
+    excludes plain recursion (only ever tests recursion_zk). FULL-tier result:
+    34 passed / 3 failed, all 3 traceable to this one root cause. → new tracked
+    item (below).
+- **Witext design pass + L2-1b RELAUNCHED on Opus** (both had died at the Fable
+  limit having written nothing to scratchpad — no work lost). File-disjoint;
+  L2-1b briefed to stay out of the F1/PLAN44/F5 files.
+- **NEW TRACKED ITEM: plain-recursion REP3 witext panic** (rep3.rs:2774,
+  acvm_type_limbs_to_other_acvm_type unimplemented for shared Rep3). Decide
+  whether to implement it or document plain-recursion-under-MPC as unsupported
+  (recursion_zk is the used path). Not blocking.
+
+### Session 20 (cont.) — witext design pass DONE (Opus); durable ch. 27
+
+- **Witext round-collapse design pass DONE (read-only; ch. 27 =
+  `27-witext-round-collapse-design.md`, durable copy of the scratchpad doc).**
+  Root cause: the bench "poseidon" family compiles to PURE ARITHMETIC gates
+  (44,521 AssertZero, 0 blackbox/lookup/memory @ 2^17) forming a HARD
+  SEQUENTIAL CHAIN; witext solves them opcode-at-a-time (solver.rs:381) with
+  ONE ring round per shared×shared product (arithmetic.rs:104) and NO batching
+  across independent products (TACEO's own in-code TODO, assert_zero_solver.rs:34).
+  Rounds = chain depth: 127/permutation × K perms = 11,276 @ 2^17 / 92,224 @ 2^20
+  (linear in DEPTH, not size). Reconciles ch.24's old "R≈33k" = the MESSAGE
+  count; true logical depth is 11,276.
+  - **Recommended lever = Design A** (two-pass level-scheduled batching of the
+    ACVM solve loop — L8/L2-1a collect-then-batch moved into witext): build the
+    witness-dependency DAG from PUBLIC circuit structure, solve level-by-level,
+    one mul_many + one inv_vec per level. Design C (batch the poseidon2-BLACKBOX
+    precompute, precompute_rep3(N) once) = cheap orthogonal win for blackbox
+    workloads. Design B (mask-open S-box pattern-match) held behind U1.
+  - **🔑 HONEST HEADLINE FOR MIKE: on a CHAIN the win is only 1.3–1.9×**
+    (irreducible depth floor ~6,530 of 11,276 rounds — a circuit-shape property
+    the lever cannot beat). **BUT on INDEPENDENT-HASH workloads — which is what
+    real Aztec Merkle-membership witnesses are — the same lever is ~K-fold**
+    (collapses K independent hashes to one hash's depth; WAN ~451 s → ~6–8 s).
+    The doc proposes adding a `poseidon_2e17_indep` bench to prove this; that is
+    the case that matters for real use.
+  - **First unit = U1**: DAG level-scheduler as a PURE comms-free analysis pass
+    + plain-driver equivalence referee (bit-identical witness vs serial solve) +
+    per-level width/depth histogram. Sizes the A/B ceiling before any REP3 code.
+    Effort S–M, risk L. Then U2 (per-level mul_many), U3 (per-level inv_vec).
+  - Parity: witness values identical; proof/VK bytes byte-identical (KAT is the
+    referee); the one care point = RNG mask-draw ORDER changes → shares differ
+    bit-for-bit (proof invariant via T3) → witext share-fences re-pin. Full §4a
+    checklist answered in ch. 27 §6.
+  - Left as a design; NO code written. Implementation is a future lever round
+    (U1 first). README indexed.
+
+### Session 20 (cont.) — witext U1 LANDED (Design A first unit); L2-1b still running
+
+- **Witext U1 LANDED (uncommitted, coordinator-verified; results in ch. 27 §8).**
+  Comms-free level-scheduler + plain-driver equivalence referee. New:
+  `co-acvm/src/solver/level_schedule.rs`, `co-acvm/tests/witext_level_referee.rs`;
+  `solver.rs` extracts shared `solve_single_opcode`/`solve_in_order` +
+  env-gated `CO_NOIR_WITEXT_LEVELS` diagnostics. Measured DAG depth
+  259 / 23,919 / 193,179 (base / 2e17 / 2e20). **Registered f = 1.86 for the
+  chain (network-op units), ≈ K·1.86 for K independent hashes** (K=8 synthetic
+  measured 14.89). Poseidon witext is 100% shared×shared mul, ZERO divisions
+  → U3 division-batching is a no-op for poseidon. §7 uncertainties #1/#3/#4
+  resolved (#4 "rounds are divisions" = FALSE).
+  - **CRITICAL for U2:** the naive f=rounds/depth is <1 because bench `rounds`
+    is a loopback UNDERCOUNT (muls coalesce ~2.9/recv). A level-SYNCHRONOUS
+    barrier Design A would REGRESS loopback (17,940 > 11,276 @ 2e17). U2 must
+    batch-within-level + PIPELINE-across-levels (no global barrier); win is
+    WAN-tier; independent-hash is the unambiguous case. Full U2 spec in ch. 27 §8.
+  - Referee 6/6 + red-validated; co-acvm check/fmt/clippy/lib all green.
+- **⚠ CROSS-AGENT NOTE (must reconcile):** U1's `fast-check --all-fast` showed
+  ONE failure — `blackbox_and_prove_comms_message_fence_poseidon2sponge` pk-gen
+  151→40 — on a path U1 never touches. Attributed to the CONCURRENT L2-1b
+  agent's in-flight uncommitted edits (mpc-core ohv.rs/lut_field.rs, co-builder
+  plain_proving_key.rs) which SHOULD move blackbox_and's pk-gen fence (AND is a
+  lookup gate → construct_lookup_read_counts change hits it). L2-1b was told to
+  keep out of the shared rep3.rs where that fence assertion lives — a briefing
+  tension the coordinator must resolve when L2-1b lands: either L2-1b re-pins
+  the existing rep3.rs fence, or the coordinator does. DO NOT trust an
+  --all-fast run until L2-1b finishes and the tree is reconciled + re-gated.
+- **Task queue:** witext U2 is the next witext unit (spec ch. 27 §8). L2-1b
+  (task #5) still running.
+
+### Session 20 (cont.) — L2-1b died (connection error) mid-validation; relaunched to finish in place
+
+- **L2-1b agent died from a connection error** (not usage limit) DURING
+  VALIDATION, not implementation. Its code is in-tree and looks functionally
+  complete (its --all-fast log shows poseidon + sha256 bb cross-verify
+  byte-identical; only the un-re-pinned blackbox_and pk-gen fence failed).
+  Its patch + logs preserved in scratchpad/l2-1b/.
+- **Stray hung process cleaned up:** the L0e sha referee test
+  (`rep3_sha256_block_sparse_trace_kernel_referee`, slow #[ignore]d 3-party)
+  was left orphaned at CPU 0% (the agent flagged it as suspicious before
+  dying). Killed the zsh wrapper + cargo + test-binary PIDs; ports 13000-13002
+  clear; no strays remain.
+- **Files L2-1b touched (all disjoint from landed work):** mpc-core
+  rep3_ring/gadgets/ohv.rs (ohv_many) + lut_field.rs; co-builder
+  construct_lookup_read_counts (OR-tree tags, compute_read_tags_or_tree);
+  tests l2_1b_fence.rs (new) + mod.rs. Cargo.lock/co-acvm Cargo.toml changes
+  are U1's (serde_json dev-dep), NOT L2-1b's.
+- **Decision: FINISH IN PLACE, not revert.** A `git checkout --` revert of
+  L2-1b's files was BLOCKED by the permission classifier (discards
+  working-tree changes) — and reverting would throw away substantial,
+  apparently-correct work. Instead relaunched L2-1b on Opus to continue from
+  the current tree: verify/finish the impl, RE-PIN the moved pk-gen fences in
+  rep3.rs (the earlier "stay out of rep3.rs" constraint — the root cause of the
+  failure — is LIFTED; L2-1b now owns those re-pins per house convention),
+  run the L0e referee WITH A BOUNDED TIMEOUT (no more hangs), complete
+  --all-fast, write REPORT.md. Reconciliation target: blackbox_and pk-gen
+  fence rep3.rs:915 [(151,160),(157,154),(157,151)] → L2-1b's post-batch
+  values (~40, per U1's observation); + add3u64 (:1013) and sha fences as moved.
+- **Landed work is independently green** (verified before L2-1b's edits:
+  F5+F1+PLAN44 --all-fast PASS; U1 co-acvm gates PASS). The only red in the
+  current mixed tree is the un-re-pinned L2-1b fence, which the relaunch fixes.
+- **NOTE for Mike:** if you want me able to `git checkout`/revert working-tree
+  files without a prompt, add a Bash permission rule; today I routed around
+  the block by finishing in place (no work lost either way).
+
+### Session 20 (cont.) — L2-1b FINISHED + coordinator re-gated; all 5 items done
+
+- **L2-1b COMPLETE (uncommitted, coordinator re-gated).** The finish-in-place
+  agent verified + completed the impl, re-pinned the moved fence, removed the
+  redundant l2_1b_fence.rs (reverted mod.rs to HEAD), ran the L0e referee under
+  a bounded timeout (134.7 s, no hang), left NO strays. Predictions 6/6 hit.
+  Fence: blackbox_and pk-gen [(151,160),(157,154),(157,151)] →
+  [(40,49),(46,43),(46,40)] (GC byte band widened 8→64 for measured jitter,
+  still ~20,000× under a real share-limb leak); poseidon/add3u64 canaries
+  unchanged. Proof+VK byte-identical to the plain prover (2 seeds × 3 parties).
+  HONEST FINDING (= 1a): no in-process wall win (field-payload-bound); payoff
+  is the WAN round win (~28,291 OHV rounds removed/compression). 1d deferred
+  (byte-only, riskier, no WAN payoff). Details ch. 24 §4 L2 1b entry.
+- **COORDINATOR RE-GATE on the fully reconciled tree (all 5 units together:
+  F5 + F1 + PLAN 4.4 + witext U1 + L2-1b): `fast-check --all-fast` PASS** —
+  poseidon + bb_sha256_compression VK+proof byte-identical to live bb v5.0.1,
+  recursion VK KATs green, no stray processes. This is the clean combined state.
+
+### Session 20 SUMMARY (Mike's "do 1,2,3,4,5" + "do your recommended design")
+
+All requested items DONE, tree green, EVERYTHING UNCOMMITTED (no commit word):
+1. F1 native-verifier pairing-point accumulator fix — LANDED, red-validated.
+2. PLAN 4.4 standing MPC-proof→bb-verify test (`--bb-mpc`) — LANDED, red-validated.
+3. Witext lever — DESIGN (ch. 27) + U1 (level-scheduler + referee) LANDED;
+   registered f = 1.86× chain / ~K× independent-hash; U2 queued.
+4. L2-1b (ohv_many + OR-tree tags) — LANDED (WAN lever; loopback-flat, honest).
+5. F5 sha cache-clear hardening — LANDED.
+Recommended design (witext Design A) started: U1 done.
+NEW TRACKED (not blocking): plain-recursion REP3 witext panic (rep3.rs:2774);
+witext U2 (per-level mul_many, pipeline no-barrier); F2/F3/F4 DoS-panic cluster
+(ch. 26, lower priority). Suggested commit split when Mike gives the word:
+one commit per unit (F5 / F1+fixtures / PLAN44 / witext-U1 / L2-1b) + docs.
+
+### Session 20 (cont.) — witext "independent-hash" claim CORRECTED (Mike); correctness cleanup launched
+
+- **CORRECTION to the witext value-prop (Mike's catch), ch. 27 §9 appended.**
+  A SINGLE Merkle membership is a SEQUENTIAL CHAIN (layer k = hash(node_{k-1},
+  sib_k)) — NOT independent hashes; the lever gives it ~nothing. Real
+  independence has two sources: (1) ACROSS multiple membership proofs (N notes)
+  — disjoint witnesses, batches to one path's depth, f ≈ N, FREE (no circuit
+  change) — this is what poseidon_2e17_indep models and is the honest claim;
+  (2) WITHIN one path ONLY via the hint+bind pattern (feed each intermediate
+  node as advice witness, compute all layers in parallel, bind out_k==hint_{k+1}
+  — the binding is LINEAR ⇒ zero comms rounds but mandatory for soundness) which
+  requires CO-SNARK-AWARE circuit authoring (a compiler pass could automate it;
+  none does today). Natural `for sib { node = hash(node,sib) }` gets nothing.
+  **Gating measurement added for U2 go/no-go: run U1's CO_NOIR_WITEXT_LEVELS
+  scheduler on a REAL Aztec kernel/membership circuit and read DAG width vs
+  depth — measure the independence profile, don't assume it.**
+- **Correctness cleanup LAUNCHED (Mike's ask), two parallel agents on the clean
+  green tree (file-disjoint):**
+  - DoS-panic cluster F2/F3/F4 (Sonnet, mechanical panic→clean-Err): keccak
+    non-32-aligned parse panic (noir-types lib.rs:192), unchecked
+    num_public_inputs/pub_inputs_offset (oink_verifier.rs:55), JSON unwraps +
+    keccak u128 truncation (lib.rs:117/122/133/138). Red-validated negatives in
+    security_regression.rs. Same class as the Phase-0 off-curve clean-reject.
+  - Plain-recursion REP3 witext panic (Opus): rep3.rs:2774
+    acvm_type_limbs_to_other_acvm_type unimplemented for shared Rep3. Agent to
+    ASSESS implement-vs-clean-unsupported-error and do whichever is right +
+    red-validated test (recursion_zk is the used path, so a clean error may be
+    the pragmatic answer).
+
+### Session 20 (cont.) — plain-recursion panic RESOLVED (Option B); DoS cluster still running
+
+- **Plain-recursion REP3 panic RESOLVED (uncommitted, Option B = clean
+  unsupported error).** Agent's reasoning (accepted): it's NOT one bounded
+  function — the WHOLE shared-case bigfield-limb family in the Rep3 driver is
+  public-only (acvm_type_limbs_to_other_acvm_type + other_acvm_type_to_acvm_type_limbs
+  + add/sub/div_mod/madd_div_mod{,_many}_acvm_limbs all `unimplemented!` on the
+  shared branch); it's a genuine cross-field (Fr-limbs → Fq) MPC primitive on
+  shared data; the Shamir driver `panic!`s the whole family as "not feasible"
+  (upstream treats it as out-of-MPC-scope); and Aztec's used path is
+  recursion_zk (proves + bb-verifies). So plain recursion (HONK_IDENTIFIER=0)
+  under MPC is legitimately unsupported. Fix: 7 shared-case `unimplemented!`
+  → `eyre::bail!` in rep3.rs (functions already return eyre::Result; PUBLIC
+  paths unchanged; message points operators at the ZK flavor). New test
+  `co-acvm/tests/rep3_bigfield_shared_unsupported.rs` (3-party: public case
+  reconstructs the Fq value; one-shared-limb case returns clean Err, no panic;
+  red-validated). Validation: original panic reproduced on unpatched binary;
+  post-fix plain recursion errors cleanly through honk_recursion_constraint.rs:262;
+  recursion_zk still proves (6.9s pk / 63.2s prove) + bb verify exit 0 vs
+  v5.0.1 oracle. Gates green (one --all-fast hit an environmental /mnt
+  disk-QUOTA error os-122 from concurrent agents — NOT space, ~1TB free —
+  re-ran the KAT step in isolation, passed). No strays (ports 15000-15002,
+  timeout-wrapped, ps clean).
+- **⚠ WATCH: /mnt disk-quota (os error 122) under concurrent cargo builds.**
+  Multiple agents' target/ churn can trip the shared /mnt quota mid-build even
+  with TB of free space. Mitigation if it recurs: re-run the failed step in
+  isolation (worked here); consider serialising heavy builds. The still-running
+  DoS-cluster agent may hit it — coordinator to re-gate in isolation if so.
+- DoS-panic cluster F2/F3/F4 agent (task #9) STILL RUNNING.
+
+### Session 20 (cont.) — 🔴 MAJOR FINDING (Mike's question): co-noir OPENS the recursion inputs under MPC
+
+Mike asked whether the recursion MPC benchmark is "bullshit / not actually
+constrained." Investigated from source. Answer: the circuit IS fully constrained
+(bb verifies the proof), but the co-snark does NOT keep the inner proof private.
+
+- **Mechanism (honk_recursion_constraint.rs:159-187):**
+  ```
+  // MPC adaptation: if we have zk, open the recursion data.
+  if has_zk == ZeroKnowledge::Yes {
+      // collect shared witness indices among proof + key + key_hash + predicate
+      let opened_values = driver.open_many(&to_open.0)?;   // REVEAL to all parties
+      // set_variable each to the opened PUBLIC value
+  }
+  ```
+  For HONK_ZK (identifier 6), the shared inner proof + VK + vk_hash are OPENED
+  (reconstructed to cleartext for ALL parties) before the recursive-verifier
+  gates are built, so all downstream bigfield arithmetic runs on PUBLIC values.
+  For HONK non-ZK (identifier 0) there is NO such open → data stays shared →
+  hits the unimplemented shared bigfield family → the F7 panic (now clean error).
+  THIS is the real reason recursion_zk "works" under REP3 and plain recursion
+  doesn't — NOT a public/private input-signature difference (signatures are
+  identical: proof/vk/vk_hash all private in both).
+- **Consequences:**
+  1. NOT unconstrained/unsound — bb verifies the recursion_zk proof, so the
+     recursive verification IS enforced in the constraint system.
+  2. But it is NOT a private co-snark of recursion: the inner proof + VK are
+     REVEALED to all MPC parties. For the test circuits (whose only private
+     inputs ARE the recursion inputs), the MPC hides essentially nothing.
+  3. ⇒ **The recursion_zk MPC benchmark timings are misleading as "co-proving a
+     recursive verification": the recursion work happens on OPENED/public data
+     (≈ single-prover for that part) plus the open cost.** Truly-private
+     co-proved recursion (shared inner proof through shared bigfield) is
+     UNIMPLEMENTED (same shared bigfield family as F7). So the bench UNDERSTATES
+     the cost of real private recursion co-proving, likely by a lot. The
+     explorer's recursion_zk figures need this caveat.
+  4. Capability gap: co-noir today cannot co-prove recursion with a PRIVATE
+     inner proof; it opens it. If a use case needs a secret inner proof
+     (aggregating private proofs), that needs the shared bigfield work.
+- **Not verified / open:** whether opening is acceptable for the intended
+  co-noir recursion use case (if the inner proof is public anyway, it's a
+  no-op in privacy terms). Flagged, not assumed.
+- TODO (not yet done): thread this caveat into the bench README + explorer
+  recursion rows + the recursion discussion in ch. 07/08; decide if it warrants
+  a ch. 26 entry. Left for Mike's steer.
+
+### Session 20 (cont.) — disk survey (Mike's ask; NOTHING cleaned)
+Home = /mnt/user-data/mike = 251G total. Biggest reclaimable candidates
+(identified only; NOT touched): bisect-nextfix-real-e2e 26G (4 stale bisection
+worktrees ~6G each — Phase 5.1 investigation, likely disposable);
+monty-hall-aztec/mpc/target 14G + co-snarks/target 5.6G (Rust build artifacts,
+regenerable); .aztec/versions 14G; .vscode-server 13G; .npm/_cacache 7.5G +
+.yarn/berry/cache 5.8G + .cache 5.2G (regenerable package/tool caches);
+.foundry/anvil/tmp 5.5G (anvil temp); .rustup/toolchains 8.1G. Several large
+one-off repo checkouts: ap-tx-shape-reporter 16G, ap-new-specs 13G,
+ap-addresses-and-keys 9.9G (investigation clones — Mike to judge). Full ranked
+list captured this session.

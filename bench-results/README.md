@@ -1,5 +1,19 @@
 # bench-results/ — the co-SNARK benchmark dataset
 
+> ⚠ **CAVEAT — the `recursion_zk` MPC (REP3/Shamir) cells do NOT measure private
+> recursion.** co-noir's recursion-constraint builder OPENS (reveals to all MPC
+> parties) the entire inner proof + VK + vk_hash before building the recursive
+> verifier — see `create_honk_recursion_constraints`
+> (`co-builder/src/types/honk_recursion_constraint.rs`, the "MPC adaptation: if we
+> have zk, open the recursion data" block). So the recursive-verification work in
+> these cells runs on *public* data (≈ single-prover for that part) plus the open
+> cost; the proof is still fully constrained and bb-verifies, but the inner proof
+> is not kept private. Truly-private co-proved recursion (shared inner proof
+> through shared bigfield arithmetic) is UNIMPLEMENTED (same shared bigfield family
+> that makes non-ZK `recursion` error out), so these numbers **understate** the
+> cost of real private recursion, likely by a lot. Full analysis: PROGRESS
+> session 20 + `project-docs/26` F7. (Non-recursion cells are unaffected.)
+
 Every benchmark run of this repo lands here as one dated directory, plus a
 single SQLite database (`bench.sqlite`) aggregating all runs for querying
 and visualisation. This README is the pick-up-here doc for humans and
