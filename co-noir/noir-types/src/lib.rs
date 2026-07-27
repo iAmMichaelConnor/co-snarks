@@ -53,7 +53,7 @@ impl HonkProofType {
         buf_public_inputs: &[u8],
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::from_buffer(buf_proof)?;
-        let public_inputs = U256::from_buffer(buf_public_inputs);
+        let public_inputs = U256::from_buffer(buf_public_inputs)?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 
@@ -107,20 +107,41 @@ impl HonkProofType {
                 .collect(),
         }
     }
+    /// Parse a single decimal (or `0x`-prefixed) string as a field element.
+    /// Returns a clean `Err` on a non-field string instead of panicking — the
+    /// JSON proof/public-input path hands this untrusted strings straight from
+    /// a file given to `co-noir verify`.
+    fn parse_fr_str(s: &str) -> eyre::Result<ark_bn254::Fr> {
+        s.parse::<ark_bn254::Fr>()
+            .map_err(|_| eyre::eyre!("invalid field element string: {s:?}"))
+    }
+
+    /// Parse a single decimal (or `0x`-prefixed) string as a full 256-bit
+    /// unsigned integer. Uses `Uint<256, 4>`'s own `FromStr` (the same
+    /// wide-integer path the binary/byte loader decodes into) rather than
+    /// routing through `u128`, which used to panic on a non-numeric string AND
+    /// silently truncate any legitimate 256-bit decimal above `u128::MAX` down
+    /// to its low 128 bits before zero-extending back to 256.
+    fn parse_u256_str(s: &str) -> eyre::Result<U256> {
+        s.parse::<Uint<256, 4>>()
+            .map(U256)
+            .map_err(|e| eyre::eyre!("invalid U256 string {s:?}: {e}"))
+    }
+
     pub fn proof_and_public_inputs_from_string_field(
         str_proof: Vec<String>,
         str_public_inputs: Vec<String>,
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<ark_bn254::Fr>::new(
             str_proof
-                .into_iter()
-                .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_fr_str(s))
+                .collect::<eyre::Result<Vec<_>>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-            .collect();
+            .iter()
+            .map(|s| Self::parse_fr_str(s))
+            .collect::<eyre::Result<Vec<_>>>()?;
         Ok(HonkProofType::FieldElements(proof, public_inputs))
     }
     pub fn proof_and_public_inputs_from_string_u256(
@@ -129,14 +150,14 @@ impl HonkProofType {
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::new(
             str_proof
-                .into_iter()
-                .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_u256_str(s))
+                .collect::<eyre::Result<Vec<_>>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-            .collect();
+            .iter()
+            .map(|s| Self::parse_u256_str(s))
+            .collect::<eyre::Result<Vec<_>>>()?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 }
@@ -185,14 +206,7 @@ impl HonkProof<U256> {
     }
 
     pub fn from_buffer(buf: &[u8]) -> eyre::Result<Self> {
-        let res = buf
-            .chunks(32)
-            .map(|chunk| {
-                U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
-                ))
-            })
-            .collect::<Vec<U256>>();
+        let res = U256::from_buffer(buf)?;
         Ok(Self::new(res))
     }
 }
@@ -606,15 +620,31 @@ impl U256 {
             .flat_map(|el| el.0.to_be_bytes::<32>().to_vec())
             .collect::<Vec<u8>>()
     }
-    pub fn from_buffer(buffer: &[u8]) -> Vec<Self> {
-        buffer
-            .chunks(32)
+    /// Parse a buffer of concatenated 32-byte big-endian `U256`s.
+    ///
+    /// `buf.len()` must be an exact multiple of 32: this is the untrusted-bytes
+    /// entry point for the Keccak proof/public-input path (fed straight from a
+    /// file handed to `co-noir verify`), so a short trailing chunk must be a
+    /// clean rejection, not the `try_into().expect(..)` panic this used to hit
+    /// (the Poseidon2 twin, `SerializeF::from_buffer`, already validates length
+    /// the same way).
+    pub fn from_buffer(buffer: &[u8]) -> eyre::Result<Vec<Self>> {
+        if !buffer.len().is_multiple_of(32) {
+            eyre::bail!(
+                "invalid length: buffer of {} bytes is not a whole number of 32-byte U256 elements",
+                buffer.len()
+            );
+        }
+        Ok(buffer
+            .chunks_exact(32)
             .map(|chunk| {
                 U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
+                    chunk
+                        .try_into()
+                        .expect("chunks_exact(32) guarantees 32-byte chunks"),
                 ))
             })
-            .collect::<Vec<U256>>()
+            .collect::<Vec<U256>>())
     }
 }
 

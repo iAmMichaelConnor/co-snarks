@@ -101,6 +101,29 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         Ok(())
     }
 
+    /// Validate an untrusted VK's `num_public_inputs` and `pub_inputs_offset`
+    /// against the circuit size implied by the (already-validated)
+    /// `log_circuit_size`. Both values index rows of a circuit with at most
+    /// `2^log_circuit_size` rows, so neither can legitimately exceed that bound.
+    /// Left unchecked, a huge `num_public_inputs` drives the oink verifier's
+    /// `Vec::with_capacity(num_public_inputs)` preamble allocation past the
+    /// allocator's capacity-overflow abort, and a huge `pub_inputs_offset`
+    /// overflows the `1 + pub_inputs_offset` addition in
+    /// `compute_public_input_delta` (debug-panics, wraps in release). Call only
+    /// after `check_log_circuit_size` has bounded `log_circuit_size` to
+    /// `[1, CONST_PROOF_SIZE_LOG_N]`, so the shift below cannot overflow.
+    fn check_public_input_bounds(
+        log_circuit_size: u64,
+        num_public_inputs: u64,
+        pub_inputs_offset: u64,
+    ) -> HonkProofResult<()> {
+        let circuit_size = 1u64 << log_circuit_size;
+        if num_public_inputs > circuit_size || pub_inputs_offset > circuit_size {
+            return Err(HonkProofError::CorruptedKey);
+        }
+        Ok(())
+    }
+
     pub fn to_field_elements(&self) -> Vec<C::ScalarField> {
         let len = 3 + self.commitments.elements.len() * 2 * C::NUM_BASEFIELD_ELEMENTS;
         let mut field_elements = Vec::with_capacity(len);
@@ -231,6 +254,10 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         // circuit and, if accepted, drives the verifier's round count to 0 — reject it cleanly
         // rather than letting a zero round count underflow downstream (mirrors bb `1391c49546`).
         Self::check_log_circuit_size(log_circuit_size)?;
+        // Untrusted input: bound num_public_inputs / pub_inputs_offset against the
+        // circuit size before they can reach the oink verifier's preamble
+        // allocation or its public-input-delta offset arithmetic.
+        Self::check_public_input_bounds(log_circuit_size, num_public_inputs, pub_inputs_offset)?;
 
         let mut commitments = PrecomputedEntities::default();
 
@@ -267,19 +294,35 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             return Err(HonkProofError::InvalidKeyLength);
         }
 
-        let log_circuit_size: u64 = U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        // Each slice below is exactly 32 bytes by construction (fixed-width
+        // offset steps within a buffer whose total length was just checked
+        // above), so `U256::from_buffer` can never return its length-mismatch
+        // `Err` here; `expect` documents that as an invariant, not a fallible
+        // parse of attacker-controlled length.
+        let log_circuit_size: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
-        let num_public_inputs: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let num_public_inputs: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
-        let pub_inputs_offset: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let pub_inputs_offset: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
 
         // Untrusted input: reject log_circuit_size = 0 / out of range (mirrors bb `1391c49546`).
         // The Keccak path did not panic like the field path, but silently accepting a zero round
         // count is the same soundness/robustness gap.
         Self::check_log_circuit_size(log_circuit_size)?;
+        // Untrusted input: bound num_public_inputs / pub_inputs_offset against the
+        // circuit size before they can reach the oink verifier's preamble
+        // allocation or its public-input-delta offset arithmetic.
+        Self::check_public_input_bounds(log_circuit_size, num_public_inputs, pub_inputs_offset)?;
 
         let mut commitments = PrecomputedEntities::default();
 
