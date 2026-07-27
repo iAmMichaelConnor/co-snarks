@@ -29,6 +29,7 @@ use crate::{
 mod assert_zero_solver;
 mod blackbox_solver;
 mod brillig_call_solver;
+pub mod level_schedule;
 mod memory_solver;
 
 pub type PlainCoSolver<F> = CoSolver<PlainAcvmSolver<F>, F>;
@@ -372,30 +373,63 @@ where
         Ok(result)
     }
 
+    /// Dispatch a single opcode to its solver. Shared by the serial solve loop
+    /// and the level-ordered solve used by the equivalence referee, so both walk
+    /// the opcodes through identical per-opcode logic.
+    fn solve_single_opcode(&mut self, opcode: &Opcode<GenericFieldElement<F>>) -> CoAcvmResult<()> {
+        match opcode {
+            Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
+            Opcode::MemoryInit {
+                block_id,
+                init,
+                block_type: _, // apparently not used
+            } => self.solve_memory_init_block(*block_id, init)?,
+            Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
+            Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
+            Opcode::BrilligCall {
+                id,
+                inputs,
+                outputs,
+                predicate,
+            } => self.brillig_call(id, inputs, outputs, predicate)?,
+            _ => todo!("opcode {} detected, not supported yet", opcode),
+        }
+        Ok(())
+    }
+
+    /// If `CO_NOIR_WITEXT_LEVELS` is set in the environment, print the comms-free
+    /// level-schedule + round-attribution diagnostics for the current function.
+    /// This only reads public circuit structure and prints; it never changes the
+    /// witness that is solved.
+    fn maybe_print_witext_diagnostics(&self, function: &Circuit<GenericFieldElement<F>>) {
+        if std::env::var_os("CO_NOIR_WITEXT_LEVELS").is_none() {
+            return;
+        }
+        // Every private ABI parameter is a shared witness under the protocol;
+        // public parameters are initial but public.
+        let shared_initial: std::collections::HashSet<u32> =
+            function.private_parameters.iter().map(|w| w.0).collect();
+        let mut initial = shared_initial.clone();
+        initial.extend(function.public_parameters.0.iter().map(|w| w.0));
+        let report = level_schedule::format_report(
+            "current function",
+            &function.opcodes,
+            &initial,
+            &shared_initial,
+        );
+        eprintln!("{report}");
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn solve_with_output(
         mut self,
     ) -> CoAcvmResult<(WitnessStack<T::AcvmType>, PssStore<T, F>)> {
         let functions = std::mem::take(&mut self.functions);
 
+        self.maybe_print_witext_diagnostics(&functions[self.function_index]);
+
         for opcode in functions[self.function_index].opcodes.iter() {
-            match opcode {
-                Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
-                Opcode::MemoryInit {
-                    block_id,
-                    init,
-                    block_type: _, // apparently not used
-                } => self.solve_memory_init_block(*block_id, init)?,
-                Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
-                Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
-                Opcode::BrilligCall {
-                    id,
-                    inputs,
-                    outputs,
-                    predicate,
-                } => self.brillig_call(id, inputs, outputs, predicate)?,
-                _ => todo!("opcode {} detected, not supported yet", opcode),
-            }
+            self.solve_single_opcode(opcode)?;
         }
         tracing::trace!("we are done! Opening results...");
         let output = self.open_results(&functions[self.function_index])?;
@@ -411,6 +445,30 @@ where
 
     pub fn solve(self) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
         let (witness_stack, _) = self.solve_with_output()?;
+        Ok(witness_stack)
+    }
+
+    /// Solve the current function's opcodes in an explicit order (a permutation
+    /// of `0..num_opcodes`) rather than in stream order. Used by the U1
+    /// equivalence referee to run a level-ordered solve and check the resulting
+    /// witness is bit-identical to the serial solve. `order` must be a valid
+    /// topological order (every producer before its consumers); otherwise the
+    /// solve fails or yields a different witness, which is exactly what the
+    /// red-validation check exercises.
+    pub fn solve_in_order(mut self, order: &[usize]) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
+        let functions = std::mem::take(&mut self.functions);
+        let opcodes = &functions[self.function_index].opcodes;
+
+        for &idx in order {
+            self.solve_single_opcode(&opcodes[idx])?;
+        }
+        let output = self.open_results(&functions[self.function_index])?;
+        self.value_store.set_output(output);
+
+        let mut witness_stack = WitnessStack::default();
+        for (idx, witness) in self.witness_map.into_iter().rev().enumerate() {
+            witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
+        }
         Ok(witness_stack)
     }
 
