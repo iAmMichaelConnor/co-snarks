@@ -653,3 +653,36 @@ U2 (REP3 per-level `mul_many` batching, Design A Pass-2) is in-tree.
 See ch. 27 §10 for U2 results. Uncommitted; ready for a commit alongside a future
 witext-lever commit. Next: measure real-Aztec-circuit DAG independence (the
 go/no-go for how much U1+U2 help production workloads).
+
+---
+
+## 11. REAL-CIRCUIT INDEPENDENCE MEASUREMENT (2026-07-27, session 20) — the go/no-go verdict
+
+Ran U1's `CO_NOIR_WITEXT_LEVELS` scheduler (plaindriver, network-free, DAG is
+pure structure) on real Aztec circuits to decide whether U1+U2 help production.
+
+| circuit | opcodes | depth | width max/mean | witext f |
+|---|---:|---:|---:|---:|
+| `poseidon` (chain, anchor) | 477 | 259 | 16 / 1.84 | 1.86 |
+| `poseidon_indep8` (anchor) | 3,809 | 259 | 128 / 14.71 | 14.89 |
+| monty-hall init (R2) | 59 | 12 | 11 / 4.92 | 1.50 |
+| monty-hall open_door (R3) | 142 | 27 | 19 / 5.26 | 4.00 |
+| monty-hall finish (R4) | 84 | 14 | 21 / 6.00 | 2.75 |
+| **`Token::transfer`** (real compiled contract) | 6,871 | 3,056 | **839** / 2.25 | **3.59** |
+| **`Token::burn_private`** (real compiled contract) | 31,514 | 6,226 | **841** / 5.06 | **6.22** |
+
+**VERDICT: the witext lever helps real Aztec circuits** — measured/implied
+round-collapse 1.5×–6.2×, same order as the synthetic benchmarks, NOT the ~1×
+deep-chain floor. Production Aztec logic is BIMODAL: ~87–89% width-1 sequential
+"kernel plumbing" the lever can't touch, punctuated by genuinely wide independent
+bursts (one level of width ~840 in each Token function) collapsed into single
+batched rounds. **The reported f values are LOWER BOUNDS** — the round counter
+only prices `AssertZero` shared×shared muls; it does NOT yet cost the
+blackbox-poseidon2 (`note_hash`/`nullifier`/`npk_m_hash`) or Brillig work that
+Aztec circuits are heavy in, and `MemoryOp`/`MemoryInit` are modelled as
+conservative barriers (can only suppress width). True collapse is higher.
+This retires the "maybe it's worse for most cases" risk: U2 improved/held loopback
+and delivers a real WAN win on production circuit shapes. (Token artifacts read
+from a matching-Noir-version compiled contract; Prover.toml synthetic all-zero —
+valid since the DAG is index-structure only.) Full data: session-20 scratchpad
+witext-realcircuits/.

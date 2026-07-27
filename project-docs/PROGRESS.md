@@ -3242,3 +3242,14 @@ list captured this session.
   go/no-go for U1+U2's production value (the DAG measurement is PURE STRUCTURE,
   needs only a compiled circuit .json, no valid inputs); (b) commit U2;
   (c) the Phase 5 pivot decision (5.0 PXE secret sharer vs 5.1d TS orchestration).
+
+### Session 20 (cont.) — real-circuit witext independence measured → lever CONFIRMED worthwhile
+Ran U1's scheduler on real Aztec circuits (ch. 27 §11). Token::transfer f=3.6×,
+Token::burn_private f=6.2× (both LOWER BOUNDS — blackbox-poseidon2/Brillig not
+priced, memory ops = conservative barriers). monty-hall rounds 1.5–4×. VERDICT:
+witext lever helps real Aztec circuits (1.5–6.2×, bimodal: width-1 plumbing spine
++ wide independent bursts up to width ~840 collapsed to single rounds) — retires
+the "optimisation might be worse for most cases" worry. U2 committed (ae9f2ff2).
+NEXT: netem re-bench (measure U2 witext WAN win + L2-1b sha vs v3) → explorer
+re-bake. Push to fork = PARKED pending Mike's confidentiality decision (what/where
++ private-repo-derived content clearance; KATs are private-bb-derived).
