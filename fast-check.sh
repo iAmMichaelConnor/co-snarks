@@ -17,7 +17,13 @@
 #   ./fast-check.sh --sec        # + verifier/deserialization security regressions
 #   ./fast-check.sh --mpc        # + REP3 + Shamir poseidon (co-mirror parity)
 #   ./fast-check.sh --bb         # + single-circuit bb byte cross-verify (poseidon, non-ZK)
-#   ./fast-check.sh --all-fast   # --sec --mpc --bb together (still no circom, no full sweep)
+#   ./fast-check.sh --bb-mpc     # + MPC-generated (REP3) UH proofs verify under the
+#                                #   REAL bb binary, incl. ZK + tamper/negative checks
+#                                #   (PLAN 4.4 standing test; ~a few seconds once
+#                                #   co-noir is built, warm-build measured ~2-3s;
+#                                #   NOT folded into --all-fast, see below)
+#   ./fast-check.sh --all-fast   # --sec --mpc --bb together (still no circom, no full sweep;
+#                                #   does NOT include --bb-mpc -- pass it separately)
 #   ./fast-check.sh --full       # the ~60-min acceptance gate (asks for confirmation)
 #
 # Flags combine, e.g. `./fast-check.sh --sec --bb`.
@@ -39,13 +45,14 @@ CRS_G2="$ROOT/co-noir/co-noir-common/src/crs/bn254_g2.dat"
 # Cap MPC threads so parallel work / other agents aren't starved (see mainframe policy).
 export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-$(( $(nproc --all) * 8 / 30 ))}"
 
-want_sec=0 want_mpc=0 want_bb=0 want_full=0
+want_sec=0 want_mpc=0 want_bb=0 want_bbmpc=0 want_allfast=0 want_full=0
 for a in "$@"; do
   case "$a" in
     --sec) want_sec=1 ;;
     --mpc) want_mpc=1 ;;
     --bb)  want_bb=1 ;;
-    --all-fast) want_sec=1; want_mpc=1; want_bb=1 ;;
+    --bb-mpc) want_bbmpc=1 ;;
+    --all-fast) want_sec=1; want_mpc=1; want_bb=1; want_allfast=1 ;;
     --full) want_full=1 ;;
     *) echo "unknown flag: $a" >&2; exit 2 ;;
   esac
@@ -128,6 +135,32 @@ if [[ $want_bb -eq 1 ]]; then
     # recursion parity fence: VK byte-KATs (proof bytes prover-specific by design)
     run cargo test -p tests --release --test noir -- recursion_vk_kat recursion_zk_vk_kat
   fi
+fi
+
+# ---- Tier 5 (--bb-mpc): MPC-generated (REP3) UH proofs verify under the REAL
+# bb binary -- PLAN 4.4 standing test. FAST tier of
+# co-noir/co-noir/examples/bb_verify_standing.sh: poseidon, REP3, non-ZK + ZK,
+# our VK AND a bb-written VK, plus tamper/negative checks (bb verify AND
+# co-noir verify must both reject a byte-flipped proof / tampered public
+# input). Own private mesh (ports 12000-12002) and own temp workdir --
+# never touches examples/test_vectors/ or the shared default 10000-10002
+# ports, so this is safe next to other agents' compare_mpc.sh runs.
+#
+# NOT folded into --all-fast: warm-build wall time is ~2-3s (measured,
+# repeatable), but this tier's first invocation in a session also does
+# `cargo build --release --bin co-noir`, which neither of --all-fast's
+# existing tiers builds -- a cold build was ~70s in one measurement, and
+# under the target/ lock-contention this shared box can see (other agents'
+# concurrent cargo runs), that build step alone could push --all-fast past
+# its ~90s budget unpredictably. Run it separately with --bb-mpc instead.
+if [[ $want_bbmpc -eq 1 ]]; then
+  run bash "$ROOT/co-noir/co-noir/examples/bb_verify_standing.sh"
+fi
+
+if [[ $want_allfast -eq 1 && $want_bbmpc -eq 0 ]]; then
+  echo
+  echo "ℹ  --bb-mpc (PLAN 4.4: MPC-generated proofs verify under real bb) is" \
+       "available but not included above -- run it separately: ./fast-check.sh --bb-mpc"
 fi
 
 echo; [[ $rc -eq 0 ]] && echo "fast-check: PASS" || echo "fast-check: FAIL (rc=$rc)"
