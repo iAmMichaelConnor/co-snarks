@@ -1822,16 +1822,9 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
         h_init: &[Self::AcvmType; 8],
         w_in: &[Self::AcvmType; 16],
     ) -> eyre::Result<()> {
-        // v1 gate (design L0e §3.3): populate the cache only when ALL 24 gadget inputs are
-        // shared — then every one of the compression's 369 plookup reads is keyed on a shared
-        // value, reaches this driver, and does so in exactly the kernel's static read schedule.
-        // Constant/mixed inputs leave the cache empty, so every read takes the existing
-        // per-read path untouched. `is_shared` is share-TYPE metadata, identical at all three
-        // parties (the witness split assigns the same public/shared type everywhere), so all
-        // parties take the same branch and no party's RNG streams or round counts diverge.
-        if h_init.iter().chain(w_in.iter()).any(|v| !Self::is_shared(v)) {
-            return Ok(());
-        }
+        // Purge leftovers BEFORE the all-shared gate: a prior all-shared compression's stale
+        // reads must not survive into a later mixed-input compression, whose reads would
+        // otherwise pop them (only reachable under read-order drift, which the warn flags).
         if !self.sha256_trace_cache.is_empty() {
             self.sha256_trace_cache_tag_mismatches += 1;
             tracing::warn!(
@@ -1841,6 +1834,20 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 self.sha256_trace_cache.len()
             );
             self.sha256_trace_cache.clear();
+        }
+        // v1 gate (design L0e §3.3): populate the cache only when ALL 24 gadget inputs are
+        // shared — then every one of the compression's 369 plookup reads is keyed on a shared
+        // value, reaches this driver, and does so in exactly the kernel's static read schedule.
+        // Constant/mixed inputs leave the cache empty, so every read takes the existing
+        // per-read path untouched. `is_shared` is share-TYPE metadata, identical at all three
+        // parties (the witness split assigns the same public/shared type everywhere), so all
+        // parties take the same branch and no party's RNG streams or round counts diverge.
+        if h_init
+            .iter()
+            .chain(w_in.iter())
+            .any(|v| !Self::is_shared(v))
+        {
+            return Ok(());
         }
         let h_init: [ArithmeticShare<F>; 8] = array::from_fn(|i| match &h_init[i] {
             Rep3AcvmType::Shared(share) => *share,
@@ -1994,7 +2001,11 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
             debug_assert_eq!(values.len(), base_bits.len());
             let to_acvm =
                 |v: Vec<ArithmeticShare<F>>| v.into_iter().map(Rep3AcvmType::Shared).collect();
-            return Ok((to_acvm(values), to_acvm(key_a_slices), to_acvm(key_b_slices)));
+            return Ok((
+                to_acvm(values),
+                to_acvm(key_a_slices),
+                to_acvm(key_b_slices),
+            ));
         }
 
         let result = yao::get_sparse_normalization_values(
@@ -2768,8 +2779,16 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
             .into();
             return Ok(result.into());
         }
-        unimplemented!(
-            "functionality acvm_type_limbs_to_other_acvm_type not implemented for Rep3 in the shared case"
+        // Reconstructing a single base-field (OtherAcvmType) element from
+        // secret-shared scalar-field limbs is a cross-field switch on shared
+        // data (a distinct MPC primitive, not a lift of the public path), and
+        // the whole shared bigfield family below is likewise public-only. Fail
+        // cleanly rather than panic. Reached by plain `recursion`
+        // (HONK_IDENTIFIER=0) proving under REP3; use the ZK recursion flavor
+        // (`recursion_zk`), whose witness extension needs no shared bigfield
+        // reconstruction.
+        eyre::bail!(
+            "acvm_type_limbs_to_other_acvm_type: secret-shared non-native (bigfield) reconstruction is not supported under REP3 MPC (only the fully-public case is). This path is exercised by plain `recursion` (HONK_IDENTIFIER=0) proving under MPC; use the ZK recursion flavor (`recursion_zk`)."
         )
     }
 
@@ -2790,8 +2809,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 .collect::<Vec<_>>();
             return Ok(limbs.try_into().expect("We have NUM_LIMBS elements"));
         }
-        unimplemented!(
-            "functionality other_acvm_type_to_acvm_type_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "other_acvm_type_to_acvm_type_limbs: secret-shared non-native (bigfield) decomposition is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 
@@ -2811,8 +2830,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 PlainAcvmSolver::new().add_acvm_type_limbs::<C>(&lhs_limbs, &rhs_limbs)?;
             return Ok(result_limbs.map(Rep3AcvmType::Public));
         }
-        unimplemented!(
-            "functionality add_acvm_type_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "add_acvm_type_limbs: secret-shared non-native (bigfield) addition is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 
@@ -2837,8 +2856,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 .try_into()
                 .expect("We have 4 elements"));
         }
-        unimplemented!(
-            "functionality sub_acvm_type_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "sub_acvm_type_limbs: secret-shared non-native (bigfield) subtraction is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 
@@ -2888,8 +2907,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 },
             );
         }
-        unimplemented!(
-            "functionality div_mod_acvm_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "div_mod_acvm_limbs: secret-shared non-native (bigfield) division is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 
@@ -2934,8 +2953,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_acvm_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "madd_div_mod_acvm_limbs: secret-shared non-native (bigfield) multiply-add-divide is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 
@@ -2988,8 +3007,8 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_many_acvm_limbs not implemented for Rep3 in the shared case"
+        eyre::bail!(
+            "madd_div_mod_many_acvm_limbs: secret-shared non-native (bigfield) multiply-add-divide is not supported under REP3 MPC (only the fully-public case is)."
         )
     }
 }
@@ -3112,16 +3131,23 @@ mod sha256_trace_cache_tests {
 
                 // one flattened tuple per call, for opening in the main thread
                 let calls: Vec<Vec<Rep3AcvmType<Fr>>> = vec![
-                    r1.0.into_iter().chain(r1.1).chain(r1.2).chain(r1.3).collect(),
+                    r1.0.into_iter()
+                        .chain(r1.1)
+                        .chain(r1.2)
+                        .chain(r1.3)
+                        .collect(),
                     r2.0.into_iter().chain(r2.1).chain(r2.2).collect(),
-                    r3.0.into_iter().chain(r3.1).chain(r3.2).chain(r3.3).collect(),
+                    r3.0.into_iter()
+                        .chain(r3.1)
+                        .chain(r3.2)
+                        .chain(r3.3)
+                        .collect(),
                 ];
                 tx.send(calls).unwrap();
             });
         }
 
-        let results: [Vec<Vec<Rep3AcvmType<Fr>>>; 3] =
-            array::from_fn(|i| rxs[i].recv().unwrap());
+        let results: [Vec<Vec<Rep3AcvmType<Fr>>>; 3] = array::from_fn(|i| rxs[i].recv().unwrap());
 
         // open every call's flattened tuple
         let opened = |call: usize| -> Vec<Fr> {
@@ -3130,7 +3156,9 @@ mod sha256_trace_cache_tests {
                     .iter()
                     .map(|x| match x {
                         Rep3AcvmType::Shared(s) => *s,
-                        Rep3AcvmType::Public(_) => unreachable!("sha read tuples are always shared"),
+                        Rep3AcvmType::Public(_) => {
+                            unreachable!("sha read tuples are always shared")
+                        }
                     })
                     .collect()
             });
@@ -3142,11 +3170,18 @@ mod sha256_trace_cache_tests {
 
         // fallback parity: the cache-served read (r1) equals the per-read kernel (r3), value
         // for value, across the full (sparse, rotated_sparse, key_a, key_b) tuple
-        assert_eq!(r1, r3, "cache-served values must equal the per-read kernel's");
+        assert_eq!(
+            r1, r3,
+            "cache-served values must equal the per-read kernel's"
+        );
 
         // the served key_a slices must recombine to the key h_init[1] (slice widths 11/11/10)
         let key = r1[6] + r1[7] * Fr::from(1u64 << 11) + r1[8] * Fr::from(1u64 << 22);
-        assert_eq!(key, Fr::from(h_init[1]), "key_a slices must recombine to the key");
+        assert_eq!(
+            key,
+            Fr::from(h_init[1]),
+            "key_a slices must recombine to the key"
+        );
         // and key_b slices are zero
         assert_eq!(&r1[9..12], &[Fr::from(0u64); 3]);
 
