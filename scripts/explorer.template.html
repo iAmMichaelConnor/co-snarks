@@ -242,7 +242,7 @@ ul.clean li{margin:5px 0}
   single-prover baselines (<span class="mono">bb</span>, <span class="mono">plaindriver</span>) don't touch the
   network, so their bars stay flat as you move the nodes apart; the MPC bars grow with distance — that gap is the
   whole story. Compute floors are <span class="hl">measured</span>; the latency &amp; bandwidth added on top are
-  <span class="hl">modelled</span> from measured round-counts and byte-volumes, and pinned to measured netem anchors
+  <span class="hl">modelled</span> from measured round-counts and byte-volumes, and pinned to measured network-emulation anchors
   in the next section.</p>
 
   <div class="controls">
@@ -302,15 +302,15 @@ ul.clean li{margin:5px 0}
   <p class="lead">The single-machine numbers above hide the real question for a distributed deployment: how much
   does proving slow down as the three nodes move apart? Each <b>dashed line</b> is the <span class="hl">modelled</span>
   wall-clock of one REP3 phase as the round-trip time between nodes grows; each <b>dot</b> is <span class="hl">measured</span>
-  — we ran the real protocol on one host while <b>netem</b> (the Linux kernel <b>net</b>work <b>em</b>ulator,
-  <span class="mono">tc netem</span>) injected each preset's real latency and link speed onto the loopback
-  connection, with the round-trip ping-verified. Witness extension is round-bound, so it climbs steeply with
+  — we ran the real protocol on one host while the Linux kernel's <b>network emulator</b> (the
+  <span class="mono">tc</span> traffic-control tool) injected each preset's real latency and link speed onto the
+  loopback connection, with the round-trip ping-verified. Witness extension is round-bound, so it climbs steeply with
   distance; prove-proper is bandwidth-bound; proving-key generation sits between.</p>
   <div class="controls">
     <div class="ctl"><label>Circuit</label><select id="dist-circuit"></select></div>
   </div>
   <div class="chart"><div class="ct">REP3 phase wall-clock vs. round-trip time between nodes</div>
-    <div class="cs">both axes logarithmic · <b>dashed</b> = model · <b>●</b> = measured (netem) · <b>▲</b> = ran past the time cap (true point is higher) · faint vertical lines mark the four presets</div>
+    <div class="cs">both axes logarithmic · <b>dashed</b> = model · <b>●</b> = measured (network emulation) · <b>▲</b> = ran past the time cap (true point is higher) · faint vertical lines mark the four presets</div>
     <svg class="viz" id="dist-svg" viewBox="0 0 720 400" preserveAspectRatio="xMinYMin meet"></svg>
     <div class="legend" id="dist-legend"></div>
   </div>
@@ -489,7 +489,7 @@ ul.clean li{margin:5px 0}
       <div class="tablewrap" style="border:0"><table id="tier-table"></table></div>
       <div class="note">“Same continent” is the larger of a coast-to-coast US hop and a widest-Europe hop
       (measured cloud inter-region RTTs: US-east↔US-west ≈ 62 ms &gt; widest EU ≈ 35–50 ms), so it takes the
-      US figure. “Antipodal” ≈ London↔Sydney. netem shapes loopback, so RTT = 2 × the injected one-way delay;
+      US figure. “Antipodal” ≈ London↔Sydney. network emulation shapes loopback, so RTT = 2 × the injected one-way delay;
       each tier's delay was ping-verified.</div>
     </div>
     <div class="card">
@@ -710,8 +710,8 @@ function initDist(){
   sel.value=DIST.circuit; sel.onchange=e=>{DIST.circuit=e.target.value;drawDist();};
   drawDist();
 }
-function phaseMeasured(c,phase){ // gather measured netem points {rtt,seconds,censored}
-  const arr=(DATA.circuits[c].netem||{})[phase]||[];
+function phaseMeasured(c,phase){ // gather measured network-emulation points {rtt,seconds,censored}
+  const arr=(DATA.circuits[c].network_emulation||{})[phase]||[];
   return arr.filter(p=>p.seconds!=null||p.censored);
 }
 function drawDist(){
@@ -775,7 +775,7 @@ function drawDist(){
     el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
   $('#dist-legend').innerHTML=phases.map(p=>`<span class="it"><span class="sw line" style="background:${p.color}"></span>${p.label}</span>`).join('')
     +`<span class="it"><span class="sw line" style="background:var(--ink-2);opacity:.5"></span>dashed = modelled</span>`
-    +`<span class="it"><span class="sw" style="background:var(--ink-2);border-radius:50%;width:9px;height:9px"></span>● measured (netem)</span>`;
+    +`<span class="it"><span class="sw" style="background:var(--ink-2);border-radius:50%;width:9px;height:9px"></span>● measured (network emulation)</span>`;
   $('#dist-badge').textContent = meas.some(m=>m.pts.length)?'measured + modelled':'modelled only';
 }
 
@@ -1020,12 +1020,12 @@ function initStaticTables(){
     ['machine',(m.cpu_model||'?')+' · '+(m.cpu_cores_total||'?')+' cores · '+(m.rayon_threads_per_party||'?')+' threads/party'],
     ['nargo',m.nargo_version||'?'],
     ['loopback run',DATA.meta.full_run_dir||'?'],
-    ['netem runs',(DATA.meta.netem_runs||[]).map(r=>r.label+' ('+r.tiers.length+' tiers)').join(', ')||'—'],
+    ['network-emulation runs',(DATA.meta.network_emulation_runs||[]).map(r=>r.label+' ('+r.tiers.length+' tiers)').join(', ')||'—'],
     ['started',m.started_utc||'?'],
   ];
   $('#prov-table').innerHTML='<tbody>'+rows.map(r=>`<tr><td class="lab" style="font-family:var(--sans);color:var(--ink-2)">${r[0]}</td><td class="lab" style="text-align:left;font-size:11.5px">${r[1]}</td></tr>`).join('')+'</tbody>';
   // caveats
-  $('#caveats').innerHTML=`<b>Honest limits:</b> netem (the Linux network emulator) shapes a single loopback interface, so all parties' flows share one bandwidth cap — the <b>bandwidth</b> term is pessimistic vs. a real per-NIC link (the latency term is faithful). Censored (▲) cells exceeded the ${(DATA.meta.full_manifest||{}).cell_timeout_s?Math.round((DATA.meta.full_manifest.cell_timeout_s)/60)+'-minute':'time'} cap and are lower bounds. Security model is <b>semi-honest, honest-majority</b> REP3 — a malicious-secure variant would cost more (not measured here). Loopback matrix and measured distance anchors come from the same tree revision (see provenance).`;
+  $('#caveats').innerHTML=`<b>Honest limits:</b> the Linux network emulator shapes a single loopback interface, so all parties' flows share one bandwidth cap — the <b>bandwidth</b> term is pessimistic vs. a real per-NIC link (the latency term is faithful). Censored (▲) cells exceeded the ${(DATA.meta.full_manifest||{}).cell_timeout_s?Math.round((DATA.meta.full_manifest.cell_timeout_s)/60)+'-minute':'time'} cap and are lower bounds. Security model is <b>semi-honest, honest-majority</b> REP3 — a malicious-secure variant would cost more (not measured here). Loopback matrix and measured distance anchors come from the same tree revision (see provenance).`;
 }
 
 /* ================= util ================= */
@@ -1111,7 +1111,7 @@ function boot(){
   const m=DATA.meta.full_manifest||{};
   renderTiles();initExplorer();initDist();initMatrix();initComposition();initFamilyBars();initComms();
   initSweep();initStaticTables();initKSweep();
-  $('#foot').innerHTML=`co-SNARK UltraHonk performance explorer · data ingested from <span class="mono">${DATA.meta.full_run_dir||''}</span>${(DATA.meta.netem_runs||[]).length?' + netem '+(DATA.meta.netem_runs).map(r=>r.label).join('/'):''} · decision-support tool, not a benchmark of record · measured numbers badged, modelled numbers badged, censored numbers marked.`;
+  $('#foot').innerHTML=`co-SNARK UltraHonk performance explorer · data ingested from <span class="mono">${DATA.meta.full_run_dir||''}</span>${(DATA.meta.network_emulation_runs||[]).length?' + network-emulation '+(DATA.meta.network_emulation_runs).map(r=>r.label).join('/'):''} · decision-support tool, not a benchmark of record · measured numbers badged, modelled numbers badged, censored numbers marked.`;
 }
 boot();
 </script>

@@ -22,5 +22,5 @@ groth16_tester.rs
 ARTIFACTS.md
 bench-results/bench.sqlite
 
-# generated site output (source = scripts/explorer.template.html + scripts/build-explorer.sh)
-bench-results/site/
+# generated site output — lives inside each run dir (source = scripts/explorer.template.html + build-explorer.sh)
+bench-results/*/site/

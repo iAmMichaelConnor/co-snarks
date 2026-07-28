@@ -2,36 +2,37 @@
 # Build the co-SNARK UltraHonk performance explorer: one self-contained HTML file
 # (publishable as a Claude Artifact) from the in-repo bench data + page template.
 #
-#   scripts/build-explorer.sh [OUT_HTML]        # default: site/explorer.html
+#   scripts/build-explorer.sh [OUT_HTML]        # default: <run>/site/explorer.html
 #
 # The whole pipeline is in-repo (was previously only in ephemeral session scratchpad):
-#   scripts/bench-explorer-data.py   data ingest: bench-results/<dirs> -> site-data.json
+#   scripts/bench-explorer-data.py   data ingest: run subdirs -> site-data.json
 #   scripts/explorer.template.html   the page (HTML/CSS/JS) with a `/*__DATA__*/ null` slot
-#   bench-results/<...>              the measured datasets (override the dirs via env vars)
 #
-# Output lands next to the bench data it renders, in bench-results/site/
-# (a generated-artifact dir, gitignored):
-#   bench-results/site/site-data.json   the ingested data
-#   bench-results/site/explorer.html    the single self-contained page with that data inlined
-# Publish bench-results/site/explorer.html to the SAME artifact URL
+# A benchmark "run" is one directory holding every measurement type as subdirs:
+#   <run>/loopback-matrix/      the full loopback prover x circuit x zk matrix
+#   <run>/network-emulation/    the distance-tier sweep (tc network-emulation shaping)
+#   <run>/batch-size-sweep/     the batch-size-K sweep (k-sweep.csv)
+#   <run>/site/                 GENERATED explorer output (gitignored) — lives with its data
+# Point it at a different run by exporting RUN=... before calling.
+#
+# Publish <run>/site/explorer.html to the SAME artifact URL
 # (90d4bf98-8b70-4f9e-814b-5d07b20daefa) so the link Mike has stays stable.
-#
-# Point it at a newer run by exporting FULL / NETEM / KSWEEP before calling.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-FULL=${FULL:-bench-results/2026-07-27-v3.2-full}
-NETEM=${NETEM:-bench-results/2026-07-27-v3.2-netem}
-KSWEEP=${KSWEEP:-bench-results/2026-07-28-k-sweep/k-sweep.csv}   # a CSV file, not the dir
-OUTDIR=${OUTDIR:-bench-results/site}
+RUN=${RUN:-bench-results/2026-07-27-v3.2}
+LOOPBACK=${LOOPBACK:-$RUN/loopback-matrix}
+NETWORK_EMULATION=${NETWORK_EMULATION:-$RUN/network-emulation}
+BATCH_SWEEP=${BATCH_SWEEP:-$RUN/batch-size-sweep/k-sweep.csv}   # a CSV file, not the dir
+OUTDIR=${OUTDIR:-$RUN/site}
 OUT=${1:-$OUTDIR/explorer.html}
 DATA="$OUTDIR/site-data.json"
 mkdir -p "$OUTDIR" "$(dirname "$OUT")"
 
 python3 scripts/bench-explorer-data.py \
-  --full "$FULL" \
-  --netem "v32=$NETEM" \
-  --ksweep "$KSWEEP" \
+  --full "$LOOPBACK" \
+  --network-emulation "v32=$NETWORK_EMULATION" \
+  --ksweep "$BATCH_SWEEP" \
   -o "$DATA"
 
 python3 - "$DATA" "$OUT" <<'PY'

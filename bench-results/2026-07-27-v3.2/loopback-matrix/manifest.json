@@ -23,7 +23,7 @@
   "phase_timings": "v2.2: REP3/SHAMIR prove cells run with CO_NOIR_PHASE_TIMINGS=1; the co-ultrahonk [phase-timing] stderr lines (oink/sumcheck/pcs sub-phases) are captured per cell into phase-timings/*.json (not attributed to a party -- coarse, ~3x entries per phase name expected)",
   "tiers_csv": "v2.2: scripts/bench-tier-model.py (run by the launcher) turns the per-round byte histogram into a Local/LAN/WAN transfer-time estimate per phase, written to tiers.csv",
   "features": "per circuit JSONs in features/ (co-noir circuit-info, bb gates, nargo info)",
-  "network": "loopback (single host; distance/latency NOT measured here — tiers.csv is a MODEL, not a real-network measurement; see project-docs ch. 24 §3a for the netem v3 follow-up)",
+  "network": "loopback (single host; distance/latency NOT measured here — tiers.csv is a MODEL, not a real-network measurement; see project-docs ch. 24 §3a for the network-emulation v3 follow-up)",
   "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m (rc!=0 failed, rc=124 timeout, excluded from medians; max_rss_kb = peak RSS, max over the 3 parties for MPC cells; cpu_pct empty for MPC cells — per-party detail in mem/; host_load1m = HOST-wide 1-min loadavg at cell start — shared-mainframe noise context for the absolute seconds; SHAMIR rows add a 'translate' phase for the translate-witness step)",
   "extra_data": "mem/ per-party wall/RSS/CPU files (party skew); features/<c>.artifact-sizes.json proof/VK bytes"
 }

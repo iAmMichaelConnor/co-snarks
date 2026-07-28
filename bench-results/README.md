@@ -59,7 +59,7 @@ same-window ratios for fine comparisons. Leave ~20% of cores free
 | `features/*.bbgates.json`, `*.nargo-info.json` | independent cross-checks of size/opcode counts. |
 | `features/*.artifact-sizes.json` | proof / VK / public-input byte sizes per prover. |
 | `phase-timings/*.json` | added 2026-07-26 (v2.2). Per REP3/SHAMIR prove cell: every co-ultrahonk `[phase-timing]` line (oink/sumcheck/pcs sub-phases, `CO_NOIR_PHASE_TIMINGS=1`) captured from the cell's combined 3-party log into structured `{phase, seconds}` entries — NOT attributed to a single party (coarse; ~3 entries per phase name is expected). |
-| `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): THREE modeled transfer-time estimates that bracket reality. `est_pipelined_seconds` = `Σ_rounds max(RTT, bytes_r/bandwidth)` over the blocking-boundary histogram — OPTIMISTIC: at loopback independent messages pipeline, so blocking rounds undercount dependency depth (2^17 prove: 204 recv_msgs but only ~74 blocking rounds). `est_dependency_{lo,hi}_seconds` use `recv_msgs` (the validated round-depth proxy for today's serial protocol): lo = max(msgs·RTT, bytes/bw), hi = msgs·RTT + bytes/bw. True WAN cost for the current code lies in [lo, hi]; e.g. 2^17 pk-gen WAN ≈ 445 s of pure round latency (the ch. 24 §4 L8 lever). Plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). Models, not measurements — netem v3 validates. |
+| `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): THREE modeled transfer-time estimates that bracket reality. `est_pipelined_seconds` = `Σ_rounds max(RTT, bytes_r/bandwidth)` over the blocking-boundary histogram — OPTIMISTIC: at loopback independent messages pipeline, so blocking rounds undercount dependency depth (2^17 prove: 204 recv_msgs but only ~74 blocking rounds). `est_dependency_{lo,hi}_seconds` use `recv_msgs` (the validated round-depth proxy for today's serial protocol): lo = max(msgs·RTT, bytes/bw), hi = msgs·RTT + bytes/bw. True WAN cost for the current code lies in [lo, hi]; e.g. 2^17 pk-gen WAN ≈ 445 s of pure round latency (the ch. 24 §4 L8 lever). Plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). Models, not measurements — network emulation v3 validates. |
 | `RESULTS.md` | human-readable per-circuit tables (read this first). |
 | `site-anchors.json` | machine shape the explorer bakes in (nulls = unmeasured, never fabricated). |
 | `launcher.log` | progress lines with per-circuit estimate-vs-actual and suite ETA. |
@@ -224,7 +224,7 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
     in [lo, hi]). Sample output: 2^17 pk-gen WAN dep-bracket ≈ 445 s of
     pure round latency (= the ch. 24 §4 L8 lever), prove-proper WAN
     [32, 40] s (bandwidth-bound). This is a MODEL: no real network was
-    touched. Validate against netem before treating it as more than an
+    touched. Validate against network emulation before treating it as more than an
     order-of-magnitude guide (still queued, ch. 24 §3a "v3").
   - **Busy-vs-blocked wait split**: `blocked_recv_ms` per peer (summed to
     `total_blocked_recv_ms` per phase) in the same JSON — the same
@@ -245,7 +245,7 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
     `phase-timings/*.json` instead of living only in the `.log` files.
   - **Remains** (not done this pass): the round-counter size sweep
     beyond 2^11/2^17; wiring `tiers.csv`/`phase-timings/` into
-    `bench-ingest.py`/`bench.sqlite` and the explorer; a real netem v3
+    `bench-ingest.py`/`bench.sqlite` and the explorer; a real network emulation v3
     run to validate the tier model; widening the Shamir cells beyond
     the poseidon family; per-peer (rather than per-connection) sent-side
     byte histograms (this pass only tracks bytes RECEIVED per round).

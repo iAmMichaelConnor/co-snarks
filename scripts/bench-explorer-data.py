@@ -13,7 +13,7 @@ anchors), this ingests EVERYTHING the revised explorer tabulates:
     — netstats/*.json (network-independent: same rounds/bytes at any latency),
     with the pk-gen snapshot subtracted so prove-proper comms is isolated
   * proof / VK / public-input byte sizes — features/*.artifact-sizes.json
-  * MEASURED distance-tier wall-seconds from one or more netem runs, recorded
+  * MEASURED distance-tier wall-seconds from one or more network emulation runs, recorded
     as (rtt_ms, bw_mbps, seconds, censored) points so several runs coexist on
     the distance chart.
 
@@ -23,14 +23,14 @@ client-side from the measured rounds+bytes+loopback-compute; this file just
 supplies the measured inputs and the measured anchors.
 
 Usage:
-  bench-explorer-data.py --full <full_run_dir> [--netem v31=<dir>] [--netem v32=<dir>] [-o site-data.json]
+  bench-explorer-data.py --full <full_run_dir> [--network-emulation v31=<dir>] [--network-emulation v32=<dir>] [-o site-data.json]
 """
 import argparse, csv, json, os, re, statistics
 from collections import defaultdict
 
-# ---- distance-tier definitions (RTT ms, bandwidth Mbps) per known netem run.
-# netem shapes `lo`; a loopback RTT crosses it twice, so RTT = 2*delay.
-NETEM_TIERMAPS = {
+# ---- distance-tier definitions (RTT ms, bandwidth Mbps) per known network emulation run.
+# network emulation shapes `lo`; a loopback RTT crosses it twice, so RTT = 2*delay.
+NETWORK_EMULATION_TIERS = {
     # v3.1 (2026-07-27): the original 3 tiers.
     "v31": {
         "loopback": {"rtt_ms": 0.05, "bw_mbps": None},
@@ -232,12 +232,12 @@ def build_circuit(c, full_dir, results, psplit):
         "timings_loopback": timings,
         "memory_mb": memory,
         "comms": comms,
-        "netem": {},   # filled by ingest_netem
+        "network_emulation": {},   # filled by ingest_network_emulation
     }
 
 
-def ingest_netem(data, label, run_dir):
-    tmap = NETEM_TIERMAPS.get(label)
+def ingest_network_emulation(data, label, run_dir):
+    tmap = NETWORK_EMULATION_TIERS.get(label)
     if not tmap:
         return
     run_meta = {"label": label, "dir": run_dir, "tiers": []}
@@ -255,7 +255,7 @@ def ingest_netem(data, label, run_dir):
                     if (row.get("rc") or "").strip() == "124":
                         censored[(row["circuit"], row["phase"])] = True
         prov = None
-        pf = os.path.join(tdir, "NETEM-PROVENANCE.txt")
+        pf = os.path.join(tdir, "NETWORK-EMULATION-PROVENANCE.txt")
         if os.path.exists(pf):
             try:
                 with open(pf) as f:
@@ -270,7 +270,7 @@ def ingest_netem(data, label, run_dir):
                                   "bw_mbps": spec["bw_mbps"], "measured_ping_rtt_ms": prov})
         for c in data["circuits"]:
             def pt(phase, secs, cens):
-                data["circuits"][c]["netem"].setdefault(phase, []).append(
+                data["circuits"][c]["network_emulation"].setdefault(phase, []).append(
                     {"run": label, "tier": tier, "rtt_ms": spec["rtt_ms"],
                      "bw_mbps": spec["bw_mbps"], "seconds": secs, "censored": cens})
             w = med_or_none(res.get((c, "REP3", "-", "witext"), {}).get("secs", []))
@@ -283,13 +283,13 @@ def ingest_netem(data, label, run_dir):
             if sp:
                 pt("pkgen", sp[0], False)
                 pt("proveproper", sp[1], False)
-    data["meta"].setdefault("netem_runs", []).append(run_meta)
+    data["meta"].setdefault("network_emulation_runs", []).append(run_meta)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--full", required=True, help="loopback full-matrix run dir")
-    ap.add_argument("--netem", action="append", default=[],
+    ap.add_argument("--network-emulation", action="append", default=[],
                     help="label=dir  (label in {v31,v32})", metavar="L=DIR")
     ap.add_argument("--ksweep", default=None,
                     help="k-sweep.csv (batch size K vs wall/rounds/bytes/RSS)")
@@ -309,22 +309,22 @@ def main():
         "meta": {
             "full_run_dir": full,
             "full_manifest": manifest,
-            "tier_model": NETEM_TIERMAPS["v32"],
+            "tier_model": NETWORK_EMULATION_TIERS["v32"],
             "note": "loopback medians of rc==0 rows; comms rounds/bytes are "
                     "network-independent; distance tiers modelled client-side "
-                    "from these + measured netem anchors.",
+                    "from these + measured network emulation anchors.",
         },
         "circuits": {},
     }
     for c in circuits:
         data["circuits"][c] = build_circuit(c, full, results, psplit)
 
-    for spec in args.netem:
+    for spec in args.network_emulation:
         if "=" not in spec:
             continue
         label, d = spec.split("=", 1)
         if os.path.isdir(d):
-            ingest_netem(data, label, d)
+            ingest_network_emulation(data, label, d)
 
     # ---- k-sweep: batch size K vs wall / pk-gen rounds / bytes / peak RSS ----
     if args.ksweep and os.path.exists(args.ksweep):
@@ -350,7 +350,7 @@ def main():
     with open(args.out, "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print(f"wrote {args.out}: {len(circuits)} circuits, "
-          f"{len(data['meta'].get('netem_runs', []))} netem run(s)")
+          f"{len(data['meta'].get('network_emulation_runs', []))} network emulation run(s)")
 
 
 if __name__ == "__main__":
