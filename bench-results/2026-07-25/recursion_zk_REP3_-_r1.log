@@ -1,6 +1,0 @@
-[2m2026-07-25T12:10:59.985679Z[0m [32m INFO[0m Starting split input...
-[2m2026-07-25T12:10:59.986102Z[0m [32m INFO[0m Split input took 0.38 ms
-[2m2026-07-25T12:10:59.986323Z[0m [32m INFO[0m Wrote input share 0 to file test_vectors/recursion_zk/Prover.toml.0.shared
-[2m2026-07-25T12:10:59.986485Z[0m [32m INFO[0m Wrote input share 1 to file test_vectors/recursion_zk/Prover.toml.1.shared
-[2m2026-07-25T12:10:59.986716Z[0m [32m INFO[0m Wrote input share 2 to file test_vectors/recursion_zk/Prover.toml.2.shared
-[2m2026-07-25T12:10:59.986725Z[0m [32m INFO[0m Split input into shares successfully

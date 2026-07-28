@@ -1,6 +1,0 @@
-Scheme is: ultra_honk, num threads: 32 (mem: 4.62 MiB)
-CircuitProve: Proving key computed in 163 ms (mem: 62.65 MiB)
-Public inputs saved to "test_vectors/sha256_2e16/public_inputs" (mem: 95.27 MiB)
-Proof saved to "test_vectors/sha256_2e16/proof" (mem: 95.27 MiB)
-Scheme is: ultra_honk, num threads: 32 (mem: 4.57 MiB)
-Proof verified successfully (mem: 7.59 MiB)

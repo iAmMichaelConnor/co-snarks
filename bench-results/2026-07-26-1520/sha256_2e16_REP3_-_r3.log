@@ -1,6 +1,0 @@
-[2m2026-07-26T16:07:53.858982Z[0m [32m INFO[0m Starting split input...
-[2m2026-07-26T16:07:53.859038Z[0m [32m INFO[0m Split input took 0.02 ms
-[2m2026-07-26T16:07:53.859230Z[0m [32m INFO[0m Wrote input share 0 to file test_vectors/sha256_2e16/Prover.toml.0.shared
-[2m2026-07-26T16:07:53.859318Z[0m [32m INFO[0m Wrote input share 1 to file test_vectors/sha256_2e16/Prover.toml.1.shared
-[2m2026-07-26T16:07:53.859406Z[0m [32m INFO[0m Wrote input share 2 to file test_vectors/sha256_2e16/Prover.toml.2.shared
-[2m2026-07-26T16:07:53.859411Z[0m [32m INFO[0m Split input into shares successfully

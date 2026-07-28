@@ -1,1 +1,0 @@
-circuit,protocol,phase,zk,tier,bandwidth_mbps,rtt_ms,rounds,recv_msgs,recv_bytes,n_reps,est_pipelined_seconds,est_dependency_lo_seconds,est_dependency_hi_seconds

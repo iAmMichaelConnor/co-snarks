@@ -1,4 +1,0 @@
-Scheme is: ultra_honk, num threads: 32 (mem: 4.60 MiB)
-CircuitProve: Proving key computed in 39 ms (mem: 25.66 MiB)
-VK saved to "test_vectors/bb_sha256_compression/vk" (mem: 28.66 MiB)
-VK Hash saved to "test_vectors/bb_sha256_compression/vk_hash" (mem: 28.66 MiB)

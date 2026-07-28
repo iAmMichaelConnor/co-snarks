@@ -1,6 +1,0 @@
-Scheme is: ultra_honk, num threads: 32 (mem: 4.55 MiB)
-CircuitProve: Proving key computed in 1646 ms (mem: 890.80 MiB)
-Public inputs saved to "test_vectors/recursion_zk/public_inputs" (mem: 959.11 MiB)
-Proof saved to "test_vectors/recursion_zk/proof" (mem: 959.11 MiB)
-Scheme is: ultra_honk, num threads: 32 (mem: 4.57 MiB)
-Proof verified successfully (mem: 9.07 MiB)
