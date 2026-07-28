@@ -16,6 +16,17 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
+/// Default chunk size for the batched lookup read-count construction (shared-index
+/// lookup gates per one-hot-vector batch); see
+/// [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`]. ~1 MB/gate/party
+/// of transient one-hot-vector state was measured on sha256 under REP3, so 4096
+/// caps the pk-gen read-count peak at ~4 GB/party regardless of circuit size —
+/// safe on any host — while any circuit with < 4096 shared lookup gates still runs
+/// in a single batch (identical to the unbounded path). Every comms-bearing driver
+/// (REP3, Shamir) overrides the trait default to this value; single-prover/plain
+/// has no reshares, so batching is irrelevant there and it keeps `None`.
+pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
+
 /// A trait representing the MPC operations required for extending the secret-shared Noir witness in MPC.
 /// The operations are generic over public and private (i.e., secret-shared) inputs.
 pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
@@ -159,8 +170,12 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
     /// to ∝ `k` at the cost of ~`gates/k`× more rounds. The result (read counts and
     /// read tags) is byte-identical for every `k` — only the number of reshares, and
     /// hence the individual share splits, differ (the reconstructed values do not).
-    /// The default is `None`; the REP3 driver overrides it to a bounded value
-    /// (single-prover/plain has no reshares, so batching is irrelevant there).
+    /// The default is `None`; the REP3 and Shamir drivers override it to a bounded
+    /// value ([`DEFAULT_LOOKUP_READ_COUNT_BATCH`]) so a lookup-dense circuit cannot
+    /// OOM the host (single-prover/plain has no reshares, so batching is irrelevant
+    /// there and it keeps `None`). All parties in one proving session MUST use the
+    /// same value — the chunk count IS the reshare-round count, so a mismatch would
+    /// desync the parties' sends/receives.
     fn lookup_read_count_batch_size(&self) -> Option<usize> {
         None
     }

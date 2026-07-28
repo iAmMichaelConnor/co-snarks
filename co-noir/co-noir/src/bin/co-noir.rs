@@ -1489,6 +1489,7 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
                 witness_share,
                 &net0,
                 &prover_crs,
+                None, // build-proving-key: driver's bounded default batch size
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1810,6 +1811,7 @@ fn run_build_and_generate_proof(
                 witness_share,
                 &net0,
                 &prover_crs,
+                config.lookup_batch_size,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");

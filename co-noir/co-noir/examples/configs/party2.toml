@@ -1,7 +1,7 @@
 [network]
 my_id = 1
 bind_addr = "0.0.0.0:10001"
-max_frame_length = 34359738368
+max_frame_length = 469_762_056
 
 [[network.parties]]
 id = 0

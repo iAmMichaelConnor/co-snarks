@@ -3463,3 +3463,73 @@ OPEN for Mike: (a) commit the K fix (byte-identity fenced — fast-check --all-f
 witext/Shamir too + whether DEFAULT K should differ; (c) sha256_2^20 REP3 needs a
 >30-min budget to measure (compute-bound); (d) revert examples/configs frame bump
 (K now bounds frames, so the 32 GiB is belt-and-braces).
+
+## Session 22 — 2026-07-28
+
+**Committed yesterday's uncommitted work (Mike's ask), local only (push rail
+disabled).** Two commits on `mc/update-co-noir`:
+- `95557fb8` perf(co-builder): parametrised chunk size K for lookup read-count
+  batching (the OOM fix) + test callers + examples/configs frame bump + ch.15
+  design write-up.
+- `e8ee3112` data(bench): v3.2 full matrix + k-sweep + `bench-explorer-data.py`
+  ingest + PROGRESS.
+Left uncommitted deliberately: `rust-toolchain.toml` (dev-only `rust-analyzer`
+component add, not project work); `party*.toml.bak-preframe` backups (removed in
+this session — see (c)).
+
+**Answered Mike's clarifying questions (recorded here for future sessions):**
+- **Config surface / did we mess up making K a trait method?** No. K is layered:
+  `--lookup-batch-size` CLI flag (operator-facing, matches the other 86 clap
+  flags) → `generate_proving_key_{rep3,shamir}(…, lookup_batch_size)` → driver
+  setter → trait method (the *default-policy* layer). Env vars in this codebase
+  are reserved for diagnostics only (`CO_NOIR_PHASE_TIMINGS`, `…_NET_STATS_JSON`,
+  `CO_NOIR_WITEXT_LEVELS`) — so an env var for K would break convention. TOML
+  (figment) = per-party topology; consts/generics = compile-time. CLI-flag +
+  trait-default is the idiomatic choice here.
+- **"frame bump redundant":** the unbounded batch produced one ~8.6 GB TCP frame
+  (> the 448 MB `max_frame_length`), so we'd raised the cap to 32 GiB. K now
+  bounds frames to ~350 MB at default, so the original cap works again — reverted
+  in (c).
+- **"K trades memory vs WAN rounds, not time":** k-sweep showed loopback wall is
+  ~flat in K (compute-bound; round-trips ~free on loopback). Smaller K = more
+  reshare rounds = slower only over a WAN. So K trades peak memory ∝ K against WAN
+  round-count, not loopback time.
+- **"no v4 dir":** naming slip — "v4" was the *run* (scripts/tmux `v4bench`); the
+  data was merged into `bench-results/2026-07-27-v3.2-full` per the one-dir rule.
+  The "complete fresh v4 dataset" IS that dir. Stopped using "v4" as a label.
+- **Per-request K:** already supported — `--lookup-batch-size` is per-invocation,
+  so an orchestrator or the nodes can pick K per request/circuit/circumstance.
+  CORRECTNESS CAVEAT (now in the trait doc): all parties in ONE proving session
+  must use the SAME K — chunk count = reshare-round count, so a mismatch desyncs
+  the parties. K can vary freely across different proofs.
+
+**Did (b) + (c) on Mike's direction; did NOT do (d) (sha256_2^20 stays honestly
+unmeasured per the 30-min cap — it's compute-bound, larger K would not help).**
+
+- **(b) Bounded batching extended to the Shamir driver.** Centralised
+  `DEFAULT_LOOKUP_READ_COUNT_BATCH = 4096` into `co-acvm/src/mpc.rs` (next to the
+  trait method; rep3.rs now imports it); added the field + setter + trait override
+  to `ShamirAcvmSolver`; threaded `lookup_batch_size` through
+  `generate_proving_key_shamir` + both co-noir.rs Shamir call sites + the shamir
+  test caller. **KEY FINDING while doing this:** Shamir's
+  `one_hot_vector_from_shared_index_many` PANICS on any non-empty batch
+  ("Operation atm not supported", shamir.rs) — i.e. **Shamir cannot prove
+  lookup-dense circuits at all today** (that's why Shamir sha cells are `—` in the
+  bench). So the Shamir OOM is NOT currently reachable, and (b) is
+  DEFENSIVE/forward-looking, not a live-bug fix: it means the memory bound + CLI
+  override are already in place for when Shamir shared-lookup support lands. Code
+  comments corrected to say exactly this (no over-claiming a "Shamir OOM cure").
+  witext bounding (the other half of the first clause) NOT done — witext U2 is an
+  on/off bool, not the OOM path; left as a fast-follow.
+- **(c) Reverted the examples/configs frame cap** 32 GiB → original `469_762_056`
+  (~448 MB) in all three `party*.toml`, and removed the `.bak-preframe` backups. K
+  keeps frames ~350 MB at default, so the original cap works and restores the
+  anti-DoS purpose of the limit.
+
+VERIFY: `cargo check --workspace --tests` clean; `fast-check.sh --all-fast`
+(result recorded at commit time). Small lookup circuits (< 4096 gates) are
+single-chunk, so behaviour is unchanged; REP3 multi-chunk byte-identity was
+already proven session 21 (bb_sha256_compression K=4096/512/64/∞ all identical).
+
+**Site:** top-of-file Quick link updated to the current v3.2 dataset + K-slider
+(same URL 90d4bf98). Will keep that line current on every republish (Mike's ask).

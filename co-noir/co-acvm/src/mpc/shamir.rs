@@ -1,4 +1,4 @@
-use super::{NoirWitnessExtensionProtocol, plain::PlainAcvmSolver};
+use super::{DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, plain::PlainAcvmSolver};
 use ark_ec::CurveGroup;
 use ark_ff::{One, PrimeField};
 use co_brillig::mpc::{ShamirBrilligDriver, ShamirBrilligType};
@@ -26,6 +26,19 @@ pub struct ShamirAcvmSolver<'a, F: PrimeField, N: Network> {
     net: &'a N,
     state: ShamirState<F>,
     plain_solver: PlainAcvmSolver<F>,
+    /// Chunk size for batched lookup read-count one-hot-vector materialisation;
+    /// see [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`]. Bounded
+    /// by default ([`DEFAULT_LOOKUP_READ_COUNT_BATCH`]); set via
+    /// [`Self::set_lookup_read_count_batch_size`] (`--lookup-batch-size` on the
+    /// co-noir binary).
+    ///
+    /// NOTE this is currently DEFENSIVE/forward-looking: Shamir does not yet
+    /// support shared lookup indices at all (`one_hot_vector_from_shared_index_many`
+    /// panics on a non-empty batch), so lookup-dense Shamir proving — and hence the
+    /// OOM this bounds on REP3 — is not reachable today. It is wired up now so that
+    /// when Shamir lookup support lands, the pk-gen memory bound and the
+    /// `--lookup-batch-size` override are already in place, identically to REP3.
+    lookup_read_count_batch_size: Option<usize>,
     phantom_data: PhantomData<F>,
 }
 
@@ -36,8 +49,18 @@ impl<'a, F: PrimeField, N: Network> ShamirAcvmSolver<'a, F, N> {
             net,
             state,
             plain_solver: PlainAcvmSolver::default(),
+            lookup_read_count_batch_size: Some(DEFAULT_LOOKUP_READ_COUNT_BATCH),
             phantom_data: PhantomData,
         }
+    }
+
+    /// Override the lookup read-count batch size — the number of shared-index
+    /// lookup gates whose one-hot vectors are materialised together in one batch.
+    /// `Some(k)` bounds peak pk-gen memory to ∝ `k`; `None` = unbounded (all gates
+    /// at once — fewest rounds, but OOMs on lookup-dense circuits, so only use it
+    /// when host memory is known to be ample). Byte-identical for every value.
+    pub fn set_lookup_read_count_batch_size(&mut self, k: Option<usize>) {
+        self.lookup_read_count_batch_size = k;
     }
 }
 
@@ -175,6 +198,16 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for ShamirAc
         // TODO we just copy the net ref here this is not safe if used concurrently
         // TODO maybe take corr rand pairs here?
         Ok(ShamirBrilligDriver::new(self.net, self.state.fork(0)?))
+    }
+
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        // Bounded by default, mirroring REP3, so that IF Shamir gains shared-lookup
+        // support the pk-gen read-count peak is memory-safe out of the box. Today
+        // this is defensive only: `one_hot_vector_from_shared_index_many` panics on
+        // a non-empty batch, so a lookup-dense Shamir circuit cannot even reach the
+        // materialisation this bounds. Overridden per-run by `--lookup-batch-size`
+        // (see co-noir bin); `Some(0)` there means unbounded.
+        self.lookup_read_count_batch_size
     }
 
     fn parse_brillig_result(

@@ -1,5 +1,5 @@
 use super::plain::PlainAcvmSolver;
-use super::{NoirWitnessExtensionProtocol, downcast};
+use super::{DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, downcast};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
@@ -37,13 +37,6 @@ use std::marker::PhantomData;
 use std::ops::BitXor;
 
 type ArithmeticShare<F> = Rep3PrimeFieldShare<F>;
-
-/// Default lookup read-count batch size (shared-index gates per one-hot-vector
-/// batch). ~1 MB/gate/party of transient OHV state was measured on sha256, so
-/// 4096 caps the pk-gen read-count peak at ~4 GB/party regardless of circuit
-/// size — safe on any host — while leaving every circuit with < 4096 shared
-/// lookup gates a single batch (identical to the unbounded path).
-pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
 
 pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     id: PartyID,

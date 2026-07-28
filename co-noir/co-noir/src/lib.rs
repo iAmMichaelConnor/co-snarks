@@ -266,12 +266,20 @@ pub fn generate_proving_key_shamir<N: Network>(
     witness_share: ShamirSharedWitness<ark_bn254::Fr>,
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
 ) -> Result<ShamirProvingKey<Bn254G1>> {
     let id = net.id();
     // We have to handle precomputation on the fly, so amount is 0 initially
     let preprocessing = ShamirPreprocessing::new(num_parties, threshold, 0, net)?;
     let state = ShamirState::from(preprocessing);
     let mut driver = ShamirAcvmSolver::new(net, state);
+    // Override the lookup read-count batch size if requested: `None` keeps the
+    // driver's bounded default; `Some(0)` = unbounded (all gates in one batch —
+    // fewest rounds but can OOM on lookup-dense circuits); `Some(k)` = k gates per
+    // batch (peak memory ∝ k). Byte-identical for any value.
+    if let Some(k) = lookup_batch_size {
+        driver.set_lookup_read_count_batch_size((k != 0).then_some(k));
+    }
     let witness_share = witness_share
         .into_iter()
         .map(ShamirAcvmType::from)
