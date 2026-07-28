@@ -1,0 +1,12 @@
+=== bench v3.2 tier: antipodal (2026-07-28T03:10:00+00:00) ===
+netem: delay=125ms rate=100mbit (loopback RTT = 2 x delay)
+tree: 65d2ac86c53953ced69aeedfef1af9cc715260c6  RAYON_NUM_THREADS=51
+host load1m at tier start: 27.72
+--- tc qdisc show dev lo ---
+qdisc netem 800d: root refcnt 2 limit 1000 delay 125ms rate 100Mbit
+--- ping -c4 127.0.0.1 (RTT check) ---
+--- 127.0.0.1 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3002ms
+rtt min/avg/max/mdev = 250.075/250.086/250.103/0.010 ms
+--- after tier antipodal, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 

@@ -1,0 +1,12 @@
+=== bench v3.2 tier: same-machine (2026-07-28T02:25:01+00:00) ===
+netem: delay=none rate=none (loopback RTT = 2 x delay)
+tree: 65d2ac86c53953ced69aeedfef1af9cc715260c6  RAYON_NUM_THREADS=51
+host load1m at tier start: 25.01
+--- tc qdisc show dev lo ---
+qdisc noqueue 0: root refcnt 2 
+--- ping -c4 127.0.0.1 (RTT check) ---
+--- 127.0.0.1 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3086ms
+rtt min/avg/max/mdev = 0.032/0.045/0.057/0.009 ms
+--- after tier same-machine, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 

@@ -1,0 +1,26 @@
+{
+  "acir_opcodes": 477,
+  "blocks": {
+    "arithmetic": 1403,
+    "delta_range": 0,
+    "elliptic": 0,
+    "lookup": 0,
+    "memory": 0,
+    "nnf": 0,
+    "poseidon2_external": 0,
+    "poseidon2_internal": 0,
+    "pub_inputs": 9
+  },
+  "circuit": "test_vectors/poseidon/target/poseidon.json",
+  "dyadic_size": 2048,
+  "finalized_rows": 1412,
+  "lookup_gates": 0,
+  "num_lookup_tables": 0,
+  "opcode_histogram": {
+    "AssertZero": 477
+  },
+  "public_inputs": 9,
+  "total_table_rows": 0,
+  "witness_len": 1808,
+  "witness_zero_fraction": 0.7323008849557522
+}

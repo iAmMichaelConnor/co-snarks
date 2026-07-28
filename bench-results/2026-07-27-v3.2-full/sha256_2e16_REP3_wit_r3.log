@@ -1,0 +1,12 @@
+[2m2026-07-27T19:39:32.763862Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-27T19:39:32.763866Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-27T19:39:32.764169Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-27T19:39:34.183096Z[0m [32m INFO[0m Generate witness took 1419.181 ms
+[2m2026-07-27T19:39:34.183109Z[0m [32m INFO[0m Generate witness took 1418.899 ms
+[2m2026-07-27T19:39:34.183121Z[0m [32m INFO[0m Generate witness took 1419.207 ms
+[2m2026-07-27T19:39:34.183372Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/sha256_2e16_REP3_witext_r3_p0.json
+[2m2026-07-27T19:39:34.183445Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/sha256_2e16_REP3_witext_r3_p2.json
+[2m2026-07-27T19:39:34.183505Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/sha256_2e16_REP3_witext_r3_p1.json
+[2m2026-07-27T19:39:34.183640Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e16/sha256_2e16.gz.0.shared
+[2m2026-07-27T19:39:34.183718Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e16/sha256_2e16.gz.2.shared
+[2m2026-07-27T19:39:34.183773Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e16/sha256_2e16.gz.1.shared

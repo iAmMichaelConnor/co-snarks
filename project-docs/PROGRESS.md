@@ -3,7 +3,10 @@
 Append-only, newest session last. Each entry: date, what was done, decisions,
 open questions, next steps.
 
-**Quick link — benchmark explorer (live site, v2 dataset 2026-07-25):**
+**Quick link — benchmark explorer (live site).** Updated to the current
+dataset each time it is republished (same URL); last published 2026-07-28
+with the full v3.2 dataset (12 circuits loopback + 4 measured netem tiers +
+the batch-size-K slider):
 <https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>
 
 ## Session 1 — 2026-07-08
@@ -3253,3 +3256,210 @@ the "optimisation might be worse for most cases" worry. U2 committed (ae9f2ff2).
 NEXT: netem re-bench (measure U2 witext WAN win + L2-1b sha vs v3) → explorer
 re-bake. Push to fork = PARKED pending Mike's confidentiality decision (what/where
 + private-repo-derived content clearance; KATs are private-bb-derived).
+
+## Session 21 (2026-07-27) — comprehensive explorer site + v3.2 bench + OOM finding + parametrised-K plan
+
+Mike's ask: an HTML site tabulating ALL benchmark data for every permutation
+(circuit × prover × zk × node-distance), folded into the existing explorer;
+run the bench suite fresh (Sonnet agent nursing); add an "antipodal" distance
+tier; "same continent" = larger of cross-US / cross-EU latency.
+
+### DONE — site (published, interim data)
+- **New ingest `scripts/bench-explorer-data.py`** (superset of bench-to-site.py):
+  emits one embeddable `site-data.json` with per-circuit features (gate-block
+  composition, lookups, opcode histogram, witness sparsity), loopback median
+  timings per (proto,zk,phase), pk-gen/prove split, peak RSS, comms structure
+  (rounds+bytes, network-independent) with pk-gen snapshot subtracted, artifact
+  sizes, and MEASURED netem tier points. Usage:
+  `bench-explorer-data.py --full <dir> [--netem v31=<dir>] [--netem v32=<dir>] -o site-data.json`.
+- **Explorer fully revised + republished (SAME url)**:
+  https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa
+  Source in session scratchpad `.../8082b761-.../scratchpad/site/`:
+  `explorer.template.html` (has `/*__DATA__*/` placeholder) + build step injects
+  `site-data.json` → `explorer.html`. Sections: correctness banner, interactive
+  cost explorer (4 distance tiers + custom-RTT slider), distance-sensitivity
+  chart (measured netem anchors + censored ▲), full timing matrix, circuit
+  composition table + gate-block stack, comms table, size-sweep + overhead
+  charts, assumptions/provenance. Hand-rolled inline SVG (Artifact CSP), theme-
+  aware, validated headless (all 12 circuits × states render clean).
+- **4 distance tiers** (`NETEM_TIERMAPS` in ingest; netem driver shapes `lo`,
+  RTT=2×delay): same-machine ~0.05ms/unshaped · same-rack ~0.2ms/10Gbps ·
+  same-continent ~60ms/1Gbps (= cross-US ≈62ms > widest-EU ≈35–50ms) ·
+  antipodal ~250ms/100Mbps (London↔Sydney).
+- Interim bake uses 07-26-1520 full matrix + v3.1 netem (labelled; pre/post-lever
+  mismatch noted in-page). Re-bake with v3.2 pending (below).
+
+### v3.2 benchmark (fresh, current tree 65d2ac86)
+- Scripts in scratchpad `.../8082b761-.../scratchpad/bench/`: `orchestrate.sh`
+  (full matrix → netem), `run-netem-tiers.sh` (4-tier sweep, over-budget
+  pre-skip so no cell is RUN that could only time out), `resume.sh` (guarded
+  idempotent continuation). Settings after Mike's asks: **51 threads/party**
+  (~80% of 192 cores), **CELL_TIMEOUT=1800 (30 min)** — Mike: no "we hit the
+  timeout" measurements; **max_frame_length raised to 32 GiB** in
+  `co-noir/co-noir/examples/configs/party*.toml` (backups `*.bak-preframe`).
+- **Completed + on disk in `bench-results/2026-07-27-v3.2-full/`**: all 5 poseidon
+  sizes, bb_sha256_compression, sha256_2e16, sha256_2e17 (FULL: bb/plaindriver/
+  REP3/Shamir × zk/nonzk). No timeouts. Frame fix confirmed (sha256_2e16 REP3
+  rc=0). `-full-cont` = scratch staging (to be merged+deleted; Mike wants ONE dir).
+- **NOT yet run**: sha256_2e18/2e19/2e20 (REP3/Shamir OOM — see below), recursion_zk,
+  the whole netem sweep.
+
+### KEY FINDINGS (both trace to the L2-1b batching lever, commit 6941f132)
+1. **Frame-size**: L2-1b batches sha pk-gen read-counts into few huge messages →
+   a single ~8.6 GB frame at sha256_2^20 (~0.5 GB already at 2^16), blew the
+   448 MB default `max_frame_length`. u64 length prefix (blocking.rs:214) → no
+   wire ceiling; raised cap to 32 GiB. Passed pre-lever (data was many small msgs).
+2. **MEMORY OOM (the big one)**: same unbounded batching materialises EVERY lookup
+   one-hot-vector at once → REP3 pk-gen peak RSS ∝ (lookup gates × table size) × 3
+   parties. Measured: sha256_2^16 fits; **sha256_2^17 = 88.1 GB/party (×3 ≈ 264 GB,
+   just fit under the 384 GiB container cap)**; sha256_2^18 ≈ 176 GB/party (×3 ≈
+   528 GB) → **cgroup OOM-kill** (`memory.events oom_kill=2`). BOTH v3.2 runs died
+   at sha256_2^18 REP3 pk-gen; the container-wide OOM also culled the Claude Code
+   shell + tmux session BOTH times (Mike's `co-snarks` tmux session vanished —
+   initially MIS-DIAGNOSED as a harness session-recycle; corrected via
+   memory.peak=cap + oom_kill=2). Non-lookup circuits (poseidon, recursion_zk =
+   0 lookup gates) unaffected. **⇒ sha ≥ 2^18 REP3/Shamir is currently
+   UN-PROVABLE on a 384 GB box.** (Box: 24d uptime, no reboot; tmux server alive.)
+3. Verdict: the batching was good DIRECTIONALLY (WAN round collapse: witext 2^17
+   ≥600→363s, sha pk-gen ≥600→175s) but UNBOUNDED. Backlog ch.15 §3-additions
+   (2026-07-27) has the full write-up incl. the confirmed memory data.
+
+### APPROVED PLAN (Mike said "yes, implement, make K parametrised") — IN PROGRESS, task #6
+Implement a **parametrised chunk size K** in `construct_lookup_read_counts`
+(`co-noir/co-builder/src/keys/plain_proving_key.rs`): process shared-index gates
+in chunks of K — per chunk convert K indices→OHVs
+(`one_hot_vector_from_shared_index_many`→`ohv_many`, mpc-core rep3_ring/gadgets/
+ohv.rs + lut_field.rs), add read-counts locally, fold complements into a per-table
+running product for tags (replaces the global OR-tree `compute_read_tags_or_tree`);
+free chunk. **Memory ∝ K, rounds ∝ N/K, bytes unchanged, K=∞ = today's behaviour,
+proof byte-identical for all K** (Case-2: shares differ, reconstructed values
+identical). Config: thread `read_count_batch_k` param sourced from env
+`CO_NOIR_LOOKUP_BATCH_K` (bounded default; 0=unbounded) — **awaiting Mike's final
+nod on config surface (env-var+bounded-default recommended vs config-struct/CLI
+flag)**. VERIFY: proof KATs + live-bb via fast-check.sh (must stay green); the
+read-count referee (serial vs chunked); RE-PIN the comms-count fences
+(`rep3_prove_comms_fence`, pk-gen msg/byte pins in tests/tests/noir/proof_tests/
+rep3.rs) which legitimately change with K. (witext U2 already has an on/off bool
+`use_level_batched_witext()`; parametrising its chunk size is a fast-follow, not
+the OOM blocker.) NO COMMITS (standing rule).
+
+### THEN (tasks #5,#7,#8)
+- Re-run sha256_2e18/2e19/2e20 REP3/Shamir (now bounded via K) + recursion_zk +
+  big-sha bb/plaindriver baselines; MERGE all into `bench-results/2026-07-27-v3.2-full`,
+  DELETE `-full-cont` (Mike: no split dirs); regenerate RESULTS.md/site-anchors.json.
+- Run the netem 4-tier sweep (memory-safe: only poseidon + bb_sha256).
+- K-sweep bench (sha at several K: wall / rounds / bytes / peak RSS) → add a
+  K-tradeoff slider to the explorer (Mike's idea: proving time + up/down bytes +
+  memory vs K). Then ingest v3.2 + re-bake + republish same URL.
+
+### OPS NOTE (robustness)
+Detached (`setsid`) and even tmux-hosted jobs died BOTH times — but the cause was
+the OOM culling the whole container, NOT a normal recycle. So the real fix for
+long jobs is the K memory bound, not the launch mechanism. Bench currently STOPPED
+(nothing running, no OOM). Resume via the guarded `resume.sh` (skips done work) —
+but do NOT re-run sha≥2^18 REP3 until K lands, or it OOMs the box a third time.
+
+### Session 21 (cont.) — parametrised K IMPLEMENTED (uncommitted), fast-check GREEN
+Landed the parametrised chunk size K for lookup read-count batching (task #6).
+Files changed (all UNCOMMITTED):
+- `co-noir/co-acvm/src/mpc.rs`: new trait method `lookup_read_count_batch_size(&self)
+  -> Option<usize>` (default `None` = unbounded).
+- `co-noir/co-acvm/src/mpc/rep3.rs`: `DEFAULT_LOOKUP_READ_COUNT_BATCH = 4096` const;
+  new struct field + `set_lookup_read_count_batch_size()` setter; REP3 overrides the
+  trait method to return the field (default `Some(4096)`).
+- `co-noir/co-builder/src/keys/plain_proving_key.rs`: rewrote
+  `construct_lookup_read_counts` to process shared-index gates in chunks of K —
+  per-chunk OHV conversion + local read-count adds + a per-table running tag-product
+  carried across chunks; extracted the batched OR-tree into
+  `batched_elementwise_product`. `K=None` (or K ≥ gate count) = one chunk = the old
+  all-at-once behaviour exactly (byte-identical); `Some(k)` bounds peak memory ∝ k.
+  (backup: scratchpad `plain_proving_key.rs.bak`.)
+- `co-noir/co-noir/src/lib.rs`: `generate_proving_key_rep3` gained a
+  `lookup_batch_size: Option<usize>` param (None=driver default, Some(0)=unbounded,
+  Some(k)=k). Both bin call sites + all 10 test callers updated.
+- `co-noir/co-noir/src/bin/co-noir.rs`: `--lookup-batch-size` flag on
+  `build-and-generate-proof` (Cli+Config+wiring), programmatic (NOT an env var).
+VERIFY status: `fast-check --all-fast --bb-mpc` GREEN incl. the `blackbox_and`
+lookup-circuit comms fence + REP3-vs-real-bb poseidon byte-identity (small lookup
+circuits < 4096 gates are one-chunk ⇒ unchanged). Chunked-path byte-identity on a
+real >1-chunk sha circuit (prove bb_sha256_compression non-ZK at K=default/512/64/
+unbounded, assert all proofs byte-identical) = **running in scratchpad ktest.sh**
+(check `.../scratchpad/ktest/RESULT.txt` for `KTEST_DONE` + IDENTICAL lines).
+NEXT once that confirms: re-run the OOMing cells (sha≥2^18 REP3/Shamir now safe at
+default K=4096) — a v4 bench nursed by a sonnet agent, but **only lookup-heavy sha
+circuits were ever at risk; NEVER run K=0/unbounded on sha ≥ 2^18** (that reproduces
+the OOM). Then K-sweep (sha at several K: wall/rounds/bytes/RSS) + site K-slider,
+merge -cont into -full, delete -cont, re-bake + republish. Default K=4096 makes an
+un-tuned run safe. Comms fences are now K-dependent for >4096-gate circuits (none
+fenced today).
+
+### Session 21 (cont.) — K byte-identity CONFIRMED; OOM-fix validation running
+Chunked-path byte-identity PROVEN: `bb_sha256_compression` non-ZK REP3 proved at
+K=default(4096, 1 chunk) / 512 (6 chunks) / 64 (46 chunks) / 0 (unbounded) →
+ALL FOUR proofs byte-for-byte IDENTICAL (13120 bytes). So chunked == unbounded ==
+original == bb (compare_mpc.sh passed pre-change). Also observed: frame size scales
+with K (249 MB @1 chunk → 82 MB @K512 → <64 MB @K64), so K bounds BOTH memory AND
+frame size — default K=4096 keeps even sha256_2^20 chunks to ~350 MB (the 32 GiB
+`examples/configs` frame bump is now belt-and-braces, could revert to a modest cap).
+Task #6 core DONE + verified. Validating the OOM cure on the actual killer cell
+(sha256_2^18 REP3 pk-gen+prove at K=512, 250 GB RSS watchdog so it can't crash the
+container again) — scratchpad `validate_2e18.sh`, result in
+`.../scratchpad/val2e18/RESULT.txt` (`VAL2E18_DONE`).
+
+### Session 21 (cont.) — OOM FIX VALIDATED (~170× memory cut); v4 bench launched
+sha256_2^18 REP3 pk-gen at K=512 ran at **~1 GB/party, peak 8.6 GB summed across 3
+parties** — vs the ~176 GB/party (528 GB) that OOM-killed the box at unbounded K.
+oom_kill stayed 2 (NO new OOM). **~170× memory reduction; OOM definitively fixed.**
+Memory is chunk-bounded independent of circuit size (a sha256_2^20 chunk = same
+~8 GB peak as 2^18 at a given K). Task #6 DONE. (K=512 is slow — ~4400 rounds — so
+the bench uses the default K=4096: ~46 chunks for 2^18, fast + ~8 GB/party.)
+NEXT/RUNNING: v4 bench `scratchpad/bench/v4-run.sh` (tmux `v4bench`) re-runs the
+missing/OOMed cells — sha256_2e18/2e19/2e20 + recursion_zk, all protocols, default
+K, 51 threads, 1800s, plus a GLOBAL 300 GB RSS watchdog that kills a cell before
+the 384 GB cap (so a surprise can't crash the container). Then merges into
+`bench-results/2026-07-27-v3.2-full`, DELETES the -cont staging dirs (Mike: one
+dir), and runs the netem 4-tier sweep (own dir). Guarded by sentinels in
+`v4-master.log` (V4_FULL_DONE / V4_NETEM_DONE / V4_ALL_DONE) so a relaunch resumes.
+THEN: K-sweep + site K-slider, ingest v4 → re-bake + republish same URL.
+
+### Session 21 (cont.) — v4 FULL MATRIX COMPLETE, no OOM in production
+V4_FULL_DONE (02:25 UTC 2026-07-28): all 12 circuits merged into the single
+`bench-results/2026-07-27-v3.2-full`; staging dirs deleted (Mike: one dir).
+**oom_kill stayed 2 through the entire run — the K fix held in production.** Big-sha
+REP3 prove peak RSS (max-of-3-parties, was 176+ GB/party OOM at unbounded):
+sha256_2^18 = 17.3 GB (rc=0, ~600 s) · 2^19 = 21.7 GB (rc=0, ~1250 s) ·
+2^20 = 22.5 GB (memory FINE) — chunk-bounded ~constant in circuit size, as designed.
+**One gap:** sha256_2^20 REP3 prove rc=124 (TIMEOUT @1800 s), NOT memory — at
+K=4096 that circuit is ~2200 sequential rounds and the per-round overhead × 2^20
+compute exceeds 30 min even on loopback (the 2 sha256_2^20 REP3 verify rc=1 are
+downstream of the missing proof). This is a real K-tradeoff finding: too-small K
+adds round overhead that hurts huge circuits on loopback. RECOVERABLE at larger K
+(e.g. K=16384 → ~550 rounds, memory ~40 GB/party still safe) — TODO: targeted
+sha256_2^20 REP3 re-run at K≈16384 to fill it, and consider whether the DEFAULT K
+should be larger (memory ∝ K; 4096 was the conservative choice). netem 4-tier sweep
+RUNNING (poseidon+bb_sha256 only, memory-safe). After V4_ALL_DONE: sha256_2^20
+recovery + K-sweep (`scratchpad/bench/k-sweep.sh`, ready) + site K-slider + re-bake.
+
+### Session 21 (cont.) — COMPLETE: site republished w/ v4 data + K-slider; K-sweep result
+All tasks done. Site republished (same URL 90d4bf98) with the complete v4 dataset
+(12 circuits loopback + 4 measured netem tiers) AND a new "Batch-size dial K"
+section/slider. **K-sweep result (sha256_2e16, all rc=0, no OOM):**
+K=64: 110 s / 23612 rounds / 1.6 GB · K=256: 140 s / 13945 / 1.8 GB ·
+K=1024: 150 s / 10801 / 3.4 GB · K=4096: 147 s / 9509 / 8.3 GB ·
+K=16384: 150 s / 9530 / 16.2 GB · K=∞: 149 s / 9459 / 34.3 GB. KEY INSIGHT:
+**memory ∝ K, rounds fall with K, but LOOPBACK WALL IS ~FLAT in K** (compute-bound;
+even slightly faster at small K). So K trades peak memory vs WAN rounds, NOT vs
+loopback time. This corrects the earlier sha256_2^20 hypothesis: sha256_2^20 REP3
+prove timed out because it's compute-bound (>30 min at ANY K), not round overhead —
+so it stays honestly UNMEASURED (Mike's 30-min cap); larger-K recovery would NOT
+help and was dropped. Data dirs (untracked): bench-results/2026-07-27-v3.2-full
+(12 circuits), -v3.2-netem (4 tiers), 2026-07-28-k-sweep. Uncommitted code: the K
+fix (mpc.rs trait method, rep3.rs field+setter+DEFAULT=4096, plain_proving_key.rs
+chunked construct_lookup_read_counts + batched_elementwise_product, lib.rs +
+co-noir.rs --lookup-batch-size, 10 test callers), examples/configs frame→32GiB
+(+ .bak-preframe backups), scripts/bench-explorer-data.py (new ingest). NO COMMITS.
+OPEN for Mike: (a) commit the K fix (byte-identity fenced — fast-check --all-fast
+--bb-mpc green + 4-way proof-identical); (b) consider promoting bounded batching to
+witext/Shamir too + whether DEFAULT K should differ; (c) sha256_2^20 REP3 needs a
+>30-min budget to measure (compute-bound); (d) revert examples/configs frame bump
+(K now bounds frames, so the 32 GiB is belt-and-braces).

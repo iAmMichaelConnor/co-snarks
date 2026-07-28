@@ -1,0 +1,12 @@
+[2m2026-07-28T02:33:38.254564Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:33:38.254614Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:33:38.254816Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:33:38.352886Z[0m [32m INFO[0m Generate witness took 98.25 ms
+[2m2026-07-28T02:33:38.353207Z[0m [32m INFO[0m Generate witness took 98.591 ms
+[2m2026-07-28T02:33:38.353415Z[0m [32m INFO[0m Generate witness took 98.568 ms
+[2m2026-07-28T02:33:38.353891Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-rack/netstats/bb_sha256_compression_REP3_witext_r2_p0.json
+[2m2026-07-28T02:33:38.353942Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-rack/netstats/bb_sha256_compression_REP3_witext_r2_p1.json
+[2m2026-07-28T02:33:38.354000Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-rack/netstats/bb_sha256_compression_REP3_witext_r2_p2.json
+[2m2026-07-28T02:33:38.354098Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/bb_sha256_compression/bb_sha256_compression.gz.0.shared
+[2m2026-07-28T02:33:38.354140Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/bb_sha256_compression/bb_sha256_compression.gz.1.shared
+[2m2026-07-28T02:33:38.354189Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/bb_sha256_compression/bb_sha256_compression.gz.2.shared

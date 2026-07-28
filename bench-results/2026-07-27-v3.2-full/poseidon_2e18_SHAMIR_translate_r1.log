@@ -1,0 +1,12 @@
+[2m2026-07-27T18:54:11.094793Z[0m [32m INFO[0m Starting witness translation...
+[2m2026-07-27T18:54:11.094831Z[0m [32m INFO[0m Starting witness translation...
+[2m2026-07-27T18:54:11.095007Z[0m [32m INFO[0m Starting witness translation...
+[2m2026-07-27T18:54:11.187283Z[0m [32m INFO[0m Translate witness took 92.235 ms
+[2m2026-07-27T18:54:11.187580Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/poseidon_2e18_SHAMIR_translate_r1_p2.json
+[2m2026-07-27T18:54:11.221386Z[0m [32m INFO[0m Translate witness took 126.521 ms
+[2m2026-07-27T18:54:11.221656Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/poseidon_2e18_SHAMIR_translate_r1_p0.json
+[2m2026-07-27T18:54:11.227893Z[0m [32m INFO[0m Translate witness took 133.031 ms
+[2m2026-07-27T18:54:11.228069Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-full/netstats/poseidon_2e18_SHAMIR_translate_r1_p1.json
+[2m2026-07-27T18:54:11.229261Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e18/shamir_poseidon_2e18.gz.2.shared
+[2m2026-07-27T18:54:11.262631Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e18/shamir_poseidon_2e18.gz.0.shared
+[2m2026-07-27T18:54:11.269244Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e18/shamir_poseidon_2e18.gz.1.shared

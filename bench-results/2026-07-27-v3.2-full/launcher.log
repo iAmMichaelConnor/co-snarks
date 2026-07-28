@@ -1,0 +1,24 @@
+2026-07-27T18:49:00+00:00 launcher started (host load1m=16.22 — HOST-wide, incl. other tenants)
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: rounds: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: rounds: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: recv: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: blocked_recv_ms: command not found
+/mnt/user-data/mike/co-snarks/scripts/bench-0_5.sh: line 76: recv_bytes_histogram: command not found
+bench v2: 12 circuits queued; crude suite estimate ~1011 min (timeout prunes cells >1800s; sha rates are the least certain)
+[18:49:00] circuit 1/12: poseidon (rows~2048, est ~0 min) — elapsed 0 min, est remaining ~1011 min
+[18:49:14]   poseidon done in 0m14s (est was ~0 min)
+[18:49:14] circuit 2/12: poseidon_2e17 (rows~131072, est ~8 min) — elapsed 0 min, est remaining ~1011 min
+[18:53:09]   poseidon_2e17 done in 3m55s (est was ~8 min)
+[18:53:09] circuit 3/12: poseidon_2e18 (rows~262144, est ~11 min) — elapsed 4 min, est remaining ~1003 min
+[18:58:06]   poseidon_2e18 done in 4m57s (est was ~11 min)
+[18:58:06] circuit 4/12: poseidon_2e19 (rows~524288, est ~22 min) — elapsed 9 min, est remaining ~991 min
+[19:07:55]   poseidon_2e19 done in 9m49s (est was ~22 min)
+[19:07:55] circuit 5/12: poseidon_2e20 (rows~1048576, est ~45 min) — elapsed 18 min, est remaining ~969 min
+[19:26:59]   poseidon_2e20 done in 19m4s (est was ~45 min)
+[19:26:59] circuit 6/12: bb_sha256_compression (rows~32768, est ~20 min) — elapsed 37 min, est remaining ~923 min
+[19:28:39]   bb_sha256_compression done in 1m40s (est was ~20 min)
+[19:28:39] circuit 7/12: sha256_2e16 (rows~65536, est ~40 min) — elapsed 39 min, est remaining ~903 min
+[19:45:01]   sha256_2e16 done in 16m22s (est was ~40 min)
+[19:45:01] circuit 8/12: sha256_2e17 (rows~131072, est ~81 min) — elapsed 56 min, est remaining ~862 min
+[20:20:55]   sha256_2e17 done in 35m54s (est was ~81 min)
+[20:20:55] circuit 9/12: sha256_2e18 (rows~262144, est ~109 min) — elapsed 91 min, est remaining ~780 min
