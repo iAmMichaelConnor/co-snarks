@@ -21,3 +21,6 @@ groth16_tester.rs
 # local scratch — links/notes, never committed
 ARTIFACTS.md
 bench-results/bench.sqlite
+
+# generated site output (source = scripts/explorer.template.html + scripts/build-explorer.sh)
+bench-results/site/

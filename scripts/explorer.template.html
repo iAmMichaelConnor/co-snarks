@@ -1,0 +1,866 @@
+<title>co-SNARK UltraHonk performance explorer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --plane:#f4f4f1; --surface:#fcfcfb; --surface-2:#f0efec;
+  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10); --border-2:rgba(11,11,11,0.16);
+  --accent:#2a78d6; --accent-soft:#e7f0fb;
+  /* categorical config slots */
+  --c-bb:#2a78d6; --c-pd:#008300; --c-rep3:#e87ba4; --c-shamir:#eda100;
+  /* phase slots */
+  --p-witext:#4a3aa7; --p-pkgen:#1baf7a; --p-prove:#eb6834;
+  /* status */
+  --measured:#0ca30c; --modeled:#b07d00; --censored:#ec835a; --crit:#d03b3b;
+  --measured-bg:rgba(12,163,12,0.10); --modeled-bg:rgba(176,125,0,0.12); --censored-bg:rgba(236,131,90,0.14);
+  --mono:ui-monospace,"SF Mono","Menlo","Cascadia Code",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){
+  --plane:#0d0d0d; --surface:#171716; --surface-2:#1f1f1d;
+  --ink:#f5f5f0; --ink-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.11); --border-2:rgba(255,255,255,0.18);
+  --accent:#3987e5; --accent-soft:#12233a;
+  --c-bb:#3987e5; --c-pd:#3ba33b; --c-rep3:#d55181; --c-shamir:#c98500;
+  --p-witext:#9085e9; --p-pkgen:#199e70; --p-prove:#d95926;
+  --measured:#3fce3f; --modeled:#e0aa2a; --censored:#ec835a; --crit:#e66767;
+  --measured-bg:rgba(63,206,63,0.12); --modeled-bg:rgba(224,170,42,0.13); --censored-bg:rgba(236,131,90,0.16);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --plane:#0d0d0d; --surface:#171716; --surface-2:#1f1f1d;
+  --ink:#f5f5f0; --ink-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.11); --border-2:rgba(255,255,255,0.18);
+  --accent:#3987e5; --accent-soft:#12233a;
+  --c-bb:#3987e5; --c-pd:#3ba33b; --c-rep3:#d55181; --c-shamir:#c98500;
+  --p-witext:#9085e9; --p-pkgen:#199e70; --p-prove:#d95926;
+  --measured:#3fce3f; --modeled:#e0aa2a; --censored:#ec835a; --crit:#e66767;
+  --measured-bg:rgba(63,206,63,0.12); --modeled-bg:rgba(224,170,42,0.13); --censored-bg:rgba(236,131,90,0.16);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--plane);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3{text-wrap:balance;line-height:1.2;margin:0}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-variant-ligatures:none}
+.wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+
+/* ---- top nav ---- */
+nav.top{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--plane) 88%,transparent);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+nav.top .wrap{display:flex;align-items:center;gap:6px;height:52px;overflow-x:auto;scrollbar-width:thin}
+nav.top .brand{font-weight:650;font-size:14px;margin-right:auto;white-space:nowrap;letter-spacing:.01em}
+nav.top .brand b{color:var(--accent)}
+nav.top a{color:var(--ink-2);text-decoration:none;font-size:12.5px;padding:6px 9px;border-radius:7px;white-space:nowrap}
+nav.top a:hover{background:var(--surface-2);color:var(--ink)}
+.themebtn{border:1px solid var(--border);background:var(--surface);color:var(--ink-2);
+  border-radius:7px;height:30px;width:30px;cursor:pointer;font-size:14px;flex:0 0 auto}
+
+/* ---- hero ---- */
+header.hero{padding:38px 0 8px}
+.eyebrow{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:650}
+header.hero h1{font-size:clamp(26px,4.2vw,40px);margin:10px 0 8px;letter-spacing:-.02em}
+header.hero .sub{font-size:16px;color:var(--ink-2);max-width:70ch}
+
+/* ---- correctness banner ---- */
+.trust{margin:22px 0 8px;border:1px solid var(--border);border-left:3px solid var(--measured);
+  background:var(--measured-bg);border-radius:12px;padding:16px 18px}
+.trust .h{display:flex;align-items:center;gap:9px;font-weight:650;font-size:15px}
+.trust .dot{width:9px;height:9px;border-radius:50%;background:var(--measured);flex:0 0 auto;
+  box-shadow:0 0 0 4px color-mix(in srgb,var(--measured) 22%,transparent)}
+.trust p{margin:8px 0 0;color:var(--ink-2);font-size:13.5px;max-width:88ch}
+.trust .cmd{margin-top:10px;font-family:var(--mono);font-size:12px;background:var(--surface);
+  border:1px solid var(--border);border-radius:8px;padding:8px 11px;overflow-x:auto;color:var(--ink-2)}
+
+section{padding:34px 0;border-top:1px solid var(--border)}
+section h2{font-size:22px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:11px;flex-wrap:wrap}
+section h2 .n{font-family:var(--mono);font-size:13px;color:var(--muted);font-weight:500}
+section .lead{color:var(--ink-2);margin:9px 0 20px;max-width:82ch;font-size:14.5px}
+h3{font-size:15px;margin:24px 0 10px;color:var(--ink)}
+
+/* ---- badges ---- */
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:650;
+  letter-spacing:.03em;text-transform:uppercase;padding:2px 7px;border-radius:999px;line-height:1.5;
+  border:1px solid transparent;vertical-align:middle}
+.badge.m{color:var(--measured);background:var(--measured-bg);border-color:color-mix(in srgb,var(--measured) 30%,transparent)}
+.badge.mod{color:var(--modeled);background:var(--modeled-bg);border-color:color-mix(in srgb,var(--modeled) 34%,transparent)}
+.badge.cen{color:var(--censored);background:var(--censored-bg);border-color:color-mix(in srgb,var(--censored) 40%,transparent)}
+.badge svg{width:10px;height:10px}
+
+/* ---- stat tiles ---- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:6px 0 4px}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px 16px}
+.tile .k{font-size:11.5px;color:var(--muted);letter-spacing:.03em;text-transform:uppercase;font-weight:600}
+.tile .v{font-size:27px;font-weight:660;margin-top:5px;letter-spacing:-.02em;line-height:1.05}
+.tile .v small{font-size:14px;color:var(--ink-2);font-weight:500}
+.tile .d{font-size:12px;color:var(--ink-2);margin-top:6px}
+
+/* ---- cards / panels ---- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:820px){.grid2{grid-template-columns:1fr}}
+
+/* ---- controls ---- */
+.controls{display:flex;flex-wrap:wrap;gap:14px 20px;align-items:flex-end;margin-bottom:16px}
+.ctl{display:flex;flex-direction:column;gap:5px}
+.ctl label{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:650}
+.segs{display:flex;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:3px;gap:2px}
+.segs button{border:0;background:transparent;color:var(--ink-2);font:inherit;font-size:12.5px;
+  padding:6px 11px;border-radius:6px;cursor:pointer;white-space:nowrap;font-weight:550}
+.segs button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:650}
+select{font:inherit;font-size:13px;padding:7px 10px;border-radius:8px;border:1px solid var(--border-2);
+  background:var(--surface);color:var(--ink);min-width:210px}
+input[type=range]{width:190px;accent-color:var(--accent)}
+.rangeval{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+
+/* ---- tables ---- */
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:12.7px}
+th,td{padding:7px 11px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--grid)}
+th{position:sticky;top:0;background:var(--surface-2);color:var(--ink-2);font-weight:650;font-size:11px;
+  letter-spacing:.03em;text-transform:uppercase;z-index:1}
+tbody tr:hover{background:var(--surface-2)}
+td.num,th.num{font-variant-numeric:tabular-nums}
+td.lab,th.lab{text-align:left;position:sticky;left:0;background:var(--surface);font-family:var(--mono);font-size:12px}
+tbody tr:hover td.lab{background:var(--surface-2)}
+th.lab{background:var(--surface-2);z-index:2}
+td.dim{color:var(--muted)}
+tr.group td{background:var(--surface-2);font-weight:650;text-align:left;font-size:11.5px;
+  letter-spacing:.03em;text-transform:uppercase;color:var(--ink-2)}
+.fam-pill{display:inline-block;font-size:10px;font-weight:650;padding:1px 6px;border-radius:5px;
+  text-transform:uppercase;letter-spacing:.04em;margin-left:6px}
+caption,.tcap{text-align:left;color:var(--muted);font-size:12px;padding:9px 2px;caption-side:bottom}
+
+/* ---- charts ---- */
+.chart{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 16px 10px}
+.chart .ct{font-weight:650;font-size:14px;margin-bottom:2px}
+.chart .cs{font-size:12px;color:var(--ink-2);margin-bottom:12px}
+svg.viz{width:100%;height:auto;display:block;overflow:visible}
+svg.viz text{font-family:var(--sans);fill:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px;color:var(--ink-2)}
+.legend .it{display:inline-flex;align-items:center;gap:6px}
+.legend .sw{width:12px;height:12px;border-radius:3px;flex:0 0 auto}
+.legend .sw.line{height:3px;border-radius:2px;width:16px}
+.tip{position:fixed;pointer-events:none;z-index:99;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:9px;padding:8px 10px;font-size:12px;box-shadow:0 6px 22px rgba(0,0,0,.18);opacity:0;
+  transition:opacity .08s;max-width:280px;color:var(--ink)}
+.tip .tt{font-weight:650;margin-bottom:4px;font-family:var(--mono);font-size:11.5px}
+.tip .row{display:flex;justify-content:space-between;gap:14px;font-variant-numeric:tabular-nums}
+.tip .row .k{color:var(--ink-2)}
+
+/* ---- misc ---- */
+.note{font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--border);
+  border-radius:10px;padding:11px 13px;margin-top:12px}
+.note.warn{border-left:3px solid var(--censored)}
+ul.clean{margin:8px 0;padding-left:20px;color:var(--ink-2);font-size:13.5px}
+ul.clean li{margin:5px 0}
+.foot{padding:30px 0 60px;color:var(--muted);font-size:12px}
+.kbd{font-family:var(--mono);background:var(--surface-2);border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-size:11.5px}
+.hl{color:var(--ink);font-weight:640}
+.split-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+</style>
+
+<nav class="top"><div class="wrap">
+  <span class="brand">co-SNARK <b>UltraHonk</b> explorer</span>
+  <a href="#explorer">Explorer</a>
+  <a href="#distance">Distance</a>
+  <a href="#matrix">Timings</a>
+  <a href="#composition">Circuits</a>
+  <a href="#comms">Comms</a>
+  <a href="#charts">Charts</a>
+  <a href="#batchk">Batch K</a>
+  <a href="#assumptions">Assumptions</a>
+  <button class="themebtn" id="themebtn" title="Toggle light/dark" aria-label="Toggle theme">◐</button>
+</div></nav>
+
+<div class="wrap">
+<header class="hero">
+  <div class="eyebrow">Multi-party proving · measured &amp; modelled</div>
+  <h1>How fast is co-noir UltraHonk, and where does it stop being practical?</h1>
+  <p class="sub">A collaborative SNARK lets several distrusting parties jointly prove a statement over
+  a secret-shared witness — no single party sees the whole witness, yet the output is an ordinary
+  UltraHonk proof. This page tabulates what that costs: every circuit, every prover, ZK and non-ZK,
+  and every network distance between the MPC nodes — from processes on one machine to nodes on
+  opposite sides of the Earth.</p>
+</header>
+
+<div class="trust" id="trust">
+  <div class="h"><span class="dot"></span><span id="trust-h">Correctness first: the proof is byte-identical to barretenberg.</span></div>
+  <p id="trust-p">co-noir's REP3 MPC prover emits a proof that is <b>byte-identical</b> to barretenberg's and
+  accepted by <b>bb's own verifier</b>, for every circuit here, both hashers, ZK and non-ZK — and the single-prover
+  path (<span class="mono">plaindriver</span>) is likewise byte-identical to bb. Privacy changes <em>who</em> holds the
+  witness and <em>how long</em> proving takes; it does not change the proof. A skeptic who doubts correctness never
+  reaches the cost question — so this is settled first, in-tree and reproducible.</p>
+  <div class="cmd" id="trust-cmd">compare_mpc.sh &nbsp;·&nbsp; 33 circuits × {poseidon2, keccak} × {ZK, non-ZK} → 0 errors &nbsp;·&nbsp; VK byte-KATs in-tree &nbsp;·&nbsp; bench verify_bb rc=0</div>
+</div>
+</div>
+
+<div class="wrap"><div class="tiles" id="tiles"></div></div>
+
+<!-- ============ EXPLORER ============ -->
+<div class="wrap"><section id="explorer" style="border-top:0">
+  <h2><span class="n">01</span> Interactive cost explorer <span id="exp-badge"></span></h2>
+  <p class="lead">Pick a circuit, ZK mode, and where the three MPC nodes sit relative to each other. The
+  single-prover baselines (<span class="mono">bb</span>, <span class="mono">plaindriver</span>) don't touch the
+  network, so their bars stay flat as you move the nodes apart; the MPC bars grow with distance — that gap is the
+  whole story. Compute floors are <span class="hl">measured</span>; the latency &amp; bandwidth added on top are
+  <span class="hl">modelled</span> from measured round-counts and byte-volumes, and pinned to measured netem anchors
+  in the next section.</p>
+
+  <div class="controls">
+    <div class="ctl"><label>Circuit</label><select id="exp-circuit"></select></div>
+    <div class="ctl"><label>ZK</label><div class="segs" id="exp-zk">
+      <button data-v="nonzk" aria-pressed="true">non-ZK</button><button data-v="zk">ZK</button></div></div>
+    <div class="ctl"><label>Node distance</label><div class="segs" id="exp-tier"></div></div>
+    <div class="ctl"><label>Custom one-way RTT <span class="rangeval" id="exp-rttval"></span></label>
+      <input type="range" id="exp-rtt" min="0" max="300" step="1" value="0"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="chart"><div class="ct">Wall-clock per prover configuration</div>
+      <div class="cs" id="exp-sub"></div>
+      <svg class="viz" id="exp-svg" viewBox="0 0 560 300" preserveAspectRatio="xMinYMin meet"></svg>
+      <div class="legend">
+        <span class="it"><span class="sw" style="background:var(--p-pkgen)"></span>compute (measured)</span>
+        <span class="it"><span class="sw" style="background:var(--p-witext)"></span>latency = rounds × RTT</span>
+        <span class="it"><span class="sw" style="background:var(--p-prove)"></span>bandwidth = bytes ÷ link</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:2px">What you're looking at</h3>
+      <div id="exp-readout"></div>
+    </div>
+  </div>
+</section></div>
+
+<!-- ============ DISTANCE ============ -->
+<div class="wrap"><section id="distance">
+  <h2><span class="n">02</span> Distance sensitivity <span class="badge m" id="dist-badge"></span></h2>
+  <p class="lead">Wall-clock of the three MPC phases as the nodes move apart, for the selected circuit. Lines are
+  the model; ● are <span class="hl">measured</span> under <span class="mono">tc netem</span> loopback shaping
+  (the RTT was ping-verified per tier). Witness extension is round-bound — it climbs steeply with latency;
+  prove-proper is bandwidth-bound; proving-key generation sits in between. The four deployment tiers are marked.</p>
+  <div class="controls">
+    <div class="ctl"><label>Circuit</label><select id="dist-circuit"></select></div>
+  </div>
+  <div class="chart"><div class="ct">Phase wall-clock vs. inter-node round-trip time</div>
+    <div class="cs">log–log · vertical guides = the four deployment tiers · ▲ = censored (exceeded the 600 s cap; true value is higher)</div>
+    <svg class="viz" id="dist-svg" viewBox="0 0 720 380" preserveAspectRatio="xMinYMin meet"></svg>
+    <div class="legend" id="dist-legend"></div>
+  </div>
+</section></div>
+
+<!-- ============ TIMING MATRIX ============ -->
+<div class="wrap"><section id="matrix">
+  <h2><span class="n">03</span> Proving-time matrix <span class="badge m" id="mx-badge"></span></h2>
+  <p class="lead">Median wall-clock seconds at <span class="hl">same-machine</span> (loopback), across every circuit ×
+  prover × ZK mode. <span class="mono">bb</span> and <span class="mono">plaindriver</span> are single-prover
+  baselines; <span class="mono">REP3</span> is the 3-party replicated protocol (its total = split + witext + pk-gen +
+  prove-proper); <span class="mono">Shamir</span> is the threshold protocol (poseidon family only in this run).
+  <b>REP3 ÷ bb</b> is the privacy multiplier a skeptic asks for — composition-dependent, not monotonic in size.</p>
+  <div class="controls">
+    <div class="ctl"><label>ZK</label><div class="segs" id="mx-zk">
+      <button data-v="nonzk" aria-pressed="true">non-ZK</button><button data-v="zk">ZK</button></div></div>
+  </div>
+  <div class="tablewrap"><table id="mx-table"></table></div>
+  <div class="tcap">All values median of successful reps · loopback · absolute seconds. <span class="mono">—</span> = not measured / not applicable.</div>
+</section></div>
+
+<!-- ============ COMPOSITION ============ -->
+<div class="wrap"><section id="composition">
+  <h2><span class="n">04</span> Circuit composition <span class="badge m" id="comp-badge"></span></h2>
+  <p class="lead">What each circuit is <em>made of</em> — because MPC cost tracks composition, not just size. Gate
+  counts are UltraHonk trace-block totals from <span class="mono">co-noir circuit-info</span>. Note: boolean
+  constraints and additions/multiplications are <em>fused</em> into the single arithmetic gate in Honk's
+  arithmetization, so they appear inside <span class="hl">arithmetic</span> rather than as separate columns
+  (the honest thing to say — they aren't counted separately by the tooling).</p>
+  <div class="tablewrap"><table id="comp-table"></table></div>
+  <div class="tcap">Rows = finalized gate rows · dyadic = padded 2ⁿ size the prover actually pays for · witness 0-frac = share of the witness that is zero.</div>
+  <div class="chart" style="margin-top:16px"><div class="ct">Gate-block composition (share of finalized rows)</div>
+    <div class="cs">each bar one circuit · hover a segment for exact counts</div>
+    <svg class="viz" id="comp-svg" viewBox="0 0 720 360" preserveAspectRatio="xMinYMin meet"></svg>
+    <div class="legend" id="comp-legend"></div>
+  </div>
+</section></div>
+
+<!-- ============ COMMS ============ -->
+<div class="wrap"><section id="comms">
+  <h2><span class="n">05</span> Communication between nodes <span class="badge m" id="comms-badge"></span></h2>
+  <p class="lead">The two things that make distance hurt: <b>sequential rounds</b> (each one costs a full RTT — this
+  is why witext explodes on WAN) and <b>total bytes</b> (which the link bandwidth meters out). Measured per phase
+  from mpc-net counters at party 0's busiest peer; round-counts and byte-volumes are network-independent, so these
+  hold at any distance. pk-gen is split out from prove-proper via the pk-gen snapshot.</p>
+  <div class="tablewrap"><table id="comms-table"></table></div>
+  <div class="tcap">rounds = logical blocking rounds (the latency multiplier) · msgs = received messages (conservative round proxy) · bytes = received by the busiest peer.</div>
+</section></div>
+
+<!-- ============ CHARTS ============ -->
+<div class="wrap"><section id="charts">
+  <h2><span class="n">06</span> Scaling &amp; overhead <span class="badge m"></span></h2>
+  <p class="lead">How the numbers move with circuit size and where the privacy tax lands.</p>
+  <div class="grid2">
+    <div class="chart"><div class="ct">Prove wall-clock vs. circuit size</div>
+      <div class="cs" id="sweep-sub">log–log · dyadic rows → seconds (loopback, ZK)</div>
+      <svg class="viz" id="sweep-svg" viewBox="0 0 560 340" preserveAspectRatio="xMinYMin meet"></svg>
+      <div class="legend" id="sweep-legend"></div>
+    </div>
+    <div class="chart"><div class="ct">Privacy multiplier — REP3 prove ÷ bb prove</div>
+      <div class="cs">loopback, ZK · how many times slower the private path is, per circuit</div>
+      <svg class="viz" id="over-svg" viewBox="0 0 560 340" preserveAspectRatio="xMinYMin meet"></svg>
+    </div>
+  </div>
+</section></div>
+
+<!-- ============ BATCH K ============ -->
+<div class="wrap"><section id="batchk">
+  <h2><span class="n">07</span> The batch-size dial <span class="mono" style="font-size:15px">K</span> <span class="badge m" id="k-badge"></span></h2>
+  <p class="lead">Lookup-heavy pk-gen (the sha256 read-counts) turns each secret table index into a one-hot vector
+  over an MPC round. Doing <em>all</em> gates in one batch is fewest rounds but materialises every vector at once —
+  which hit <b>~176 GB/party and OOM-killed the box</b> at sha256 2¹⁸. The fix: a batch size <b>K</b> —
+  process the gates in chunks of K. <b>Peak memory ∝ K, communication rounds ∝ gates ÷ K, and the proof stays
+  byte-identical for every K.</b> This is the measured tradeoff on <span class="mono" id="k-circuit">a lookup circuit</span>;
+  drag K to see it.</p>
+  <div id="k-body">
+    <div class="controls">
+      <div class="ctl"><label>Batch size K <span class="rangeval" id="k-val"></span></label>
+        <input type="range" id="k-slider" min="0" max="5" step="1" value="3"></div>
+    </div>
+    <div class="tiles" id="k-tiles" style="margin-bottom:16px"></div>
+    <div class="chart"><div class="ct">Peak memory vs. communication rounds, across K</div>
+      <div class="cs">measured ● · memory rises with K, rounds fall with K — the dial picks your point on the curve</div>
+      <svg class="viz" id="k-svg" viewBox="0 0 720 340" preserveAspectRatio="xMinYMin meet"></svg>
+      <div class="legend">
+        <span class="it"><span class="sw" style="background:var(--p-prove)"></span>peak memory / party</span>
+        <span class="it"><span class="sw" style="background:var(--p-witext)"></span>pk-gen rounds</span>
+        <span class="it"><span class="sw" style="background:var(--p-pkgen)"></span>wall-clock (loopback)</span>
+      </div>
+    </div>
+    <div class="note">On loopback the wall-clock is nearly <b>flat in K</b> (compute-bound — even slightly faster
+    at small K, from less allocation churn). So K's real tradeoff is <b>peak memory (∝ K)</b> against
+    <b>communication rounds (∝ gates ÷ K)</b> — and rounds only cost wall-clock <em>under network latency</em>. Hence:
+    a smaller K on a memory-tight node or a LAN; a larger K to cut WAN round-trips, until the per-round frame gets
+    too big. The default K=4096 sits near the round-count floor at ~8 GB/party — safe out of the box. Exposed as
+    <span class="mono">--lookup-batch-size</span> (proof byte-identical for any value; <span class="mono">0</span> = unbounded).</div>
+  </div>
+  <div class="note warn" id="k-pending" style="display:none">K-sweep measurement pending — this section populates when the sweep data is baked in.</div>
+</section></div>
+
+<!-- ============ ASSUMPTIONS ============ -->
+<div class="wrap"><section id="assumptions">
+  <h2><span class="n">08</span> Model, tiers &amp; provenance</h2>
+  <p class="lead">Everything the model assumes, wearing its data on its sleeve. This is a decision-support tool,
+  not a benchmark of record: it never renders a modelled number as measured.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3 style="margin-top:2px">The four deployment tiers</h3>
+      <div class="tablewrap" style="border:0"><table id="tier-table"></table></div>
+      <div class="note">“Same continent” is the larger of a coast-to-coast US hop and a widest-Europe hop
+      (measured cloud inter-region RTTs: US-east↔US-west ≈ 62 ms &gt; widest EU ≈ 35–50 ms), so it takes the
+      US figure. “Antipodal” ≈ London↔Sydney. netem shapes loopback, so RTT = 2 × the injected one-way delay;
+      each tier's delay was ping-verified.</div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:2px">The cost model</h3>
+      <ul class="clean">
+        <li><span class="hl">T(tier) = compute + rounds × RTT + bytes ÷ bandwidth</span>.</li>
+        <li><span class="hl">compute</span> — measured loopback wall-clock per phase (the single-prover baselines are pure compute).</li>
+        <li><span class="hl">latency</span> — sequential <em>rounds</em> × the tier RTT. The band shown spans
+          logical rounds (optimistic, fully-pipelined) → received-messages (conservative, no overlap); reality sits between.</li>
+        <li><span class="hl">bandwidth</span> — received bytes ÷ the tier link rate; ≈0 on the fat local links.</li>
+        <li>Single-prover configs (bb, plaindriver) have <b>zero</b> comms — flat across all tiers.</li>
+      </ul>
+      <div class="note warn" id="caveats"></div>
+    </div>
+  </div>
+  <h3>Provenance</h3>
+  <div class="tablewrap"><table id="prov-table"></table></div>
+</section></div>
+
+<div class="wrap foot" id="foot"></div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+const DATA = /*__DATA__*/ null;
+/* ================= helpers ================= */
+const $=s=>document.querySelector(s), CE=(t,c)=>{const e=document.createElement(t);if(c)e.className=c;return e;};
+const fmtS=v=>v==null?'—':(v>=100?v.toFixed(0):v>=10?v.toFixed(1):v>=1?v.toFixed(2):v.toFixed(3))+'s';
+const fmtN=v=>v==null?'—':v.toLocaleString('en-US');
+const fmtB=v=>{if(v==null)return '—';const u=['B','KB','MB','GB'];let i=0,x=v;while(x>=1024&&i<3){x/=1024;i++;}return (x>=100?x.toFixed(0):x>=10?x.toFixed(1):x.toFixed(2))+' '+u[i];};
+const fmtX=v=>v==null?'—':(v>=100?v.toFixed(0):v>=10?v.toFixed(1):v.toFixed(1))+'×';
+const CIRCS=Object.keys(DATA.circuits);
+const famColor=f=>({poseidon:'var(--c-bb)',sha256:'var(--p-prove)',recursion:'var(--p-witext)'}[f]||'var(--muted)');
+const famBg=f=>({poseidon:'rgba(42,120,214,.14)',sha256:'rgba(235,104,52,.15)',recursion:'rgba(74,58,167,.15)'}[f]||'var(--surface-2)');
+/* pretty circuit label */
+function clabel(c){return c.replace('bb_sha256_compression','sha256_1block').replace('_2e','_2^').replace('poseidon_2^','poseidon_2^');}
+function nrows(c){return DATA.circuits[c].features.dyadic_size||0;}
+/* order circuits: poseidon family by size, sha family by size, recursion last */
+const CORD=[...CIRCS].sort((a,b)=>{const A=DATA.circuits[a],B=DATA.circuits[b];
+  const fo={poseidon:0,sha256:1,recursion:2};
+  if(fo[A.family]!==fo[B.family])return fo[A.family]-fo[B.family];
+  return (A.features.dyadic_size||0)-(B.features.dyadic_size||0);});
+
+/* tooltip */
+const tip=$('#tip');
+function showTip(html,x,y){tip.innerHTML=html;tip.style.opacity=1;
+  const w=tip.offsetWidth,h=tip.offsetHeight;let L=x+14,T=y+14;
+  if(L+w>innerWidth-8)L=x-w-14; if(T+h>innerHeight-8)T=y-h-14;
+  tip.style.left=L+'px';tip.style.top=T+'px';}
+function hideTip(){tip.style.opacity=0;}
+
+/* ================= model ================= */
+const TIERS=DATA.meta.tier_model;
+const TIER_ORDER=Object.keys(TIERS);
+const TIER_LABEL={'same-machine':'Same machine','same-rack':'Same rack','same-continent':'Same continent','antipodal':'Antipodal'};
+const TIER_DESC={'same-machine':'processes on one host (loopback)','same-rack':'one datacenter · 10 Gbps','same-continent':'coast-to-coast · 1 Gbps','antipodal':'opposite side of Earth · 100 Mbps'};
+// comms arm for a phase-comms object at rtt(ms)/bw(Mbps). returns {lat_lo,lat_hi,bw_s}
+function commsArm(cm,rttMs,bwMbps){
+  if(!cm)return{lat_lo:0,lat_hi:0,bw_s:0,rounds_lo:0,rounds_hi:0,bytes:0};
+  const rtt=rttMs/1000, bw=bwMbps?bwMbps*1e6:null;
+  const bytes=cm.recv_bytes||0;
+  return{lat_lo:(cm.rounds_logical||0)*rtt, lat_hi:(cm.rounds_msgs||0)*rtt,
+    bw_s:bw?bytes*8/bw:0, rounds_lo:cm.rounds_logical||0, rounds_hi:cm.rounds_msgs||0, bytes};
+}
+// REP3 total pipeline at a tier for zk mode -> phase stacks
+function rep3Pipeline(c,zk,rttMs,bwMbps){
+  const C=DATA.circuits[c], t=C.timings_loopback.REP3, cm=C.comms;
+  const phases=[
+    {name:'witext', comp:t.witext, cm:cm.witext},
+    {name:'pk-gen', comp:t['pkgen_'+zk], cm:cm.pkgen},
+    {name:'prove-proper', comp:t['proveproper_'+zk], cm:cm.proveproper},
+  ];
+  let compute=0,lat_lo=0,lat_hi=0,bw_s=0;
+  const parts=[];
+  for(const p of phases){const a=commsArm(p.cm,rttMs,bwMbps);
+    const comp=p.comp||0; compute+=comp; lat_lo+=a.lat_lo; lat_hi+=a.lat_hi; bw_s+=a.bw_s;
+    parts.push({...p,comp,arm:a});}
+  return {compute,lat_lo,lat_hi,bw_s,parts,
+    total_lo:compute+lat_lo+bw_s, total_hi:compute+lat_hi+bw_s};
+}
+function curRtt(){ // from explorer controls
+  return EXP.customRtt!=null?EXP.customRtt:TIERS[EXP.tier].rtt_ms;
+}
+function curBw(){ return EXP.customRtt!=null?null:TIERS[EXP.tier].bw_mbps; }
+
+/* ================= stat tiles ================= */
+function renderTiles(){
+  const m=DATA.meta.full_manifest||{};
+  // headline: REP3/bb at 2^20 poseidon zk; witext WAN measured; nodes
+  const p20=DATA.circuits['poseidon_2e20'], sha=DATA.circuits['bb_sha256_compression'];
+  const rep3=p20?.timings_loopback.REP3.prove_zk, bb=p20?.timings_loopback.bb.prove_zk;
+  const tiles=[
+    {k:'Circuits measured',v:CIRCS.length,d:'poseidon · sha256 · recursion, 2¹¹–2²⁰'},
+    {k:'Proof vs. barretenberg',v:'byte-identical',d:'bb’s own verifier accepts',small:true},
+    {k:'Privacy tax (poseidon 2²⁰)',v:rep3&&bb?fmtX(rep3/bb):'—',d:'REP3 ÷ bb prove, loopback ZK'},
+    {k:'Deployment tiers',v:'4',d:'same-machine → antipodal (250 ms)'},
+  ];
+  const box=$('#tiles');box.innerHTML='';
+  for(const t of tiles){const e=CE('div','tile');
+    e.innerHTML=`<div class="k">${t.k}</div><div class="v" style="${t.small?'font-size:20px':''}">${t.v}</div><div class="d">${t.d}</div>`;
+    box.appendChild(e);}
+}
+
+/* ================= EXPLORER ================= */
+const EXP={circuit:'poseidon_2e17',zk:'nonzk',tier:'same-continent',customRtt:null};
+function initExplorer(){
+  const sel=$('#exp-circuit'); CORD.forEach(c=>{const o=CE('option');o.value=c;o.textContent=clabel(c)+'  ('+fmtN(nrows(c))+' rows)';sel.appendChild(o);});
+  sel.value=EXP.circuit; sel.onchange=e=>{EXP.circuit=e.target.value;drawExplorer();};
+  const tb=$('#exp-tier'); TIER_ORDER.forEach(t=>{const b=CE('button');b.dataset.v=t;b.textContent=TIER_LABEL[t];
+    b.setAttribute('aria-pressed',t===EXP.tier);b.onclick=()=>{EXP.tier=t;EXP.customRtt=null;$('#exp-rtt').value=Math.round(TIERS[t].rtt_ms);syncTierBtns();drawExplorer();};tb.appendChild(b);});
+  $('#exp-zk').querySelectorAll('button').forEach(b=>b.onclick=()=>{EXP.zk=b.dataset.v;
+    $('#exp-zk').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawExplorer();});
+  const r=$('#exp-rtt'); r.value=Math.round(TIERS[EXP.tier].rtt_ms);
+  r.oninput=e=>{EXP.customRtt=+e.target.value;syncTierBtns();drawExplorer();};
+  drawExplorer();
+}
+function syncTierBtns(){$('#exp-tier').querySelectorAll('button').forEach(b=>{
+  const on=EXP.customRtt==null&&b.dataset.v===EXP.tier;b.setAttribute('aria-pressed',on);});}
+function drawExplorer(){
+  const rtt=curRtt(),bw=curBw();
+  $('#exp-rttval').textContent='· '+rtt.toFixed(rtt<1?2:0)+' ms RTT'+(bw?(' · '+(bw>=1000?(bw/1000)+' Gbps':bw+' Mbps')):' · unshaped');
+  $('#exp-badge').innerHTML=EXP.customRtt!=null?'<span class="badge mod">custom RTT — modelled</span>':'';
+  const C=DATA.circuits[EXP.circuit], zk=EXP.zk;
+  // configs
+  const bb=C.timings_loopback.bb['prove_'+zk], bbvk=C.timings_loopback.bb.vkgen;
+  const pd=C.timings_loopback.plaindriver['prove_'+zk];
+  const rep3=rep3Pipeline(EXP.circuit,zk,rtt,bw);
+  const sh=C.timings_loopback.SHAMIR['prove_'+zk], shx=C.timings_loopback.SHAMIR.translate;
+  const rows=[
+    {label:'bb',color:'var(--c-bb)',compute:(bb||0)+(bbvk||0),lat:0,bw:0,note:'single prover · vkgen+prove',flat:true,avail:bb!=null},
+    {label:'plaindriver',color:'var(--c-pd)',compute:pd||0,lat:0,bw:0,note:'co-noir, 1 node, no MPC',flat:true,avail:pd!=null},
+    {label:'REP3 3-party',color:'var(--c-rep3)',compute:rep3.compute,lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'witext+pkgen+prove',avail:rep3.compute>0,pipeline:rep3},
+  ];
+  if(sh!=null)rows.push({label:'Shamir 3-party',color:'var(--c-shamir)',compute:(sh||0)+(shx||0),lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'threshold · comms modelled from REP3',avail:true,approxComms:true});
+  drawExpBars(rows);
+  $('#exp-sub').textContent=`${clabel(EXP.circuit)} · ${zk==='zk'?'ZK':'non-ZK'} · ${EXP.customRtt!=null?rtt.toFixed(0)+' ms custom':TIER_LABEL[EXP.tier]+' ('+TIERS[EXP.tier].rtt_ms+' ms)'}`;
+  // readout
+  const priv=rows[2], ratio=(bb&&priv.total_lo)?((priv.compute+priv.lat+priv.bw)/(bb+ (bbvk||0))):null;
+  const mid=priv.compute+ (priv.lat+priv.lat2)/2 + priv.bw;
+  $('#exp-readout').innerHTML=`
+    <div class="split-tiles">
+      <div class="tile" style="padding:12px"><div class="k">bb baseline</div><div class="v" style="font-size:22px">${fmtS((bb||0)+(bbvk||0))}</div><div class="d">flat at every distance</div></div>
+      <div class="tile" style="padding:12px"><div class="k">REP3 @ this distance</div><div class="v" style="font-size:22px">${fmtS(mid)}</div><div class="d">band ${fmtS(priv.compute+priv.lat+priv.bw)} – ${fmtS(priv.compute+priv.lat2+priv.bw)}</div></div>
+    </div>
+    <div class="note" style="margin-top:12px">
+      <b>Compute floor</b> ${fmtS(priv.compute)} (measured, distance-independent) · <b>latency arm</b> ${fmtS(priv.lat)}–${fmtS(priv.lat2)} from ${fmtN(priv.pipeline.parts.reduce((s,p)=>s+p.arm.rounds_lo,0))}–${fmtN(priv.pipeline.parts.reduce((s,p)=>s+p.arm.rounds_hi,0))} rounds × ${curRtt().toFixed(curRtt()<1?2:0)} ms · <b>bandwidth arm</b> ${fmtS(priv.bw)}.
+      ${ratio?`At this distance the private path is ~<b>${fmtX(mid/((bb||0)+(bbvk||0)))}</b> the bb baseline.`:''}
+    </div>
+    <div class="note" style="margin-top:8px">Move the nodes to <span class="hl">antipodal</span> and watch witext's latency arm dominate — the round-bound phase is what breaks interactivity over long links, not the compute.</div>`;
+}
+function drawExpBars(rows){
+  const svg=$('#exp-svg'),W=560,H=300,padL=96,padR=20,padT=10,padB=28;
+  const avail=rows.filter(r=>r.avail);
+  const maxV=Math.max(...avail.map(r=>r.compute+ (r.lat2||r.lat)+r.bw),0.001)*1.08;
+  const bh=Math.min(46,(H-padT-padB)/avail.length-14), gap=((H-padT-padB)-bh*avail.length)/(avail.length+1);
+  const x=v=>padL+(W-padL-padR)*v/maxV;
+  let s='';
+  // x grid
+  const ticks=niceTicks(0,maxV,5);
+  for(const t of ticks){const X=x(t);s+=`<line x1="${X}" y1="${padT}" x2="${X}" y2="${H-padB}" stroke="var(--grid)" stroke-width="1"/>`;
+    s+=`<text x="${X}" y="${H-padB+16}" text-anchor="middle" font-size="10">${t>=1?t.toFixed(0):t.toFixed(1)}s</text>`;}
+  let y=padT+gap;
+  avail.forEach((r,i)=>{
+    const segs=[['var(--p-pkgen)',r.compute,'compute'],['var(--p-witext)',(r.lat2||r.lat),'latency'],['var(--p-prove)',r.bw,'bandwidth']];
+    let cx=padL;
+    // label
+    s+=`<text x="${padL-10}" y="${y+bh/2-2}" text-anchor="end" font-size="12" font-weight="600" fill="var(--ink)">${r.label}</text>`;
+    s+=`<text x="${padL-10}" y="${y+bh/2+12}" text-anchor="end" font-size="9.5" fill="var(--muted)">${r.flat?'flat · no comms':r.note}</text>`;
+    for(const [col,val,nm] of segs){ if(val<=0)continue; const ww=(W-padL-padR)*val/maxV;
+      s+=`<rect class="eb" data-l="${r.label}" data-n="${nm}" data-v="${val}" x="${cx}" y="${y}" width="${Math.max(0,ww-1)}" height="${bh}" rx="3" fill="${col}"/>`;
+      cx+=ww;}
+    // total label
+    const tot=r.compute+(r.lat2||r.lat)+r.bw;
+    s+=`<text x="${Math.min(W-padR,x(tot)+6)}" y="${y+bh/2+4}" font-size="11.5" font-weight="650" fill="var(--ink)">${fmtS(tot)}</text>`;
+    // low-band tick for MPC
+    if(!r.flat){const lo=r.compute+r.lat+r.bw; s+=`<line x1="${x(lo)}" y1="${y-2}" x2="${x(lo)}" y2="${y+bh+2}" stroke="var(--ink)" stroke-dasharray="2 2" stroke-width="1" opacity="0.5"/>`;}
+    y+=bh+gap;
+  });
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  svg.innerHTML=s;
+  svg.querySelectorAll('.eb').forEach(el=>{el.style.cursor='pointer';
+    el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.l}</div><div class="row"><span class="k">${el.dataset.n}</span><span>${fmtS(+el.dataset.v)}</span></div>`,e.clientX,e.clientY);
+    el.onmouseleave=hideTip;});
+}
+
+/* ================= DISTANCE CHART ================= */
+const DIST={circuit:'poseidon_2e17'};
+function initDist(){
+  const sel=$('#dist-circuit'); CORD.forEach(c=>{const o=CE('option');o.value=c;o.textContent=clabel(c);sel.appendChild(o);});
+  sel.value=DIST.circuit; sel.onchange=e=>{DIST.circuit=e.target.value;drawDist();};
+  drawDist();
+}
+function phaseMeasured(c,phase){ // gather measured netem points {rtt,seconds,censored}
+  const arr=(DATA.circuits[c].netem||{})[phase]||[];
+  return arr.filter(p=>p.seconds!=null||p.censored);
+}
+function drawDist(){
+  const c=DIST.circuit, C=DATA.circuits[c];
+  const svg=$('#dist-svg'),W=720,H=380,padL=60,padR=140,padT=14,padB=46;
+  const rttMin=0.03,rttMax=320;
+  const phases=[
+    {key:'witext',label:'witext',color:'var(--p-witext)',comp:C.timings_loopback.REP3.witext,cm:C.comms.witext,mkey:'witext'},
+    {key:'pkgen',label:'pk-gen',color:'var(--p-pkgen)',comp:C.timings_loopback.REP3.pkgen_nonzk,cm:C.comms.pkgen,mkey:'pkgen'},
+    {key:'prove',label:'prove-proper',color:'var(--p-prove)',comp:C.timings_loopback.REP3.proveproper_nonzk,cm:C.comms.proveproper,mkey:'proveproper'},
+  ];
+  // y range from all modelled hi + measured
+  let vmax=0.1,vmin=1e9;
+  const bwFor=rtt=>{ // approximate bandwidth along the axis by nearest tier
+    let best=null;for(const t of TIER_ORDER){const T=TIERS[t];if(best==null||Math.abs(T.rtt_ms-rtt)<Math.abs(TIERS[best].rtt_ms-rtt))best=t;}return TIERS[best].bw_mbps;};
+  const samples=[];for(let i=0;i<=60;i++){samples.push(rttMin*Math.pow(rttMax/rttMin,i/60));}
+  const curves=phases.map(p=>{
+    const pts=samples.map(rtt=>{const a=commsArm(p.cm,rtt,bwFor(rtt));
+      return{rtt,lo:(p.comp||0)+a.lat_lo+a.bw_s,hi:(p.comp||0)+a.lat_hi+a.bw_s};});
+    pts.forEach(pt=>{vmax=Math.max(vmax,pt.hi);vmin=Math.min(vmin,pt.lo);});
+    return{...p,pts};
+  });
+  const meas=phases.map(p=>({key:p.key,color:p.color,pts:phaseMeasured(c,p.mkey)}));
+  meas.forEach(m=>m.pts.forEach(pt=>{if(pt.seconds){vmax=Math.max(vmax,pt.seconds);vmin=Math.min(vmin,pt.seconds);}}));
+  vmin=Math.max(0.01,vmin*0.7);vmax*=1.3;
+  const lx=r=>padL+(W-padL-padR)*(Math.log(r/rttMin)/Math.log(rttMax/rttMin));
+  const ly=v=>padT+(H-padT-padB)*(1-Math.log(v/vmin)/Math.log(vmax/vmin));
+  let s='';
+  // y grid (log decades)
+  for(let e=Math.floor(Math.log10(vmin));e<=Math.ceil(Math.log10(vmax));e++){const v=Math.pow(10,e);if(v<vmin||v>vmax)continue;
+    s+=`<line x1="${padL}" y1="${ly(v)}" x2="${W-padR}" y2="${ly(v)}" stroke="var(--grid)"/>`;
+    s+=`<text x="${padL-8}" y="${ly(v)+3}" text-anchor="end" font-size="10">${v>=1?v+'s':v+'s'}</text>`;}
+  // tier guides
+  for(const t of TIER_ORDER){const T=TIERS[t];if(T.rtt_ms<rttMin||T.rtt_ms>rttMax)continue;const X=lx(T.rtt_ms);
+    s+=`<line x1="${X}" y1="${padT}" x2="${X}" y2="${H-padB}" stroke="var(--axis)" stroke-dasharray="3 3" stroke-width="1"/>`;
+    s+=`<text x="${X}" y="${H-padB+15}" text-anchor="middle" font-size="9.5" fill="var(--ink-2)">${TIER_LABEL[t]}</text>`;
+    s+=`<text x="${X}" y="${H-padB+27}" text-anchor="middle" font-size="9" fill="var(--muted)">${T.rtt_ms}ms</text>`;}
+  // x minor ticks
+  [0.05,0.1,1,10,100].forEach(r=>{if(r<rttMin||r>rttMax)return;});
+  // curves: band + optimistic line
+  curves.forEach(cv=>{
+    let up='',dn='';cv.pts.forEach((pt,i)=>{up+=(i?'L':'M')+lx(pt.rtt).toFixed(1)+' '+ly(pt.hi).toFixed(1)+' ';});
+    for(let i=cv.pts.length-1;i>=0;i--){dn+='L'+lx(cv.pts[i].rtt).toFixed(1)+' '+ly(cv.pts[i].lo).toFixed(1)+' ';}
+    s+=`<path d="${up+dn}Z" fill="${cv.color}" opacity="0.10"/>`;
+    let ln='';cv.pts.forEach((pt,i)=>{ln+=(i?'L':'M')+lx(pt.rtt).toFixed(1)+' '+ly(pt.lo).toFixed(1)+' ';});
+    s+=`<path d="${ln}" fill="none" stroke="${cv.color}" stroke-width="2"/>`;
+    // end label
+    const last=cv.pts[cv.pts.length-1];
+    s+=`<text x="${W-padR+6}" y="${ly(last.lo)+3}" font-size="11" font-weight="600" fill="${cv.color}">${cv.label}</text>`;
+  });
+  // measured markers
+  meas.forEach(m=>m.pts.forEach(pt=>{const X=lx(pt.rtt);
+    if(pt.censored&&pt.seconds==null){const Y=ly(vmax/1.25);
+      s+=`<path class="mk" data-t="${m.key} · censored @ ${pt.rtt}ms — exceeded 600s cap" d="M${X} ${Y-6} L${X+6} ${Y+5} L${X-6} ${Y+5} Z" fill="none" stroke="${m.color}" stroke-width="2"/>`;}
+    else if(pt.seconds!=null){const Y=ly(pt.seconds);
+      s+=`<circle class="mk" data-t="${m.key} measured @ ${pt.rtt}ms = ${fmtS(pt.seconds)}" cx="${X}" cy="${Y}" r="4.5" fill="${m.color}" stroke="var(--surface)" stroke-width="1.5"/>`;}
+  }));
+  // axis title
+  s+=`<text x="${(padL+W-padR)/2}" y="${H-4}" text-anchor="middle" font-size="10.5" fill="var(--ink-2)">inter-node round-trip time (ms, log)</text>`;
+  svg.innerHTML=s;
+  svg.querySelectorAll('.mk').forEach(el=>{el.style.cursor='pointer';
+    el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
+  // legend
+  $('#dist-legend').innerHTML=phases.map(p=>`<span class="it"><span class="sw line" style="background:${p.color}"></span>${p.label}</span>`).join('')
+    +`<span class="it"><span class="sw" style="background:var(--ink-2);border-radius:50%;width:9px;height:9px"></span>measured (netem)</span>`
+    +`<span class="it">band = pipelined→no-overlap</span>`;
+  $('#dist-badge').textContent = meas.some(m=>m.pts.length)?'has measured anchors':'modelled';
+}
+
+/* ================= TIMING MATRIX ================= */
+const MX={zk:'nonzk'};
+function initMatrix(){
+  $('#mx-zk').querySelectorAll('button').forEach(b=>b.onclick=()=>{MX.zk=b.dataset.v;
+    $('#mx-zk').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawMatrix();});
+  drawMatrix();
+}
+function drawMatrix(){
+  const zk=MX.zk, T=$('#mx-table');
+  const head=`<thead><tr><th class="lab">circuit</th><th class="num">rows</th>
+    <th class="num">bb prove</th><th class="num">bb vkgen</th><th class="num">plaindriver</th>
+    <th class="num">REP3 split</th><th class="num">REP3 witext</th><th class="num">REP3 pk-gen</th><th class="num">REP3 prove-proper</th><th class="num">REP3 total</th>
+    <th class="num">Shamir prove</th><th class="num">REP3÷bb</th></tr></thead>`;
+  let body='<tbody>';let lastFam='';
+  for(const c of CORD){const C=DATA.circuits[c],t=C.timings_loopback;
+    if(C.family!==lastFam){lastFam=C.family;body+=`<tr class="group"><td colspan="12">${C.family}</td></tr>`;}
+    const bb=t.bb['prove_'+zk],pd=t.plaindriver['prove_'+zk],
+      split=t.REP3.split,wit=t.REP3.witext,pk=t.REP3['pkgen_'+zk],pp=t.REP3['proveproper_'+zk],
+      rep3tot=[split,wit,pk,pp].every(x=>x!=null)?(split+wit+pk+pp):t.REP3['prove_'+zk],
+      sh=t.SHAMIR['prove_'+zk];
+    const ratio=(bb&&rep3tot)?rep3tot/bb:null;
+    body+=`<tr><td class="lab">${clabel(c)}<span class="fam-pill" style="color:${famColor(C.family)};background:${famBg(C.family)}">${C.family[0]}</span></td>
+      <td class="num dim">${fmtN(C.features.dyadic_size)}</td>
+      <td class="num">${fmtS(bb)}</td><td class="num dim">${fmtS(t.bb.vkgen)}</td><td class="num">${fmtS(pd)}</td>
+      <td class="num dim">${fmtS(split)}</td><td class="num">${fmtS(wit)}</td><td class="num">${fmtS(pk)}</td><td class="num">${fmtS(pp)}</td>
+      <td class="num" style="font-weight:650">${fmtS(rep3tot)}</td>
+      <td class="num">${fmtS(sh)}</td>
+      <td class="num" style="color:var(--accent);font-weight:650">${fmtX(ratio)}</td></tr>`;
+  }
+  T.innerHTML=head+body+'</tbody>';
+}
+
+/* ================= COMPOSITION ================= */
+const BLOCKS=[
+  {key:'arithmetic',label:'arithmetic',color:'var(--c-bb)'},
+  {key:'delta_range',label:'range',color:'var(--p-pkgen)'},
+  {key:'lookup',label:'lookup',color:'var(--c-shamir)'},
+  {key:'memory',label:'memory (RAM)',color:'var(--p-prove)'},
+  {key:'poseidon2',label:'poseidon2',color:'var(--p-witext)'},
+  {key:'other',label:'other (nnf, elliptic, pub)',color:'var(--muted)'},
+];
+function blockVals(f){const b=f.blocks||{};
+  return {arithmetic:b.arithmetic||0,delta_range:b.delta_range||0,lookup:b.lookup||0,memory:b.memory||0,
+    poseidon2:(b.poseidon2_external||0)+(b.poseidon2_internal||0),
+    other:(b.nnf||0)+(b.elliptic||0)+(b.pub_inputs||0)};}
+function initComposition(){
+  const T=$('#comp-table');
+  const head=`<thead><tr><th class="lab">circuit</th><th class="num">rows</th><th class="num">dyadic</th>
+    <th class="num">arithmetic</th><th class="num">range</th><th class="num">lookup gates</th><th class="num">lookup tables</th><th class="num">table rows</th>
+    <th class="num">memory</th><th class="num">poseidon2</th><th class="num">nnf</th><th class="num">pub in</th><th class="num">witness len</th><th class="num">wit 0-frac</th><th class="num">ACIR ops</th></tr></thead>`;
+  let body='<tbody>';let lastFam='';
+  for(const c of CORD){const C=DATA.circuits[c],f=C.features,b=f.blocks||{};
+    if(C.family!==lastFam){lastFam=C.family;body+=`<tr class="group"><td colspan="15">${C.family}</td></tr>`;}
+    body+=`<tr><td class="lab">${clabel(c)}</td>
+      <td class="num">${fmtN(f.finalized_rows)}</td><td class="num dim">${fmtN(f.dyadic_size)}</td>
+      <td class="num">${fmtN(b.arithmetic)}</td><td class="num">${fmtN(b.delta_range)}</td>
+      <td class="num">${fmtN(f.lookup_gates)}</td><td class="num">${fmtN(f.num_lookup_tables)}</td><td class="num dim">${fmtN(f.total_table_rows)}</td>
+      <td class="num">${fmtN(b.memory)}</td><td class="num">${fmtN((b.poseidon2_external||0)+(b.poseidon2_internal||0))}</td>
+      <td class="num">${fmtN(b.nnf)}</td><td class="num dim">${fmtN(f.public_inputs)}</td>
+      <td class="num">${fmtN(f.witness_len)}</td><td class="num dim">${f.witness_zero_fraction!=null?(f.witness_zero_fraction*100).toFixed(0)+'%':'—'}</td>
+      <td class="num dim">${fmtN(f.acir_opcodes)}</td></tr>`;
+  }
+  T.innerHTML=head+body+'</tbody>';
+  drawComposition();
+}
+function drawComposition(){
+  const svg=$('#comp-svg'),rows=CORD.filter(c=>DATA.circuits[c].features.finalized_rows>0);
+  const W=720,padL=140,padR=16,padT=8,padB=8,bh=22,gap=10,H=padT+padB+rows.length*(bh+gap);
+  const x=v=>padL+(W-padL-padR)*v;let s='';let y=padT;
+  rows.forEach(c=>{const C=DATA.circuits[c],bv=blockVals(C.features);
+    const tot=Object.values(bv).reduce((a,b)=>a+b,0)||1;let cx=padL;
+    s+=`<text x="${padL-8}" y="${y+bh/2+4}" text-anchor="end" font-size="10.5" fill="var(--ink)" font-family="var(--mono)">${clabel(c)}</text>`;
+    BLOCKS.forEach(bl=>{const v=bv[bl.key];if(v<=0)return;const w=(W-padL-padR)*v/tot;
+      s+=`<rect class="cb" data-t="${clabel(c)} · ${bl.label}: ${fmtN(v)} (${(v/tot*100).toFixed(1)}%)" x="${cx}" y="${y}" width="${Math.max(0,w-1)}" height="${bh}" fill="${bl.color}"/>`;cx+=w;});
+    y+=bh+gap;});
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.innerHTML=s;
+  svg.querySelectorAll('.cb').forEach(el=>{el.style.cursor='pointer';
+    el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
+  $('#comp-legend').innerHTML=BLOCKS.map(b=>`<span class="it"><span class="sw" style="background:${b.color}"></span>${b.label}</span>`).join('');
+}
+
+/* ================= COMMS TABLE ================= */
+function initComms(){
+  const T=$('#comms-table');
+  const head=`<thead><tr><th class="lab">circuit</th>
+    <th class="num">witext rounds</th><th class="num">witext msgs</th><th class="num">witext bytes</th>
+    <th class="num">pk-gen rounds</th><th class="num">pk-gen bytes</th>
+    <th class="num">prove rounds</th><th class="num">prove msgs</th><th class="num">prove bytes</th>
+    <th class="num">total sent</th></tr></thead>`;
+  let body='<tbody>';let lastFam='';
+  for(const c of CORD){const C=DATA.circuits[c],cm=C.comms;
+    if(C.family!==lastFam){lastFam=C.family;body+=`<tr class="group"><td colspan="10">${C.family}</td></tr>`;}
+    const w=cm.witext||{},pk=cm.pkgen||{},pp=cm.proveproper||{},pt=cm.prove_total||{};
+    const totsent=(w.sent_bytes_total||0)+(pt.sent_bytes_total||0);
+    body+=`<tr><td class="lab">${clabel(c)}</td>
+      <td class="num">${fmtN(w.rounds_logical)}</td><td class="num dim">${fmtN(w.rounds_msgs)}</td><td class="num">${fmtB(w.recv_bytes)}</td>
+      <td class="num">${fmtN(pk.rounds_logical)}</td><td class="num">${fmtB(pk.recv_bytes)}</td>
+      <td class="num">${fmtN(pp.rounds_logical)}</td><td class="num dim">${fmtN(pp.rounds_msgs)}</td><td class="num">${fmtB(pp.recv_bytes)}</td>
+      <td class="num dim">${fmtB(totsent||null)}</td></tr>`;
+  }
+  T.innerHTML=head+body+'</tbody>';
+}
+
+/* ================= SWEEP + OVERHEAD ================= */
+function drawSweep(){
+  const svg=$('#sweep-svg'),W=560,H=340,padL=52,padR=96,padT=12,padB=40;
+  const configs=[
+    {k:'bb',label:'bb',color:'var(--c-bb)',get:C=>C.timings_loopback.bb.prove_zk},
+    {k:'pd',label:'plaindriver',color:'var(--c-pd)',get:C=>C.timings_loopback.plaindriver.prove_zk},
+    {k:'rep3',label:'REP3',color:'var(--c-rep3)',get:C=>C.timings_loopback.REP3.prove_zk},
+    {k:'shamir',label:'Shamir',color:'var(--c-shamir)',get:C=>C.timings_loopback.SHAMIR.prove_zk},
+  ];
+  // use poseidon family (has full size sweep)
+  const cs=CORD.filter(c=>DATA.circuits[c].family==='poseidon');
+  const xs=cs.map(c=>DATA.circuits[c].features.dyadic_size);
+  let xmin=Math.min(...xs),xmax=Math.max(...xs),ymin=1e9,ymax=0;
+  configs.forEach(cf=>cs.forEach(c=>{const v=cf.get(DATA.circuits[c]);if(v){ymin=Math.min(ymin,v);ymax=Math.max(ymax,v);}}));
+  ymin=Math.max(0.05,ymin*0.7);ymax*=1.3;
+  const lx=v=>padL+(W-padL-padR)*(Math.log(v/xmin)/Math.log(xmax/xmin));
+  const ly=v=>padT+(H-padT-padB)*(1-Math.log(v/ymin)/Math.log(ymax/ymin));
+  let s='';
+  for(let e=Math.floor(Math.log10(ymin));e<=Math.ceil(Math.log10(ymax));e++){const v=Math.pow(10,e);if(v<ymin||v>ymax)continue;
+    s+=`<line x1="${padL}" y1="${ly(v)}" x2="${W-padR}" y2="${ly(v)}" stroke="var(--grid)"/><text x="${padL-7}" y="${ly(v)+3}" text-anchor="end" font-size="10">${v>=1?v+'s':v+'s'}</text>`;}
+  cs.forEach(c=>{const rows=DATA.circuits[c].features.dyadic_size;const X=lx(rows);
+    s+=`<text x="${X}" y="${H-padB+15}" text-anchor="middle" font-size="9" fill="var(--muted)">2^${Math.round(Math.log2(rows))}</text>`;});
+  configs.forEach(cf=>{let ln='',pts=[];cs.forEach(c=>{const v=cf.get(DATA.circuits[c]);if(v){pts.push([lx(DATA.circuits[c].features.dyadic_size),ly(v),v,c]);}});
+    pts.forEach((p,i)=>{ln+=(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)+' ';});
+    s+=`<path d="${ln}" fill="none" stroke="${cf.color}" stroke-width="2"/>`;
+    pts.forEach(p=>{s+=`<circle class="mk" data-t="${cf.label} · ${clabel(p[3])} = ${fmtS(p[2])}" cx="${p[0]}" cy="${p[1]}" r="3.6" fill="${cf.color}" stroke="var(--surface)" stroke-width="1.2"/>`;});
+    if(pts.length){const last=pts[pts.length-1];s+=`<text x="${W-padR+6}" y="${last[1]+3}" font-size="10.5" font-weight="600" fill="${cf.color}">${cf.label}</text>`;}
+  });
+  s+=`<text x="${(padL+W-padR)/2}" y="${H-4}" text-anchor="middle" font-size="10" fill="var(--ink-2)">dyadic circuit size (log)</text>`;
+  svg.innerHTML=s;
+  svg.querySelectorAll('.mk').forEach(el=>{el.style.cursor='pointer';el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
+  $('#sweep-legend').innerHTML=configs.map(c=>`<span class="it"><span class="sw line" style="background:${c.color}"></span>${c.label}</span>`).join('');
+}
+function drawOverhead(){
+  const svg=$('#over-svg'),W=560,padL=140,padR=54,padT=8,padB=28;
+  const cs=CORD.filter(c=>{const t=DATA.circuits[c].timings_loopback;return t.bb.prove_zk&&t.REP3.prove_zk;});
+  const bh=20,gap=9,H=padT+padB+cs.length*(bh+gap);
+  const ratios=cs.map(c=>{const t=DATA.circuits[c].timings_loopback;return t.REP3.prove_zk/t.bb.prove_zk;});
+  const rmax=Math.max(...ratios)*1.12;
+  const x=v=>padL+(W-padL-padR)*v/rmax;let s='';let y=padT;
+  const ticks=niceTicks(0,rmax,5);
+  ticks.forEach(t=>{s+=`<line x1="${x(t)}" y1="${padT}" x2="${x(t)}" y2="${H-padB}" stroke="var(--grid)"/><text x="${x(t)}" y="${H-padB+15}" text-anchor="middle" font-size="9.5">${t.toFixed(0)}×</text>`;});
+  cs.forEach((c,i)=>{const r=ratios[i];
+    s+=`<text x="${padL-8}" y="${y+bh/2+4}" text-anchor="end" font-size="10" font-family="var(--mono)" fill="var(--ink)">${clabel(c)}</text>`;
+    s+=`<rect class="mk" data-t="${clabel(c)} · REP3 ${fmtS(DATA.circuits[c].timings_loopback.REP3.prove_zk)} ÷ bb ${fmtS(DATA.circuits[c].timings_loopback.bb.prove_zk)} = ${fmtX(r)}" x="${padL}" y="${y}" width="${x(r)-padL}" height="${bh}" rx="3" fill="var(--c-rep3)"/>`;
+    s+=`<text x="${x(r)+6}" y="${y+bh/2+4}" font-size="10.5" font-weight="650" fill="var(--ink)">${fmtX(r)}</text>`;
+    y+=bh+gap;});
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.innerHTML=s;
+  svg.querySelectorAll('.mk').forEach(el=>{el.style.cursor='pointer';el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
+}
+
+/* ================= TIER + PROV TABLES ================= */
+function initStaticTables(){
+  // tiers
+  let th=`<thead><tr><th class="lab">tier</th><th class="lab">scenario</th><th class="num">RTT</th><th class="num">bandwidth</th></tr></thead><tbody>`;
+  for(const t of TIER_ORDER){const T=TIERS[t];
+    th+=`<tr><td class="lab">${TIER_LABEL[t]}</td><td class="lab" style="color:var(--ink-2);font-family:var(--sans)">${TIER_DESC[t]}</td>
+      <td class="num">${T.rtt_ms} ms</td><td class="num">${T.bw_mbps?(T.bw_mbps>=1000?(T.bw_mbps/1000)+' Gbps':T.bw_mbps+' Mbps'):'unshaped'}</td></tr>`;}
+  $('#tier-table').innerHTML=th+'</tbody>';
+  // provenance
+  const m=DATA.meta.full_manifest||{};
+  const rows=[
+    ['co-snarks commit',(m.co_snarks_commit||'?')+' ('+(m.co_snarks_branch||'?')+', '+(m.co_snarks_worktree||'?')+')'],
+    ['barretenberg oracle',(m.bb_version_pin||'?')+' — '+(m.bb_oracle_path||'?')],
+    ['machine',(m.cpu_model||'?')+' · '+(m.cpu_cores_total||'?')+' cores · '+(m.rayon_threads_per_party||'?')+' threads/party'],
+    ['nargo',m.nargo_version||'?'],
+    ['loopback run',DATA.meta.full_run_dir||'?'],
+    ['netem runs',(DATA.meta.netem_runs||[]).map(r=>r.label+' ('+r.tiers.length+' tiers)').join(', ')||'—'],
+    ['started',m.started_utc||'?'],
+  ];
+  $('#prov-table').innerHTML='<tbody>'+rows.map(r=>`<tr><td class="lab" style="font-family:var(--sans);color:var(--ink-2)">${r[0]}</td><td class="lab" style="text-align:left;font-size:11.5px">${r[1]}</td></tr>`).join('')+'</tbody>';
+  // caveats
+  $('#caveats').innerHTML=`<b>Honest limits:</b> netem shapes a single loopback interface, so all parties' flows share one bandwidth cap — the <b>bandwidth</b> arm is pessimistic vs. a real per-NIC link (the latency arm is faithful). Censored (▲) cells exceeded the 600 s cap and are lower bounds. Security model is <b>semi-honest, honest-majority</b> REP3 — a malicious-secure variant would cost more (not measured here). The loopback matrix and the measured distance anchors may come from different tree revisions until the fresh run is baked — see provenance.`;
+}
+
+/* ================= util ================= */
+function niceTicks(lo,hi,n){const span=hi-lo,step0=span/n,mag=Math.pow(10,Math.floor(Math.log10(step0)));
+  const norm=step0/mag,step=(norm<1.5?1:norm<3?2:norm<7?5:10)*mag;const out=[];for(let v=Math.ceil(lo/step)*step;v<=hi+1e-9;v+=step)out.push(+v.toFixed(6));return out;}
+
+/* ================= BATCH K SWEEP ================= */
+let KPTS=[],KIDX=3;
+function klabel(K){return K===0?'∞ (unbounded)':fmtN(K);}
+function initKSweep(){
+  const ks=DATA.meta.k_sweep;
+  if(!ks||!ks.points||!ks.points.length){$('#k-body').style.display='none';$('#k-pending').style.display='block';$('#k-badge').textContent='pending';return;}
+  $('#k-circuit').textContent=clabel(ks.circuit||'');$('#k-badge').textContent='measured';
+  KPTS=[...ks.points].sort((a,b)=>{const ka=a.K===0?Infinity:a.K,kb=b.K===0?Infinity:b.K;return ka-kb;});
+  KIDX=Math.min(3,KPTS.length-1);
+  const sl=$('#k-slider');sl.max=KPTS.length-1;sl.value=KIDX;
+  sl.oninput=e=>{KIDX=+e.target.value;drawKSweep();};drawKSweep();
+}
+function drawKSweep(){
+  if(!KPTS.length)return;
+  const i=Math.min(KIDX,KPTS.length-1),p=KPTS[i];
+  $('#k-val').textContent='· '+klabel(p.K)+' gates/batch';
+  const rssGB=p.peak_rss_kb/1024/1024;
+  $('#k-tiles').innerHTML=[
+    ['Batch size K',klabel(p.K),'shared lookup gates per one-hot batch'],
+    ['Peak memory / party',rssGB.toFixed(1)+' <small>GB</small>','∝ K'],
+    ['pk-gen rounds',fmtN(p.pkgen_rounds),'∝ gates ÷ K · the WAN multiplier'],
+    ['Wall-clock (loopback)',fmtS(p.seconds),'compute + round overhead'],
+    ['pk-gen bytes (busiest peer)',fmtB(p.pkgen_bytes),'≈ largest single frame'],
+  ].map(t=>`<div class="tile" style="padding:13px"><div class="k">${t[0]}</div><div class="v" style="font-size:21px">${t[1]}</div><div class="d">${t[2]}</div></div>`).join('');
+  drawKChart(i);
+}
+function drawKChart(sel){
+  const svg=$('#k-svg'),W=720,H=340,padL=40,padR=40,padT=14,padB=42,n=KPTS.length;
+  const x=idx=>padL+(W-padL-padR)*(n<=1?0.5:idx/(n-1));
+  const series=[{k:'peak_rss_kb',color:'var(--p-prove)',get:p=>p.peak_rss_kb,fmt:v=>(v/1024/1024).toFixed(1)+'GB'},
+    {k:'pkgen_rounds',color:'var(--p-witext)',get:p=>p.pkgen_rounds,fmt:v=>fmtN(v)+' rounds'},
+    {k:'seconds',color:'var(--p-pkgen)',get:p=>p.seconds,fmt:v=>fmtS(v)}];
+  let s=`<line x1="${x(sel)}" y1="${padT}" x2="${x(sel)}" y2="${H-padB}" stroke="var(--accent)" stroke-width="1.5" opacity="0.45"/>`;
+  KPTS.forEach((p,i)=>{s+=`<text x="${x(i)}" y="${H-padB+16}" text-anchor="middle" font-size="9.5" fill="${i===sel?'var(--ink)':'var(--muted)'}" font-weight="${i===sel?700:400}">${p.K===0?'∞':fmtN(p.K)}</text>`;});
+  s+=`<text x="${(padL+W-padR)/2}" y="${H-4}" text-anchor="middle" font-size="10" fill="var(--ink-2)">batch size K (shared lookup gates per one-hot batch)</text>`;
+  series.forEach(se=>{const mx=Math.max(...KPTS.map(se.get),1e-9),y=v=>padT+(H-padT-padB)*(1-v/mx);
+    let ln='';KPTS.forEach((p,i)=>{ln+=(i?'L':'M')+x(i).toFixed(1)+' '+y(se.get(p)).toFixed(1)+' ';});
+    s+=`<path d="${ln}" fill="none" stroke="${se.color}" stroke-width="2"/>`;
+    KPTS.forEach((p,i)=>{s+=`<circle class="mk" data-t="K=${p.K===0?'∞':fmtN(p.K)} · ${se.fmt(se.get(p))}" cx="${x(i)}" cy="${y(se.get(p))}" r="${i===sel?5:3.4}" fill="${se.color}" stroke="var(--surface)" stroke-width="1.3"/>`;});});
+  svg.innerHTML=s;
+  svg.querySelectorAll('.mk').forEach(el=>{el.style.cursor='pointer';el.onmousemove=e=>showTip(`<div class="tt">${el.dataset.t}</div>`,e.clientX,e.clientY);el.onmouseleave=hideTip;});
+}
+
+/* ================= theme + boot ================= */
+$('#themebtn').onclick=()=>{const cur=document.documentElement.getAttribute('data-theme');
+  const isDark=cur?cur==='dark':matchMedia('(prefers-color-scheme:dark)').matches;
+  document.documentElement.setAttribute('data-theme',isDark?'light':'dark');
+  redrawAll();};
+function redrawAll(){drawExplorer();drawDist();drawMatrix();drawComposition();drawSweep();drawOverhead();drawKSweep();}
+function boot(){
+  // trust banner from manifest
+  const m=DATA.meta.full_manifest||{};
+  renderTiles();initExplorer();initDist();initMatrix();initComposition();initComms();
+  drawSweep();drawOverhead();initStaticTables();initKSweep();
+  $('#foot').innerHTML=`co-SNARK UltraHonk performance explorer · data ingested from <span class="mono">${DATA.meta.full_run_dir||''}</span>${(DATA.meta.netem_runs||[]).length?' + netem '+(DATA.meta.netem_runs).map(r=>r.label).join('/'):''} · decision-support tool, not a benchmark of record · measured numbers badged, modelled numbers badged, censored numbers marked.`;
+}
+boot();
+</script>

@@ -3533,3 +3533,15 @@ already proven session 21 (bb_sha256_compression K=4096/512/64/∞ all identical
 
 **Site:** top-of-file Quick link updated to the current v3.2 dataset + K-slider
 (same URL 90d4bf98). Will keep that line current on every republish (Mike's ask).
+
+---
+
+## 🔗 Benchmark explorer — live site
+
+**<https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>**
+
+Verified 2026-07-28 to embed the current dataset (co-snarks commit `65d2ac86`,
+`bench-results/2026-07-27-v3.2-full` — 12 circuits loopback + v3.2 netem tiers +
+the sha256_2e16 K-sweep). Rebuild + republish (same URL) with
+`scripts/build-explorer.sh` (page template = `scripts/explorer.template.html`,
+data ingest = `scripts/bench-explorer-data.py`).
