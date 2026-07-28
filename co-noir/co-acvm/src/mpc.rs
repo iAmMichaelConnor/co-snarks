@@ -148,6 +148,23 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         false
     }
 
+    /// Chunk size for the batched lookup read-count construction
+    /// (`construct_lookup_read_counts`): the number of shared-index lookup gates
+    /// whose one-hot vectors are materialised together in one batch.
+    ///
+    /// `None` = all gates in a single batch (fewest communication rounds, but peak
+    /// memory ∝ total lookup work — on a lookup-dense circuit such as sha256 ≥ 2^18
+    /// this materialises hundreds of GB of one-hot vectors and OOMs the host).
+    /// `Some(k)` = process the gates in chunks of at most `k`, bounding peak memory
+    /// to ∝ `k` at the cost of ~`gates/k`× more rounds. The result (read counts and
+    /// read tags) is byte-identical for every `k` — only the number of reshares, and
+    /// hence the individual share splits, differ (the reconstructed values do not).
+    /// The default is `None`; the REP3 driver overrides it to a bounded value
+    /// (single-prover/plain has no reshares, so batching is irrelevant there).
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        None
+    }
+
     /// Batch-solve a set of `c·lhs·rhs` products that the solver has proven are
     /// mutually independent (no product's operands depend on another's result),
     /// returning `c·lhs·rhs` for each term in input order.

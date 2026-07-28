@@ -114,6 +114,7 @@ fn measure_witext<H: TranscriptHasher<TranscriptFieldType>>(name: &str) -> Witex
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();

@@ -384,26 +384,49 @@ pub fn construct_lookup_read_counts<
     witness: &mut [Polynomial<T::ArithmeticShare>; 2],
     circuit: &mut GenericUltraCircuitBuilder<P, T>,
 ) -> eyre::Result<()> {
-    // Read counts/tags track which table entries have been read; they are aligned with the table
-    // data at the lookup block's trace offset.
+    // Read counts/tags track which table entries have been read; they are aligned with the
+    // table data at the lookup block's trace offset.
     //
-    // Two-pass shape (L2 batching): pass 1 computes every gate's table index (a local
-    // linear map of the gate's keys) and collects all SHARED indices, in gate order, so
-    // that the expensive index -> one-hot-vector conversion runs as ONE batched driver
-    // call for ALL gates of ALL tables (one a2b_many bit-decomposition + one bit
-    // injection instead of one Yao conversion + one injection round PER gate). Pass 2
-    // then replays the gates in exactly the original order, consuming the precomputed
-    // OHVs: every witness write (count sums, tag assigns/cmuxes) happens with the same
-    // values in the same order as the previous per-gate implementation.
+    // L2 batching (CHUNKED): the expensive step is converting each shared gate's secret table
+    // index into a one-hot vector (a2b bit-decompose + level-doubling — communication). Doing
+    // every gate at once is the fewest rounds but materialises ALL one-hot vectors
+    // simultaneously (peak memory ∝ Σ_gates table_size — which OOMs the host on lookup-dense
+    // circuits, e.g. sha256 ≥ 2^18 needs hundreds of GB). Instead we process the shared-index
+    // gates in chunks of `driver.lookup_read_count_batch_size()`: each chunk converts ≤ K
+    // indices, adds their read counts (local sums), and folds their read-tag contributions
+    // (1 − ohv) into a per-table running product carried across chunks. Peak memory is thus
+    // bounded by the chunk (∝ K) at the cost of ~gates/K× more rounds. `None` => a single
+    // chunk (the original unbounded behaviour). The reconstructed read counts and read tags
+    // are identical for every chunk size — only the per-reshare masking (hence the individual
+    // share splits) differs, not the values, so the proof/VK are byte-identical.
 
-    // Pass 1: collect shared indices (+ their table sizes) in gate order.
-    let mut shared_indices: Vec<T::ArithmeticShare> = Vec::new();
-    let mut shared_lens: Vec<usize> = Vec::new();
-    for table in circuit.lookup_tables.iter_mut() {
+    let one = T::AcvmType::from(P::ScalarField::one());
+
+    // Local descriptor of one shared-index read: its secret index, the table length (= the
+    // one-hot vector length), the read-count polynomial offset, and the owning table.
+    struct SharedRead<S> {
+        index: S,
+        len: usize,
+        offset: usize,
+        table: usize,
+    }
+
+    // --- Pass 1: resolve every gate's table index. Public-index reads accumulate now
+    // (local, comms-free); shared-index reads are queued with routing info for the chunked
+    // one-hot pass below (exactly the indices the previous implementation batched). ---
+    let n_tables = circuit.lookup_tables.len();
+    let mut shared: Vec<SharedRead<T::ArithmeticShare>> = Vec::new();
+    let mut public_reads: Vec<Vec<usize>> = vec![Vec::new(); n_tables];
+    let mut table_offsets: Vec<usize> = Vec::with_capacity(n_tables);
+
+    let mut table_offset = circuit.blocks.lookup.trace_offset as usize;
+    for (t, table) in circuit.lookup_tables.iter_mut().enumerate() {
         // we need the index_map hash table in this case
         if table.requires_index_map() {
             table.initialize_index_map();
         }
+        let len = table.len();
+        table_offsets.push(table_offset);
 
         for gate_data in table.lookup_gates.iter() {
             // find the index of the entry in the table (local: a public-coefficient
@@ -416,11 +439,11 @@ pub fn construct_lookup_read_counts<
 
             if T::is_shared(&index_in_table) {
                 let index_in_table = if table.requires_index_map() {
-                    let table = &table.column_1;
+                    let column = &table.column_1;
                     let mut index = T::public_zero();
-                    let index_vec = vec![index_in_table; table.len()];
+                    let index_vec = vec![index_in_table; column.len()];
                     let table_vec: Vec<T::AcvmType> =
-                        table.iter().map(|v| T::AcvmType::from(*v)).collect();
+                        column.iter().map(|v| T::AcvmType::from(*v)).collect();
                     let cmp = T::equal_many(driver, &index_vec, &table_vec)?;
                     for (i, val) in cmp.into_iter().enumerate() {
                         let mul = T::mul_with_public(driver, P::ScalarField::from(i as u64), val);
@@ -430,60 +453,12 @@ pub fn construct_lookup_read_counts<
                 } else {
                     T::get_shared(&index_in_table).expect("Already checked it is shared")
                 };
-                shared_indices.push(index_in_table);
-                shared_lens.push(table.len());
-            }
-        }
-    }
-
-    // ONE batched index -> OHV conversion for all gates of all tables. (Empty batch =>
-    // no driver call at all: circuits without shared lookup indices stay comms-free.)
-    let mut ohvs = driver
-        .one_hot_vector_from_shared_index_many(&shared_indices, &shared_lens)?
-        .into_iter();
-    drop(shared_indices);
-
-    // Pass 2: replay the gates in original order. Read counts are local commutative
-    // sums (written inline, comms-free). Read tags are the elementwise OR over all
-    // gates' read positions; the shared OHVs are collected here and OR-reduced in ONE
-    // batched OR-tree afterwards (see `compute_read_tags_or_tree`), collapsing the tag
-    // communication from Σ_t (g_t − 1) sequential reshares to max_t ⌈log2 g_t⌉.
-    let mut tag_tables: Vec<TagReadTable<T::ArithmeticShare>> =
-        Vec::with_capacity(circuit.lookup_tables.len());
-    let mut table_offset = circuit.blocks.lookup.trace_offset as usize;
-    for table in circuit.lookup_tables.iter_mut() {
-        let len = table.len();
-        let mut shared_ohvs: Vec<Vec<T::ArithmeticShare>> = Vec::new();
-        let mut public_reads: Vec<usize> = Vec::new();
-
-        for gate_data in table.lookup_gates.iter() {
-            let index_in_table = gate_data.calculate_table_index(
-                driver,
-                table.use_twin_keys,
-                table.column_2_step_size,
-            );
-
-            if T::is_shared(&index_in_table) {
-                let mut ohv = ohvs
-                    .next()
-                    .expect("pass 1 collected an OHV for every shared-index gate");
-
-                // increment the read count at the corresponding index in the full polynomial
-                for (src, des) in ohv
-                    .iter()
-                    .zip(witness[0].iter_mut().skip(table_offset).take(len))
-                {
-                    let wit = T::AcvmType::from(des.to_owned());
-                    let src = T::AcvmType::from(src.to_owned());
-                    let added = driver.add(wit, src);
-                    *des = driver.get_as_shared(&added);
-                    // Read count
-                }
-
-                // Keep the OHV (truncated to the table length, matching the read-count
-                // range) for the batched read-tag OR-tree.
-                ohv.truncate(len);
-                shared_ohvs.push(ohv);
+                shared.push(SharedRead {
+                    index: index_in_table,
+                    len,
+                    offset: table_offset,
+                    table: t,
+                });
             } else {
                 // Index is public
                 let index_in_table: BigUint = T::get_public(&index_in_table)
@@ -503,72 +478,103 @@ pub fn construct_lookup_read_counts<
                 witness[0][index_in_poly] = driver.get_as_shared(&wit0); // Read count
 
                 // Public read => read tag is 1 at this entry; applied (idempotently, as an
-                // OR term) after the OR-tree below.
-                public_reads.push(index_in_poly);
+                // OR term) after the per-table tag products below.
+                public_reads[t].push(index_in_poly);
             }
         }
-
-        tag_tables.push(TagReadTable {
-            offset: table_offset,
-            shared_ohvs,
-            public_reads,
-        });
         table_offset += len; // set the offset of the next table within the polynomials
     }
 
-    // Batched OR-tree over all tables' shared OHVs -> read tags.
-    compute_read_tags_or_tree::<T, P>(driver, &mut witness[1], tag_tables)?;
+    // --- Chunked one-hot pass: convert shared indices to OHVs in batches of ≤ K, adding read
+    // counts and folding a per-table running product of (1 − ohv) for the read tags. ---
+    let chunk_size = driver
+        .lookup_read_count_batch_size()
+        .unwrap_or_else(|| shared.len())
+        .max(1);
+    // tag_carry[t] = Π (1 − ohv) over the shared gates of table `t` processed so far
+    // (empty = none yet), length = table length.
+    let mut tag_carry: Vec<Vec<T::AcvmType>> = vec![Vec::new(); n_tables];
+
+    for chunk in shared.chunks(chunk_size) {
+        let idxs: Vec<T::ArithmeticShare> = chunk.iter().map(|s| s.index.to_owned()).collect();
+        let lens: Vec<usize> = chunk.iter().map(|s| s.len).collect();
+        // ONE batched index -> OHV conversion for this chunk. (Empty batch => no driver call:
+        // circuits without shared lookup indices stay comms-free.)
+        let ohvs = driver.one_hot_vector_from_shared_index_many(&idxs, &lens)?;
+
+        // Per-table operand lists for this chunk's tag reduction, seeded with the running
+        // carry so the product spans every chunk.
+        let mut operands: Vec<Vec<Vec<T::AcvmType>>> = Vec::with_capacity(n_tables);
+        for carry in tag_carry.iter_mut() {
+            let mut ops: Vec<Vec<T::AcvmType>> = Vec::new();
+            if !carry.is_empty() {
+                ops.push(std::mem::take(carry));
+            }
+            operands.push(ops);
+        }
+
+        for (s, ohv) in chunk.iter().zip(ohvs.into_iter()) {
+            // Read count: increment the count at the read index across the table's range
+            // (local commutative sum, comms-free).
+            for (src, des) in ohv
+                .iter()
+                .zip(witness[0].iter_mut().skip(s.offset).take(s.len))
+            {
+                let wit = T::AcvmType::from(des.to_owned());
+                let src = T::AcvmType::from(src.to_owned());
+                let added = driver.add(wit, src);
+                *des = driver.get_as_shared(&added);
+                // Read count
+            }
+            // Read-tag operand: the complement 1 − ohv (truncated to the table length,
+            // matching the read-count range), a local `public − share`.
+            let comp: Vec<T::AcvmType> = ohv
+                .iter()
+                .take(s.len)
+                .map(|x| driver.sub(one.clone(), T::AcvmType::from(x.to_owned())))
+                .collect();
+            operands[s.table].push(comp);
+        }
+
+        // Reduce each table's [carry?] + this chunk's complements into the new carry, batching
+        // all tables' pairwise products into one mul_many per tree level.
+        let reduced = batched_elementwise_product::<T, P>(driver, operands)?;
+        for (carry, prod) in tag_carry.iter_mut().zip(reduced) {
+            *carry = prod;
+        }
+    }
+
+    // --- Emit read tags: 1 − Π(1 − ohv) for tables with shared reads, then OR in the public
+    // reads (idempotent set-to-1). ---
+    for (t, carry) in tag_carry.into_iter().enumerate() {
+        let offset = table_offsets[t];
+        for (j, p) in carry.into_iter().enumerate() {
+            let tag = driver.sub(one.clone(), p);
+            witness[1][offset + j] = driver.get_as_shared(&tag);
+        }
+        for &idx in &public_reads[t] {
+            witness[1][idx] = driver.promote_to_trivial_share(P::ScalarField::one());
+        }
+    }
     Ok(())
 }
 
-/// Per-table data gathered by [`construct_lookup_read_counts`] for the read-tag OR-tree:
-/// the one-hot vectors of the table's shared-index gates (each truncated to the table
-/// length) plus the absolute polynomial indices read by its public-index gates.
-struct TagReadTable<S> {
-    offset: usize,
-    shared_ohvs: Vec<Vec<S>>,
-    public_reads: Vec<usize>,
-}
-
-/// Computes read tags as the elementwise OR of every gate's read positions.
-///
-/// For 0/1 one-hot vectors the read tag equals `1 − Π_g (1 − ohv_g)`, i.e. the OR of the
-/// gates' OHVs (`OR` is associative, commutative and idempotent on `{0,1}`, so this is
-/// exactly the value the previous serial `t ← t + e·(1−t)` cmux chain accumulated,
-/// independent of gate order). The complements `1 − ohv_g` are local; the product is a
-/// balanced binary OR-tree whose pairwise multiplications are batched across ALL tables
-/// into ONE `mul_many` per level, so the whole tag phase costs `max_t ⌈log2 g_t⌉` rounds
-/// instead of `Σ_t (g_t − 1)`. Public-index reads then set their entry to 1 (an idempotent
-/// OR term). A table with no shared gates contributes no communication (and if NO table
-/// has ≥ 2 shared gates the loop makes no `mul_many` call at all).
-fn compute_read_tags_or_tree<T, P>(
+/// Reduces each table's list of equal-length operand vectors to their elementwise product,
+/// batching every table's pairwise multiplications into ONE `mul_many` per tree level (so the
+/// whole reduction costs `max_t ⌈log2 n_t⌉` rounds rather than `Σ_t (n_t − 1)`). A table with
+/// no operands yields an empty vector; with one operand, that operand unchanged. All operands
+/// within a table must share a length. This is the batched OR-tree that
+/// [`construct_lookup_read_counts`] uses to turn per-gate `1 − ohv` complements into the
+/// `Π(1 − ohv)` whose complement is the read tag (`OR` is associative/commutative/idempotent
+/// on `{0,1}`, so the value is independent of the pairing/chunking).
+fn batched_elementwise_product<T, P>(
     driver: &mut T,
-    read_tags: &mut Polynomial<T::ArithmeticShare>,
-    tables: Vec<TagReadTable<T::ArithmeticShare>>,
-) -> eyre::Result<()>
+    mut operands: Vec<Vec<Vec<T::AcvmType>>>,
+) -> eyre::Result<Vec<Vec<T::AcvmType>>>
 where
     T: NoirWitnessExtensionProtocol<P::ScalarField>,
     P: CurveGroup,
 {
-    let one = T::AcvmType::from(P::ScalarField::one());
-
-    // Per-table operand lists, initialised to the complements (1 - ohv) of each shared
-    // gate's OHV (local: public one minus a share).
-    let mut operands: Vec<Vec<Vec<T::AcvmType>>> = Vec::with_capacity(tables.len());
-    for tbl in &tables {
-        let mut ops = Vec::with_capacity(tbl.shared_ohvs.len());
-        for ohv in &tbl.shared_ohvs {
-            let mut comp = Vec::with_capacity(ohv.len());
-            for s in ohv {
-                comp.push(driver.sub(one.clone(), T::AcvmType::from(s.to_owned())));
-            }
-            ops.push(comp);
-        }
-        operands.push(ops);
-    }
-
-    // Batched OR-tree reduction: while any table still has > 1 operand, pair operands
-    // up within each table and multiply all pairs (across all tables) in one mul_many.
     loop {
         let mut lhs: Vec<T::AcvmType> = Vec::new();
         let mut rhs: Vec<T::AcvmType> = Vec::new();
@@ -608,20 +614,16 @@ where
             *ops = new_ops;
         }
     }
-
-    // Emit tags: 1 - Π(1-ohv) for tables with shared reads, then OR in the public reads.
-    for (tbl, ops) in tables.iter().zip(operands) {
-        if let Some(prod) = ops.into_iter().next() {
-            for (j, p) in prod.into_iter().enumerate() {
-                let tag = driver.sub(one.clone(), p);
-                read_tags[tbl.offset + j] = driver.get_as_shared(&tag);
+    Ok(operands
+        .into_iter()
+        .map(|mut ops| {
+            if ops.is_empty() {
+                Vec::new()
+            } else {
+                ops.swap_remove(0)
             }
-        }
-        for &idx in &tbl.public_reads {
-            read_tags[idx] = driver.promote_to_trivial_share(P::ScalarField::one());
-        }
-    }
-    Ok(())
+        })
+        .collect())
 }
 
 pub fn construct_lookup_polynomials<P: CurveGroup>(

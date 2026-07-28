@@ -555,6 +555,14 @@ pub struct BuildAndGenerateProofCli {
     #[arg(long)]
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub vk: Option<PathBuf>,
+    /// Max shared-index lookup gates whose one-hot vectors are materialised together
+    /// during proving-key generation. Bounds peak memory (∝ this value) on
+    /// lookup-dense circuits (e.g. sha256) at the cost of ~gates/this more rounds;
+    /// omit for the safe bounded default, `0` = unbounded (fewest rounds, but can
+    /// OOM the host on large sha circuits). The proof is byte-identical for any value.
+    #[arg(long)]
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub lookup_batch_size: Option<usize>,
 }
 
 /// Config for `build_and_generate_proof`
@@ -584,6 +592,11 @@ pub struct BuildAndGenerateProofConfig {
     pub fields_as_json: bool,
     /// The path to the verification key file
     pub vk: PathBuf,
+    /// Max shared-index lookup gates per one-hot batch during proving-key generation
+    /// (see the CLI flag). `None` = the driver's bounded default; `Some(0)` =
+    /// unbounded; `Some(k)` = k gates per batch.
+    #[serde(default)]
+    pub lookup_batch_size: Option<usize>,
 }
 
 /// Cli arguments for `creating_vk`
@@ -1454,6 +1467,7 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
                 &net0,
                 &net1,
                 &prover_crs,
+                None, // build-proving-key: driver's bounded default batch size
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1748,6 +1762,7 @@ fn run_build_and_generate_proof(
                 &net0,
                 &net1,
                 &prover_crs,
+                config.lookup_batch_size,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");

@@ -505,3 +505,70 @@ low-priority robustness. None affect the byte-parity results or block 5.1d.
   b=false ⇒ carry=0 wire), add a KAT exercising an even constant, and
   audit callers. Do as its own tiny gated unit — it touches an audited
   GC helper.
+
+## §3 additions (2026-07-27, session 21) — configurable / bounded round-batching
+
+- **Make MPC round-batching bounded + configurable (witext U2 + pk-gen L2-1b).**
+  The round-collapse levers (`witext` U1/U2 per-level `mul_many`; pk-gen L2-1b
+  `ohv_many` + OR-tree in `construct_lookup_read_counts`) trade *sequential
+  rounds* for *fewer, bigger messages*. That is the right call under latency
+  (measured: witext 2^17 WAN ≥600 s→363 s; sha pk-gen WAN ≥600 s→175 s), but it
+  was done **unbounded** (`chunk = ∞`): one reshare batches ALL gates of ALL
+  tables, so sha256's witness-dependent read-count message is a **single
+  ~8.6 GB frame at 2^20** (~0.5 GB already at 2^16). Discovered in the v3.2
+  bench (2026-07-27): every `sha256 ≥ 2^16` REP3 prove cell died
+  `rc=1: frame len 536870920 > max 469762056` — the default 448 MB
+  `max_frame_length` cap. No prior bench had exercised big-sha REP3 on the
+  post-lever tree, so it went unseen. These same cells PASSED pre-lever
+  (data was spread across many small messages).
+  - **Why it matters / can't be amortized:** the big frame is
+    `construct_lookup_read_counts` writing the **witness-dependent**
+    `lookup_read_counts_and_tags` (proving-key WITNESS half, built from the
+    shared witness in `generate_proving_key_rep3`). It is **per-proof**, not a
+    one-time circuit-fixed precompute — preloading/whitelisting the
+    (witness-independent) `precomputed` selectors+table columns does NOT remove
+    it. So every proof on a lookup-heavy circuit pays it.
+  - **Parametrization status today:** witext has a driver bool
+    `use_level_batched_witext()` (default false = serial for plain/Shamir; REP3
+    hard-overrides true) — on/off only, per-protocol, not a *size* and not a
+    runtime knob. pk-gen read-counts has **no toggle and no size parameter** —
+    the batched path is the only one; the per-gate serial version was replaced,
+    not gated.
+  - **Proposed:** a batch/chunk-**size** parameter threaded like U2's bool —
+    e.g. `read_count_batch_chunk() / witext_batch_chunk() -> Option<usize>` on
+    the driver trait, or a coarse `NetworkProfile` enum
+    (`LocalFat` ⇒ unbounded; `Wan` ⇒ large chunk; `Constrained` ⇒ small chunk,
+    accept more rounds). Bounded batching keeps ~all the round win
+    (rounds ≈ depth + ⌈bytes/chunk⌉) while capping frame size + per-peer memory.
+    Keep the serial path reachable. plain/Shamir unaffected.
+  - **Frame-cap sub-issue (separate, smaller):** `DEFAULT_MAX_FRAME_LENGTH` /
+    the committed `examples/configs/party*.toml` value (469_762_056) is too
+    small for batched big-sha; either auto-size from circuit or negotiate at
+    handshake. The v3.2 bench bumped examples/configs to 32 GiB
+    (`*.bak-preframe` backups beside them) purely so the batched path is
+    measurable — that is a **bench fix, not the real fix**; revert or supersede.
+  - **Measure after:** batched vs bounded-chunk vs serial across the four
+    distance tiers (same-machine / rack / continent / antipodal) — turns the
+    rounds↔frame-size↔wall-clock tradeoff into a curve, not a judgement call.
+  - **Verdict (session 21):** the batching was good *directionally* and correct
+    for its WAN target; the gap is that it is unbounded rather than a mistake.
+    Keep it; add the size knob.
+  - **CONFIRMED MEMORY OOM (session 21, v3.2 bench) — priority raised.** The
+    same unbounded batching materialises *every* lookup one-hot-vector at once,
+    so REP3 pk-gen peak RSS scales ~linearly with (lookup gates × table size) ×
+    3 parties. Measured single-party peaks: sha256_2^16 fits, **sha256_2^17 =
+    88.1 GB/party (×3 ≈ 264 GB)**, sha256_2^18 ≈ 176 GB/party (×3 ≈ 528 GB) >
+    the **384 GiB container cap → cgroup OOM-kill** (`memory.events oom_kill=2`,
+    both v3.2 runs died at sha256_2^18 REP3 pk-gen; the container-wide OOM also
+    culled the Claude Code shell + tmux session twice — initially mis-diagnosed
+    as a harness session-recycle). Non-lookup circuits (poseidon, recursion_zk
+    = 0 lookup gates) are unaffected (recursion REP3 = 20.8 GB/party). So this
+    is NOT just a WAN frame-size issue — **sha ≥ 2^18 REP3/Shamir is currently
+    UNMEASURABLE / un-provable on a 384 GB box.** A plain on/off toggle
+    (reinstate the per-gate serial read-count path) immediately restores
+    provability at bounded memory (many rounds — fine on LAN/loopback);
+    chunked batching gives bounded memory AND few rounds. Same fix resolves the
+    frame-size item above. **Recommend bringing this forward from backlog to an
+    active task** — it's now a correctness/robustness blocker (OOMs the box),
+    not just a perf-tuning nicety. Byte-identity must be preserved (existing
+    T3/referee/KAT fences guard it).

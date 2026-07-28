@@ -83,6 +83,7 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -247,6 +248,7 @@ fn prove_rep3_from_witness_shares<H: TranscriptHasher<TranscriptFieldType>>(
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -326,6 +328,7 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let (proof, public_input) =
@@ -650,6 +653,7 @@ fn rep3_prove_comms_fence<H: TranscriptHasher<TranscriptFieldType>>(
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -759,6 +763,7 @@ fn poseidon_prove_comms_message_fence_poseidon2sponge() {
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -1234,6 +1239,7 @@ fn poseidon_witness_view_scan_no_plaintext_leak_poseidon2sponge() {
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -1412,6 +1418,7 @@ fn bb_sha256_compression_comms_band_fence_poseidon2sponge() {
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
@@ -1579,6 +1586,7 @@ fn shared_witness_proof_evidence_poseidon2sponge(name: &str, reps: [(u32, u64); 
                     &net0,
                     &net1,
                     &prover_crs,
+                    None,
                 )
                 .unwrap();
                 let pkgen_time = start.elapsed();
@@ -1786,6 +1794,7 @@ fn rep3_zk_seeded_proof_bytes_per_party<H: TranscriptHasher<TranscriptFieldType>
                 &net0,
                 &net1,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();

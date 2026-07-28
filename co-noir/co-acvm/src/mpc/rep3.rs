@@ -38,6 +38,13 @@ use std::ops::BitXor;
 
 type ArithmeticShare<F> = Rep3PrimeFieldShare<F>;
 
+/// Default lookup read-count batch size (shared-index gates per one-hot-vector
+/// batch). ~1 MB/gate/party of transient OHV state was measured on sha256, so
+/// 4096 caps the pk-gen read-count peak at ~4 GB/party regardless of circuit
+/// size — safe on any host — while leaving every circuit with < 4096 shared
+/// lookup gates a single batch (identical to the unbounded path).
+pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
+
 pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     id: PartyID,
     net0: &'a N,
@@ -60,6 +67,12 @@ pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     /// schedule have drifted apart — a performance bug, not a correctness bug, but one we want
     /// to SEE.
     sha256_trace_cache_tag_mismatches: usize,
+    /// Chunk size for batched lookup read-count one-hot-vector materialisation;
+    /// see [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`]. Bounded
+    /// by default (4096 gates) so lookup-dense pk-gen (sha256 ≥ 2^18) stays within
+    /// host memory; set via [`Self::set_lookup_read_count_batch_size`]
+    /// (`--lookup-batch-size` on the co-noir binary).
+    lookup_read_count_batch_size: Option<usize>,
     phantom_data: PhantomData<F>,
 }
 
@@ -77,8 +90,18 @@ impl<'a, F: PrimeField, N: Network> Rep3AcvmSolver<'a, F, N> {
             plain_solver: PlainAcvmSolver::<F>::default(),
             sha256_trace_cache: VecDeque::new(),
             sha256_trace_cache_tag_mismatches: 0,
+            lookup_read_count_batch_size: Some(DEFAULT_LOOKUP_READ_COUNT_BATCH),
             phantom_data: PhantomData,
         })
+    }
+
+    /// Override the lookup read-count batch size — the number of shared-index
+    /// lookup gates whose one-hot vectors are materialised together in one batch.
+    /// `Some(k)` bounds peak pk-gen memory to ∝ `k`; `None` = unbounded (all gates
+    /// at once — fewest rounds, but OOMs on lookup-dense circuits, so only use it
+    /// when host memory is known to be ample). Byte-identical for every value.
+    pub fn set_lookup_read_count_batch_size(&mut self, k: Option<usize>) {
+        self.lookup_read_count_batch_size = k;
     }
 
     /// The sha256 multi-table a rotation-kind driver read with these parameters belongs to, if
@@ -2532,6 +2555,17 @@ impl<'a, F: PrimeField, N: Network> NoirWitnessExtensionProtocol<F> for Rep3Acvm
 
     fn use_level_batched_witext(&self) -> bool {
         true
+    }
+
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        // Bounded by default so a lookup-dense circuit (sha256 ≥ 2^18) cannot
+        // OOM the host: the all-at-once batch materialises every gate's one-hot
+        // vector at once (~1 MB/gate/party measured on sha), so 4096 gates caps
+        // the pk-gen read-count peak at ~4 GB/party regardless of circuit size.
+        // Circuits with < 4096 shared lookup gates run in a single chunk, i.e.
+        // identically to the unbounded path. Overridden per-run by
+        // `--lookup-batch-size` (see co-noir bin); `Some(0)` there means unbounded.
+        self.lookup_read_count_batch_size
     }
 
     fn solve_mul_terms(

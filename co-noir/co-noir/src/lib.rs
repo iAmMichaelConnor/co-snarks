@@ -224,9 +224,17 @@ pub fn generate_proving_key_rep3<N: Network>(
     net0: &N,
     net1: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
 ) -> Result<Rep3ProvingKey<Bn254G1>> {
     let id = PartyID::try_from(net0.id())?;
     let mut driver = Rep3AcvmSolver::new(net0, net1, A2BType::default())?;
+    // Override the lookup read-count batch size if requested: `None` keeps the
+    // driver's bounded default; `Some(0)` = unbounded (all gates in one batch —
+    // fewest rounds but can OOM on lookup-dense circuits); `Some(k)` = k gates per
+    // batch (peak memory ∝ k). Byte-identical for any value.
+    if let Some(k) = lookup_batch_size {
+        driver.set_lookup_read_count_batch_size((k != 0).then_some(k));
+    }
     let witness_share = witness_share.into_iter().map(Rep3AcvmType::from).collect();
     let crs = if constraint_system.is_recursive_verification_circuit() {
         prover_crs // TACEO TODO: Maybe just use a subset of the crs here?
