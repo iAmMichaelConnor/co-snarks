@@ -3552,3 +3552,42 @@ in `site/`). Rebuild + republish (same URL) with `scripts/build-explorer.sh`
 dataset (12 circuits loopback + 4 measured network-emulation tiers + batch-size-K
 panels) plus the gap-fill pk-gen/prove-proper splits (sha256_2e18 both modes;
 sha256_2e19 + recursion_zk non-ZK, ZK cells filling as the detached run finishes).
+
+---
+
+## Session 23 — 2026-07-28 — monty-hall re-verified vs session-22 co-noir; command log consolidated (ch.14 §28-29)
+
+Mike's ask: check `~/monty-hall-aztec` still works given the session 14–22
+co-noir churn; consolidate a canonical command reference into the command log;
+tidy monty-hall's README/tests/commands.
+
+**monty-hall vs current `mc/update-co-noir`: ONE break, one line, now green.**
+The node's `generate_proving_key_rep3` call site (`mpc/mpc-node/src/mpc.rs:287`)
+broke on the new 6th arg `lookup_batch_size: Option<usize>` (session 22). Fixed
+by passing `None` (keep the driver's bounded default — the round circuits are
+small/single-chunk). Full surface re-run, all green vs the current branch:
+- `noir_logic/check.sh` — PASS (30 pss_utils tests + monty_hall_init /
+  monty_hall_open_door bb prove/verify + tamper negative).
+- `cargo test -p mpc-node --release` — 4/4 (LocalNetwork 3-party full game).
+- `mpc/e2e.sh` (offset ports) — PASS: 3 nodes + orchestrator, all 4 rounds
+  **bb-cross-verified** + tamper negative. This is the load-bearing result —
+  it confirms the co-noir prover changes (witext U1/U2, verifier F1/F2,
+  parametrised lookup-batch K) preserved byte-parity with the pinned bb oracle.
+- `contract && aztec test` — 10/10 (incl. `full_game_flow`).
+- `e2e/run.sh` (on-chain) NOT re-run: it depends only on the pinned aztec/noir
+  release deps, not the co-noir Rust crates, so it is unaffected by this churn.
+
+**Command log (ch.14) got §28 + §29.** §28 = a *reference index* of the current
+canonical command surface after session 22 (fast-check.sh flags; co-noir
+`--lookup-batch-size` + the three `CO_NOIR_*` diagnostics env vars; compare*.sh
++ acceptance-parallel.sh knobs; the bench run/pipeline/explorer scripts; the
+source-only bb-oracle build) — every entry verified against the actual script /
+clap source, scratchpad-only orchestration scripts deliberately excluded as
+non-reproducible. §29 = this session's monty-hall re-verification record.
+
+**Tidy:** monty-hall README two path refs `pss_utils/aztec_note.nr` →
+`pss_utils/src/aztec_note.nr` for consistency with the other `src/` paths; no
+debris/backup files present; only pre-existing TODO is the upstream `#8970` one
+in `dh.nr`. Left uncommitted per the no-commits-without-ask rule: monty-hall
+`README.md` + `mpc/mpc-node/src/mpc.rs` + `mpc/Cargo.lock` (rayon propagated in
+from the co-noir dep bump); co-snarks `project-docs/14` + PROGRESS (this entry).

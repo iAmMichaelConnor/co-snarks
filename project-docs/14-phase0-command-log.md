@@ -1307,3 +1307,164 @@ Narrative: PROGRESS session 13 (+ cont.). Commands + gotchas, in order:
   Bench gotcha fixed pre-launch: bare `wait` after 3 backgrounded parties
   returns only the LAST job's status — collect PIDs and wait each, or a
   failed party is silently masked.
+
+## 28. Sessions 14–22 canonical command reference (bench / optimisation / gates)
+
+*Unlike §1–27 (a chronological "what was run and what happened" log), this
+section is a **reference index of the current canonical command surface** as it
+stands after session 22 (2026-07-28): the flags, scripts, and env vars that a
+future session should reach for. Every entry was verified against the actual
+script or `--help`/clap source in the tree at the time of writing — nothing is
+transcribed from memory. Per-session scratchpad orchestration scripts
+(`orchestrate.sh`, `run-netem-tiers.sh`, `k-sweep.sh`, the `v4bench` tmux
+runner, …) are **deliberately excluded**: they lived in ephemeral session
+scratchpads, were never committed to `scripts/`, and are not reproducible from
+this checkout. Their durable output (the v3.2 run data + the ingest scripts
+below) is what's canonical.*
+
+### 28.1 Fast inner-loop gate — `fast-check.sh`
+
+Flags combine (e.g. `./fast-check.sh --sec --bb`). Source of truth =
+`fast-check.sh` header + arg `case`.
+
+```bash
+./fast-check.sh              # [OK] Tier 1: plain poseidon KAT byte-parity (~5-10s + build)
+./fast-check.sh --sec        # [OK] + verifier / deserialization security regressions
+./fast-check.sh --mpc        # [OK] + REP3 + Shamir poseidon co-mirror parity (incl. T2/T2-lite comms fences)
+./fast-check.sh --bb         # [OK] + single-circuit bb byte cross-verify (poseidon, bb_sha256_compression; non-ZK) + recursion VK-KAT
+./fast-check.sh --bb-mpc     # [OK] PLAN 4.4 standing test: REP3 MPC proofs verify under real bb (+ZK +tamper). NOT in --all-fast (own ~70s cold build)
+./fast-check.sh --all-fast   # [OK] = --sec --mpc --bb (does NOT include --bb-mpc — pass it separately)
+./fast-check.sh --full       # ~60-min acceptance gate (asks [y/N]); milestones only. Runs the noir suite + scripts/acceptance-parallel.sh
+```
+
+⛔ **Never run bare `cargo test -p tests [--release]`** — it pulls in the circom
+binary (~13 min, irrelevant here). Always scope: `--test noir`. Crate-local fast
+unit tests not reachable via `-p tests`:
+
+```bash
+cargo test -p tests --release --test noir -- plain::poseidon                 # Tier-1 oracle
+cargo test -p tests --release --test noir -- recursion_vk_kat recursion_zk_vk_kat  # recursion parity fence (VK bytes; proof bytes are legitimately prover-specific)
+cargo test -p co-noir-common --release --lib -- mpc::plain::tests zk_masking  # batched-inversion ref + seedable ZK-blinding stream distinctness
+cargo test -p noir-types --release -- tests::parses_program_artifact          # artifact-parse regression
+```
+
+### 28.2 co-noir CLI flags + diagnostic env vars (sessions 20–22)
+
+```bash
+# --lookup-batch-size K: bounds peak memory in proving-key gen on lookup-dense
+# circuits (sha256). Some(k)=k lookup gates/chunk; Some(0)=unbounded (old
+# behaviour, can OOM); omit=driver's bounded default DEFAULT_LOOKUP_READ_COUNT_BATCH
+# =4096 (co-acvm/src/mpc.rs). Proof is BYTE-IDENTICAL for every K (verified 4-way
+# at K=4096/512/64/0 on bb_sha256_compression). ALL parties in one session MUST
+# use the same K (chunk count = reshare-round count; a mismatch desyncs parties).
+# It's a CLI flag by deliberate design (session 22) — env vars in this codebase are
+# diagnostics-only, so the earlier CO_NOIR_LOOKUP_BATCH_K proposal was dropped.
+target/release/co-noir build-and-generate-proof --witness … --circuit … \
+  --crs co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 \
+  --config configs/party1.toml --out … --vk … --lookup-batch-size 4096
+
+# Diagnostics-only env vars (never change outputs):
+CO_NOIR_PHASE_TIMINGS=1 target/release/co-noir build-and-generate-proof …   # [phase-timing] <name>: Xs to stderr (oink/sumcheck/pcs)
+CO_NOIR_PHASE_TIMINGS=1 target/release/plaindriver …                        # coarse wall-clock phases (plain path)
+CO_NOIR_NET_STATS_JSON=/p/prove.json CO_NOIR_NET_STATS_JSON_PKGEN=/p/pkgen.json target/release/co-noir build-and-generate-proof …
+    # per-peer connection stats JSON on protocol finish; _PKGEN snapshots after pk-gen
+    # so (final − pkgen) isolates prove-proper comms. Each peer entry also carries
+    # rounds / blocked_recv_ms / recv_bytes_histogram (ch.24 §3a extension).
+CO_NOIR_WITEXT_LEVELS=1 target/release/plaindriver …                        # comms-free level-schedule + round-attribution (reads public circuit structure only)
+```
+
+### 28.3 Acceptance / parity matrix (compare*.sh + sharded runner)
+
+```bash
+# Full plain (plaindriver-vs-bb) matrix: 32 circuits, poseidon2+keccak × ZK/non-ZK,
+# proof/VK/public_inputs byte-diffs + 4-way bb cross-verify.
+bash co-noir/co-noir/examples/compare.sh
+# Full REP3 3-party matrix (29 base circuits); TEST_SLOWER_CIRCUITS=1 adds aes128,
+# bb_sha256_compression, recursion_zk.
+bash co-noir/co-noir/examples/compare_mpc.sh
+
+# Parallelisation knobs (added session 13, §27):
+CIRCUIT_FILTER=add3u64 bash compare.sh          # [OK] ~40s smoke; unknown name => exit 2 (typo guard)
+RAYON_NUM_THREADS=16 CIRCUIT_FILTER="poseidon blake3" CONFIG_DIR=/tmp/cfg0 \
+  TEST_SLOWER_CIRCUITS=1 bash compare_mpc.sh     # CONFIG_DIR = per-shard mesh-port dir so shards don't collide
+
+# Weight-balanced sharded sweep over the full compare.sh ∪ compare_mpc.sh union
+# (default 4 shards; hard-asserts full coverage before running). Wired as
+# `fast-check.sh --full`.
+env BARRETENBERG_BINARY="$BB" bash scripts/acceptance-parallel.sh [num_shards]
+
+# PLAN 4.4 standing bb-verify harness (own private mesh 12000-12002; safe alongside compare_mpc):
+bash co-noir/co-noir/examples/bb_verify_standing.sh          # default REP3 tier
+bash co-noir/co-noir/examples/bb_verify_standing.sh --full   # + recursion, recursion_zk, Shamir
+```
+
+### 28.4 Benchmark run + data pipeline + explorer (sessions 14, 21–22)
+
+```bash
+# PLAN 0.5 matrix (detached, serial; aggregates + drops BENCH_DONE sentinel in $OUT/launcher.log):
+BENCH_OUT=bench-results/$(date +%Y-%m-%d) bash scripts/bench-0_5-launcher.sh
+# Smoke a subset (default sweep = poseidon, poseidon_2e17..2e20, bb_sha256_compression,
+# sha256_2e16..2e20, recursion_zk). Knobs: RAYON_NUM_THREADS (16), CELL_TIMEOUT (600s).
+BENCH_OUT=/tmp/smoke BENCH_CIRCUITS="poseidon" bash scripts/bench-0_5.sh
+
+# Data pipeline:
+python3 scripts/bench-retro-phase-split.py <run-dir>    # split prove cells → pk-gen vs prove-proper (phase-split.csv)
+python3 scripts/bench-tier-model.py       <run-dir>     # distance-tier transfer-time model from recv_bytes_histogram (tiers.csv)
+python3 scripts/bench-ingest.py [--db bench-results/bench.sqlite] [RUN_DIR …]   # idempotent SQLite rebuild (no args = ingest all)
+# Current canonical explorer ingest (superset; missing cells => null, never fabricated):
+python3 scripts/bench-explorer-data.py \
+  --full            bench-results/2026-07-27-v3.2/loopback-matrix \
+  --network-emulation v32=bench-results/2026-07-27-v3.2/network-emulation \
+  --ksweep          bench-results/2026-07-27-v3.2/batch-size-sweep/k-sweep.csv \
+  -o                bench-results/2026-07-27-v3.2/site/site-data.json
+
+# One-shot explorer build (runs bench-explorer-data.py then injects JSON into
+# scripts/explorer.template.html at its `/*__DATA__*/ null` placeholder). Defaults
+# LOOPBACK/NETWORK_EMULATION/BATCH_SWEEP/OUTDIR off $RUN, all env-overridable:
+RUN=bench-results/2026-07-27-v3.2 bash scripts/build-explorer.sh
+# Publish via the Artifact tool with the SAME url to keep the link stable (see ARTIFACTS.md).
+```
+
+### 28.5 bb parity oracle build (source-only policy)
+
+```bash
+# Prebuilt release binaries are NOT trustworthy oracles (can predate the tag's tree).
+# Defaults: TAG=v$BARRETENBERG_VERSION (versions.env, currently v5.0.1),
+# OUT_DIR=~/.bb-target-src, BB_REPO=~/aztec-packages-private; 80% cores; writes PROVENANCE.txt.
+scripts/build-bb-oracle.sh [TAG] [OUT_DIR] [BB_REPO]
+# Optional: byte-compare a candidate prebuilt bb via write_vk (hard-fails on mismatch):
+CHECK_AGAINST=/path/to/candidate/bb scripts/build-bb-oracle.sh
+```
+
+Current pins (`noir_logic`/`co-snarks` versions.env): `NARGO_VERSION=1.0.0-beta.22`,
+`BARRETENBERG_VERSION=5.0.1`, oracle `$HOME/.bb-target-src-v5.0.1/bb`.
+
+## 29. monty-hall-aztec re-verification vs the current co-noir branch (2026-07-28)
+
+*After the session 14–22 co-noir churn (witext U1/U2 batching, verifier F1/F2,
+co-builder parametrised lookup batch K), re-checked that `~/monty-hall-aztec`
+(path-deps into `~/co-snarks/co-noir/*`, `mpc-net`, `mpc-core`) still builds and
+its whole test surface stays green.*
+
+One breakage, one line: `generate_proving_key_rep3` gained a 6th arg
+(`lookup_batch_size: Option<usize>`, §28.2), so the node's call site failed to
+compile.
+
+```bash
+# [FAIL→FIX] the ONLY break. mpc/mpc-node/src/mpc.rs:287 now passes `None`
+#   (keep the driver's bounded default; the round circuits are small/single-chunk).
+cd ~/monty-hall-aztec/mpc && cargo build --tests --workspace   # error[E0061]: 6 args, 5 supplied → fixed → Finished
+
+# [OK] full monty-hall test surface, all green vs the current branch:
+cd ~/monty-hall-aztec/noir_logic && ./check.sh                  # PASS (30 pss_utils tests + 2 circuits bb prove/verify + tamper neg)
+cd ~/monty-hall-aztec/mpc && cargo test -p mpc-node --release   # 4 passed (LocalNetwork 3-party full game, in-process, no docker/bb)
+cd ~/monty-hall-aztec/mpc && MPC_GRPC_BASE_PORT=8010 MESH_BASE_PORT=10010 \
+  PG_BASE_PORT=8090 PG_PREFIX=mh-verify-pg ORCH_PORT=3010 ./e2e.sh   # PASS: 3 nodes + orchestrator, all 4 rounds bb-cross-verified + tamper neg
+cd ~/monty-hall-aztec/contract && aztec test                    # TXE suite
+```
+
+The `mpc/e2e.sh` pass is the load-bearing result: it bb-cross-verifies every
+round's real MPC proof, so it confirms the co-noir prover changes preserved
+byte-parity with the pinned bb oracle. (The noir circuits, contract, and
+`e2e/run.sh` on-chain flow depend only on the pinned aztec/noir release deps,
+not on the co-noir Rust crates, so they are unaffected by this branch's churn.)
