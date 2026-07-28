@@ -573,19 +573,22 @@ low-priority robustness. None affect the byte-parity results or block 5.1d.
     not just a perf-tuning nicety. Byte-identity must be preserved (existing
     T3/referee/KAT fences guard it).
 
-## Bench: fill the measurement gaps honestly (added 2026-07-28, deferred)
+## Bench: fill the measurement gaps honestly (added 2026-07-28; items 1-2 DONE)
 
-The explorer surfaces several honest "not measured" gaps that a targeted bench
-re-run would close. Do this when there's a spare box-window (lookup-heavy sha
+The explorer surfaced several honest "not measured" gaps that a targeted bench
+re-run would close. Do the rest when there's a spare box-window (lookup-heavy sha
 cells are slow + memory-heavy — respect the 30-min cap + K bound):
 
-1. **sha256 2^18 / 2^19 pk-gen vs prove-proper split.** The v3.2 run captured
-   only the *combined* REP3 `prove_{zk}` for these (and recursion), not the
-   `pkgen_*` / `proveproper_*` phase split — so the phase-bars show a single
-   "prove" segment and the sweep's proof-only mode drops those points. Re-run
-   with `CO_NOIR_PHASE_TIMINGS=1` + the pk-gen netstats snapshot so the split
-   is recorded.
-2. **recursion_zk phase split** — same gap (only combined prove captured).
+1. **sha256 2^18 / 2^19 pk-gen vs prove-proper split — DONE 2026-07-28.** Targeted
+   gap-fill re-ran REP3 (both zk modes, default K, 51 threads) with
+   `CO_NOIR_PHASE_TIMINGS=1` + pk-gen netstats snapshot; split merged into
+   `loopback-matrix/phase-split.csv`. Results: 2^18 pk-gen ~614-629 s / prove ~14 s;
+   2^19 pk-gen ~1257-1268 s / prove ~30 s — i.e. pk-gen is ~98% of REP3 proving on
+   lookup-dense sha. NOTE this run also surfaced + fixed a real bug: the earlier
+   frame-cap revert to 448 MB (K does NOT bound frame size, only memory) broke
+   large-sha REP3 at default K; restored to 32 GiB (commit ede5a9e8).
+2. **recursion_zk phase split — DONE 2026-07-28.** pk-gen ~6.7-6.9 s / prove ~66 s
+   (near-all prove — 0 lookup gates, so no read-count pk-gen work).
 3. **sha256 2^20 REP3 prove** — timed out at the 30-min cap (compute-bound at
    any K). Either accept it stays censored, or grant a >30-min budget for one
    measured point (Mike's call; larger K does NOT help — it's compute-bound).

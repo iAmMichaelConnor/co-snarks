@@ -4,9 +4,13 @@ Append-only, newest session last. Each entry: date, what was done, decisions,
 open questions, next steps.
 
 **Quick link — benchmark explorer (live site).** Updated to the current
-dataset each time it is republished (same URL); last published 2026-07-28
-with the full v3.2 dataset (12 circuits loopback + 4 measured netem tiers +
-the batch-size-K slider):
+dataset each time it is republished (same URL). Built from
+`bench-results/2026-07-27-v3.2/` via `scripts/build-explorer.sh` (page template
+= `scripts/explorer.template.html`). Last published 2026-07-28: full v3.2
+dataset (12 circuits loopback + 4 measured network-emulation tiers +
+batch-size-K panels) + the gap-fill pk-gen/prove-proper splits (sha256_2e18
+both modes; sha256_2e19 + recursion_zk non-ZK — ZK cells filling as the
+detached run finishes):
 <https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>
 
 ## Session 1 — 2026-07-08
@@ -3540,8 +3544,11 @@ already proven session 21 (bb_sha256_compression K=4096/512/64/∞ all identical
 
 **<https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>**
 
-Verified 2026-07-28 to embed the current dataset (co-snarks commit `65d2ac86`,
-`bench-results/2026-07-27-v3.2-full` — 12 circuits loopback + v3.2 netem tiers +
-the sha256_2e16 K-sweep). Rebuild + republish (same URL) with
-`scripts/build-explorer.sh` (page template = `scripts/explorer.template.html`,
-data ingest = `scripts/bench-explorer-data.py`).
+Built from the single run dir `bench-results/2026-07-27-v3.2/` (subdirs
+`loopback-matrix/`, `network-emulation/`, `batch-size-sweep/`; generated output
+in `site/`). Rebuild + republish (same URL) with `scripts/build-explorer.sh`
+(page template = `scripts/explorer.template.html`, ingest =
+`scripts/bench-explorer-data.py`). Last published 2026-07-28 with the v3.2
+dataset (12 circuits loopback + 4 measured network-emulation tiers + batch-size-K
+panels) plus the gap-fill pk-gen/prove-proper splits (sha256_2e18 both modes;
+sha256_2e19 + recursion_zk non-ZK, ZK cells filling as the detached run finishes).
