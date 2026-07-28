@@ -572,3 +572,28 @@ low-priority robustness. None affect the byte-parity results or block 5.1d.
     active task** — it's now a correctness/robustness blocker (OOMs the box),
     not just a perf-tuning nicety. Byte-identity must be preserved (existing
     T3/referee/KAT fences guard it).
+
+## Bench: fill the measurement gaps honestly (added 2026-07-28, deferred)
+
+The explorer surfaces several honest "not measured" gaps that a targeted bench
+re-run would close. Do this when there's a spare box-window (lookup-heavy sha
+cells are slow + memory-heavy — respect the 30-min cap + K bound):
+
+1. **sha256 2^18 / 2^19 pk-gen vs prove-proper split.** The v3.2 run captured
+   only the *combined* REP3 `prove_{zk}` for these (and recursion), not the
+   `pkgen_*` / `proveproper_*` phase split — so the phase-bars show a single
+   "prove" segment and the sweep's proof-only mode drops those points. Re-run
+   with `CO_NOIR_PHASE_TIMINGS=1` + the pk-gen netstats snapshot so the split
+   is recorded.
+2. **recursion_zk phase split** — same gap (only combined prove captured).
+3. **sha256 2^20 REP3 prove** — timed out at the 30-min cap (compute-bound at
+   any K). Either accept it stays censored, or grant a >30-min budget for one
+   measured point (Mike's call; larger K does NOT help — it's compute-bound).
+4. **K-sweep on more sha sizes.** Only `sha256_2e16` was K-swept. Sweeping
+   2^17/2^18 (memory-safe at default K) would let the explorer's batch-K
+   section offer a circuit dropdown instead of a single circuit. NEVER run
+   K=0/unbounded on sha >= 2^18 (reproduces the OOM — see ch.15 K write-up).
+
+After any re-run: re-ingest via `scripts/bench-explorer-data.py`, rebuild with
+`scripts/build-explorer.sh`, republish same URL. The site already renders these
+as gaps, so it will simply fill in.
