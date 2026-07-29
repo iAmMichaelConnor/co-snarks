@@ -85,7 +85,13 @@ def read_results(run_dir):
 
 
 def read_phase_split(run_dir):
-    """(circuit,proto,zk) -> (median pkgen_s, median proveproper_s)."""
+    """(circuit,proto,zk) -> (median pkgen_s, median proveproper_s).
+
+    Legacy pk-gen/prove-proper boundary. Kept because the network-emulation tier
+    dirs were measured under it, and because it is what every earlier run and
+    chart used. v4 files carry the same two columns alongside the bucket columns,
+    so this reads both generations.
+    """
     path = os.path.join(run_dir, "phase-split.csv")
     pk = defaultdict(list); pp = defaultdict(list)
     if not os.path.exists(path):
@@ -102,6 +108,77 @@ def read_phase_split(run_dir):
     for k in pk:
         out[k] = (round(statistics.median(pk[k]), 4) if pk[k] else None,
                   round(statistics.median(pp[k]), 4) if pp[k] else None)
+    return out
+
+
+# v4 bucket columns -> the keys emitted into site-data.json.
+BUCKETS = {
+    "setup_inline_seconds": "setup_inline",
+    "witness_seconds": "witness",
+    "prove_seconds": "prove",
+    "alloc_seconds": "alloc",
+    "selfverify_seconds": "selfverify",
+    "unaccounted_seconds": "unaccounted",
+}
+
+
+def read_buckets(run_dir):
+    """(circuit,proto,zk,cell) -> {bucket: median seconds} from a v4 phase-split.csv.
+
+    Returns {} for pre-v4 dirs (no bucket columns), which keeps the site falling
+    back to the legacy pk-gen/prove-proper numbers for those.
+    """
+    path = os.path.join(run_dir, "phase-split.csv")
+    if not os.path.exists(path):
+        return {}
+    acc = defaultdict(lambda: defaultdict(list))
+    with open(path, newline="") as f:
+        rdr = csv.DictReader(f)
+        if not rdr.fieldnames or "setup_inline_seconds" not in rdr.fieldnames:
+            return {}
+        for row in rdr:
+            k = (row["circuit"], row["protocol"], row["zk"], row.get("cell") or "prove")
+            for col, name in BUCKETS.items():
+                v = (row.get(col) or "").strip()
+                if v == "":
+                    continue
+                try:
+                    acc[k][name].append(float(v))
+                except ValueError:
+                    pass
+    return {k: {n: round(statistics.median(v), 4) for n, v in d.items() if v}
+            for k, d in acc.items()}
+
+
+def bucket_block(c, proto, buckets, setup_once):
+    """The v4 setup/per-proof block for one prover, or None if unmeasured.
+
+    per_proof is what a node pays for each proof once it holds everything
+    derivable from the circuit; setup_inline is the circuit-only work the run
+    nonetheless redid inside the timed pipeline; setup_once is the separately
+    timed per-circuit cell (bb write_vk / co-noir create-vk). infra (holding
+    connections open) and selfverify (the baselines checking their own proof) are
+    reported but excluded from both, so neither inflates the comparison.
+    """
+    def block(key):
+        b = buckets.get(key)
+        if not b:
+            return None
+        per_proof = round(sum(b.get(k, 0.0) for k in
+                             ("witness", "prove", "alloc", "unaccounted")), 4)
+        out = {k: b.get(k) for k in
+               ("setup_inline", "witness", "prove", "alloc", "selfverify",
+                "infra", "unaccounted")}
+        out["per_proof"] = per_proof
+        return out
+
+    prove = {zk: block((c, proto, zk, "prove")) for zk in ("nonzk", "zk")}
+    if not any(prove.values()):
+        return None
+    out = {"prove": prove, "setup_once": setup_once}
+    wit = block((c, proto, "-", "witext"))
+    if wit:
+        out["witext"] = wit
     return out
 
 
@@ -162,7 +239,7 @@ def med_or_none(vals):
     return round(statistics.median(vals), 4) if vals else None
 
 
-def build_circuit(c, full_dir, results, psplit):
+def build_circuit(c, full_dir, results, psplit, buckets=None):
     ci = load_json(os.path.join(full_dir, "features", f"{c}.circuit-info.json")) or {}
     bg = load_json(os.path.join(full_dir, "features", f"{c}.bbgates.json")) or {}
     art = load_json(os.path.join(full_dir, "features", f"{c}.artifact-sizes.json"))
@@ -211,8 +288,24 @@ def build_circuit(c, full_dir, results, psplit):
     comms = {"witext": witext, "prove_total": prove_tot,
              "pkgen": pkgen, "proveproper": sub_comms(prove_tot, pkgen)}
 
+    # v4 setup-vs-per-proof buckets. setup_once: bb has a separate write_vk cell;
+    # co-noir create-vk covers REP3 and SHAMIR alike (the VK is protocol-
+    # independent); plaindriver has none because it writes its VK inside every
+    # prove run, so its setup shows up in setup_inline instead.
+    bk = buckets or {}
+    setup_once = {"bb": m("bb", "-", "vkgen"),
+                  "plaindriver": None,
+                  "REP3": m("co-noir", "-", "vkgen"),
+                  "SHAMIR": m("co-noir", "-", "vkgen")}
+    v4 = {}
+    for proto in ("bb", "plaindriver", "REP3", "SHAMIR"):
+        blk = bucket_block(c, proto, bk, setup_once[proto])
+        if blk:
+            v4[proto] = blk
+
     return {
         "family": FAMILY(c),
+        "buckets": v4,
         "features": {
             "finalized_rows": ci.get("finalized_rows"),
             "dyadic_size": ci.get("dyadic_size"),
@@ -299,6 +392,7 @@ def main():
     full = args.full
     results = read_results(full)
     psplit = read_phase_split(full)
+    buckets = read_buckets(full)
     manifest = load_json(os.path.join(full, "manifest.json")) or {}
     circuits = sorted({k[0] for k in results if k[0] != "SKIPPED"} |
                       {fn[:-len(".circuit-info.json")]
@@ -313,11 +407,29 @@ def main():
             "note": "loopback medians of rc==0 rows; comms rounds/bytes are "
                     "network-independent; distance tiers modelled client-side "
                     "from these + measured network emulation anchors.",
+            "taxonomy": {
+                "setup": "circuit-only, precomputable once per circuit, identical "
+                         "for every user and proof: ACIR parse, structural circuit "
+                         "build, selector/permutation/lookup-table polynomials, "
+                         "their commitments (the VK), CRS load.",
+                "per_proof": "witness + prove + alloc + unaccounted: MPC work over "
+                             "shared witness values, lookup read counts, wire "
+                             "population, then commitments, grand products, "
+                             "sumcheck, PCS.",
+                "excluded_from_both": "infra (a deployed node holds connections "
+                                      "open across proofs) and selfverify (bb and "
+                                      "plaindriver check their own proof; co-noir "
+                                      "does not).",
+                "note": "The pre-v4 'pk-gen' phase is NOT the setup bucket: it is "
+                        "per-proof witness work plus a small setup slice. Both are "
+                        "still reported (pkgen_seconds) for continuity with earlier "
+                        "runs.",
+            },
         },
         "circuits": {},
     }
     for c in circuits:
-        data["circuits"][c] = build_circuit(c, full, results, psplit)
+        data["circuits"][c] = build_circuit(c, full, results, psplit, buckets)
 
     for spec in args.network_emulation:
         if "=" not in spec:

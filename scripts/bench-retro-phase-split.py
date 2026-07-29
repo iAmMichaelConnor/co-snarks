@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Retro-split REP3 'prove' cells into pk-gen vs prove wall times.
+"""SUPERSEDED by scripts/bench-phase-split.py (v4, 2026-07-29). Kept because the
+v2.1-v3 run dirs' phase-split.csv files were produced by this script and are
+reused as-is; nothing re-derives them.
+
+Do not use it for new runs. It splits the MPC cell at the binary's
+'Build proving key took' log line, which is a CODE boundary, not the
+precomputability boundary a reader assumes: measurement showed 0.02%-10% of that
+phase is circuit-only work and the rest is per-proof MPC over the shared witness.
+The successor resolves setup / witness / prove for all four provers.
+
+Retro-split REP3 'prove' cells into pk-gen vs prove wall times.
 
 The v2 bench timed `co-noir generate-proof` as ONE cell, but the binary
 logs 'Build proving key took X ms' and 'Generate proof took Y ms' per
