@@ -30,9 +30,12 @@ echo "$(date -Is) bench finished rc=$rc" >>"$LOG"
 # artifact URL (ch. 22 §5/V7). Never fabricates: absent cells stay modeled.
 python3 "$ROOT/scripts/bench-to-site.py" "$OUT/results.csv" "$OUT/site-anchors.json" >>"$LOG" 2>&1 \
   && echo "$(date -Is) site-anchors.json + RESULTS.md written" >>"$LOG"
-# v2.1: pk-gen/prove phase split is now produced with every run (the v2 run
-# needed this recovered retroactively — bench methodology fix, ch. 24 §3a).
-python3 "$ROOT/scripts/bench-retro-phase-split.py" "$OUT" >>"$LOG" 2>&1 \
+# v4: resolve every prover's pipeline into setup / witness / prove buckets.
+# (v2.1-v3 used bench-retro-phase-split.py, which only split the MPC cell into
+# pk-gen + prove-proper at the binary's log line — a code boundary, not the
+# precomputability boundary. The v3.x run dirs keep the phase-split.csv that
+# tool produced; nothing re-derives them.)
+python3 "$ROOT/scripts/bench-phase-split.py" "$OUT" >>"$LOG" 2>&1 \
   && echo "$(date -Is) phase-split.csv written" >>"$LOG"
 # Bench-granularity extension (2026-07-26, ch. 24 §3a): distance-tier
 # transfer-time model from the per-round byte histograms CO_NOIR_NET_STATS_JSON
