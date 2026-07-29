@@ -142,15 +142,10 @@ fn install_tracing() {
 }
 
 /// Print one coarse wall-clock phase-timing line (stderr) if
-/// `CO_NOIR_PHASE_TIMINGS=1`. Timing only; never affects outputs.
-fn phase_timing(name: &str, start: std::time::Instant) {
-    if std::env::var("CO_NOIR_PHASE_TIMINGS").as_deref() == Ok("1") {
-        eprintln!(
-            "[phase-timing] {name}: {:.6}s",
-            start.elapsed().as_secs_f64()
-        );
-    }
-}
+/// `CO_NOIR_PHASE_TIMINGS=1`. Timing only; never affects outputs. Shared emitter
+/// (see `co_noir_common::phase_timing`) so this binary's phases, the
+/// proving-key phases and the prover's phases are one uniform stream.
+use co_builder::phase_timing;
 
 fn witness_map_to_witness_vector<F: PrimeField>(witness_map: WitnessMap<F>) -> Vec<F> {
     let mut wv = Vec::new();

@@ -242,6 +242,7 @@ pub fn generate_proving_key_rep3<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
+    let t_build = std::time::Instant::now();
     let builder = Rep3CoBuilder::create_circuit(
         constraint_system,
         0,
@@ -250,12 +251,12 @@ pub fn generate_proving_key_rep3<N: Network>(
         crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
-    Ok(proving_key::create_prover_instance(
-        id,
-        builder,
-        &mut driver,
-    )?)
+    let t_instance = std::time::Instant::now();
+    let pk = proving_key::create_prover_instance(id, builder, &mut driver)?;
+    co_builder::phase_timing("pkgen/prover_instance", t_instance);
+    Ok(pk)
 }
 
 /// Generate a shamir shared proving key
@@ -290,6 +291,7 @@ pub fn generate_proving_key_shamir<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
+    let t_build = std::time::Instant::now();
     let builder = ShamirCoBuilder::create_circuit(
         constraint_system,
         0,
@@ -298,12 +300,12 @@ pub fn generate_proving_key_shamir<N: Network>(
         crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
-    Ok(proving_key::create_prover_instance(
-        id,
-        builder,
-        &mut driver,
-    )?)
+    let t_instance = std::time::Instant::now();
+    let pk = proving_key::create_prover_instance(id, builder, &mut driver)?;
+    co_builder::phase_timing("pkgen/prover_instance", t_instance);
+    Ok(pk)
 }
 
 /// Generate a plain proving key
@@ -340,6 +342,11 @@ where
     P::G1: HonkCurve<TranscriptFieldType>,
 {
     let mut driver = PlainAcvmSolver::new();
+    // The two halves of per-circuit setup, timed separately under
+    // CO_NOIR_PHASE_TIMINGS=1: building the circuit STRUCTURE (empty witness —
+    // this is what makes the whole thing witness-independent and hence
+    // precomputable) and COMMITTING to the resulting precomputed polynomials.
+    let t_structure = std::time::Instant::now();
     let circuit = UltraCircuitBuilder::<P::G1>::create_circuit(
         constraint_system,
         0,
@@ -348,13 +355,12 @@ where
         &prover_crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("vkgen/build_structure", t_structure);
 
-    Ok(VerifyingKey::create(
-        circuit,
-        prover_crs,
-        verifier_crs,
-        &mut driver,
-    )?)
+    let t_vk = std::time::Instant::now();
+    let vk = VerifyingKey::create(circuit, prover_crs, verifier_crs, &mut driver)?;
+    co_builder::phase_timing("vkgen/create_key", t_vk);
+    Ok(vk)
 }
 
 /// Generate a barretenberg verification key
@@ -363,6 +369,11 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
     prover_crs: Arc<ProverCrs<P>>,
 ) -> Result<VerifyingKeyBarretenberg<P>> {
     let mut driver = PlainAcvmSolver::new();
+    // The two halves of per-circuit setup, timed separately under
+    // CO_NOIR_PHASE_TIMINGS=1: building the circuit STRUCTURE (empty witness —
+    // this is what makes the whole thing witness-independent and hence
+    // precomputable) and COMMITTING to the resulting precomputed polynomials.
+    let t_structure = std::time::Instant::now();
     let circuit = UltraCircuitBuilder::create_circuit(
         constraint_system,
         0,
@@ -371,7 +382,12 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
         &prover_crs,
         &mut driver,
     )?;
-    Ok(circuit.create_vk_barretenberg(prover_crs, &mut driver)?)
+    co_builder::phase_timing("vkgen/build_structure", t_structure);
+
+    let t_vk = std::time::Instant::now();
+    let vk = circuit.create_vk_barretenberg(prover_crs, &mut driver)?;
+    co_builder::phase_timing("vkgen/create_key", t_vk);
+    Ok(vk)
 }
 
 /// Split a proving key into RPE3 shares

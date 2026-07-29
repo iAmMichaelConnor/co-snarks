@@ -3,6 +3,7 @@ use ark_ff::Zero;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use co_noir::Bn254G1;
 use co_noir_common::keys::proving_key::ProvingKey;
+use co_noir_common::phase_timing::phase_timing;
 use co_noir_common::keys::verification_key::VerifyingKey;
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::types::ZeroKnowledge;
@@ -1316,18 +1317,28 @@ fn run_generate_witness(config: GenerateWitnessConfig) -> color_eyre::Result<Exi
         eyre::bail!("Only REP3 protocol is supported for witness generation");
     }
 
+    // Same rationale as build-and-generate-proof: the work either side of the
+    // timed phase used to be visible only as a residual of the cell wall, so
+    // per-circuit setup (parsing the program artifact) was charged to per-proof
+    // cost. Timed under CO_NOIR_PHASE_TIMINGS=1.
+    let t_acir = std::time::Instant::now();
     let program_artifact = co_noir::program_artifact_from_reader(File::open(&circuit)?)
         .context("while parsing program artifact")?;
+    phase_timing("setup/acir_parse", t_acir);
 
     // parse input shares
+    let t_in = std::time::Instant::now();
     let input_share_file =
         BufReader::new(File::open(&input).context("while opening input share file")?);
     let input_share: Rep3SharedInput<ark_bn254::Fr> =
         bincode::deserialize_from(input_share_file).context("while deserializing input share")?;
+    phase_timing("witness/deserialize_input_shares", t_in);
 
     // connect to network
+    let t_net = std::time::Instant::now();
     let [net0, net1] =
         TcpNetwork::networks::<2>(network_config).context("while connecting to network")?;
+    phase_timing("infra/net_connect", t_net);
 
     tracing::info!("Starting witness generation...");
     let start = Instant::now();
@@ -1335,6 +1346,7 @@ fn run_generate_witness(config: GenerateWitnessConfig) -> color_eyre::Result<Exi
         co_noir::generate_witness_rep3(input_share, program_artifact, &net0, &net1)?;
     let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
     tracing::info!("Generate witness took {duration_ms} ms");
+    phase_timing("witness/extension", start);
 
     write_net_stats_json("generate-witness", &[&net0, &net1]);
 
@@ -1457,8 +1469,10 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
             if t != 1 {
                 eyre::bail!("REP3 only allows the threshold to be 1");
             }
+            let t_wit = std::time::Instant::now();
             let witness_share = bincode::deserialize_from(witness_file)
                 .context("while deserializing witness share")?;
+            phase_timing("witness/deserialize_shares", t_wit);
 
             let start = Instant::now();
             let proving_key = co_noir::generate_proving_key_rep3(
@@ -1478,8 +1492,10 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
             tracing::info!("Proving Key successfully written to {}", out.display());
         }
         MPCProtocol::SHAMIR => {
+            let t_wit = std::time::Instant::now();
             let witness_share = bincode::deserialize_from(witness_file)
                 .context("while deserializing witness share")?;
+            phase_timing("witness/deserialize_shares", t_wit);
 
             let start = Instant::now();
             let proving_key = co_noir::generate_proving_key_shamir(
@@ -1722,23 +1738,45 @@ fn run_build_and_generate_proof(
     let witness_file =
         BufReader::new(File::open(witness).context("trying to open witness share file")?);
 
+    // Everything from here to the proving-key timer used to be untimed, so the
+    // bench could only see it as a residual (cell wall minus the two timed
+    // phases: ~0.9 s at poseidon 2^17, ~4.5 s at 2^20). Most of it is per-CIRCUIT
+    // setup that a deployment does once and holds — including a second, full
+    // structural circuit build inside compute_circuit_size — so leaving it
+    // unattributed charged it to per-proof cost. Timed under
+    // CO_NOIR_PHASE_TIMINGS=1; prefixes say which bucket each belongs to.
+
     // parse constraint system
+    let t_acir = std::time::Instant::now();
     let constraint_system = co_noir::constraint_system_from_reader(&File::open(&circuit_path)?)
         .context("while parsing constraint system")?;
+    phase_timing("setup/acir_parse", t_acir);
 
-    // connect to network
+    // connect to network. Not per-proof and not per-circuit: a deployed node
+    // holds its connections open across proofs, so this is session infrastructure.
+    let t_net = std::time::Instant::now();
     let [net0, net1] =
         TcpNetwork::networks::<2>(network_config).context("while connecting to network")?;
+    phase_timing("infra/net_connect", t_net);
 
+    // Builds and finalizes the circuit STRUCTURE with an empty witness purely to
+    // learn how much CRS to load — witness-independent, hence precomputable, and
+    // duplicated by the structural work inside proving-key generation.
+    let t_size = std::time::Instant::now();
     let circuit_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
+    phase_timing("setup/compute_circuit_size", t_size);
+
+    let t_crs = std::time::Instant::now();
     let prover_crs =
         CrsParser::<ark_ec::short_weierstrass::Projective<ark_bn254::g1::Config>>::get_crs_g1(
             crs_path,
             circuit_size,
             has_zk,
         )?;
+    phase_timing("setup/crs_load", t_crs);
 
     // parse verification key file
+    let t_vk = std::time::Instant::now();
     let vk_u8 = std::fs::read(&vk_path).context("while reading vk file")?;
     let vk = match hasher {
         TranscriptHash::POSEIDON2 => VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&vk_u8)
@@ -1746,6 +1784,7 @@ fn run_build_and_generate_proof(
         TranscriptHash::KECCAK => VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&vk_u8)
             .context("while deserializing verification key")?,
     };
+    phase_timing("setup/vk_read", t_vk);
 
     tracing::info!("Starting proving key generation...");
     let result = match protocol {
@@ -1753,8 +1792,10 @@ fn run_build_and_generate_proof(
             if t != 1 {
                 eyre::bail!("REP3 only allows the threshold to be 1");
             }
+            let t_wit = std::time::Instant::now();
             let witness_share = bincode::deserialize_from(witness_file)
                 .context("while deserializing witness share")?;
+            phase_timing("witness/deserialize_shares", t_wit);
 
             let start = Instant::now();
             let proving_key = co_noir::generate_proving_key_rep3(
@@ -1800,8 +1841,10 @@ fn run_build_and_generate_proof(
             }
         }
         MPCProtocol::SHAMIR => {
+            let t_wit = std::time::Instant::now();
             let witness_share = bincode::deserialize_from(witness_file)
                 .context("while deserializing witness share")?;
+            phase_timing("witness/deserialize_shares", t_wit);
 
             let start = Instant::now();
             let proving_key = co_noir::generate_proving_key_shamir(

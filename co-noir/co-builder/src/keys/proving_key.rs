@@ -56,6 +56,7 @@ pub fn create_prover_instance<
 
     // TACEO TODO BB allocates less memory for the different polynomials
 
+    let t_alloc = std::time::Instant::now();
     let mut proving_key = ProvingKey {
         polynomials: Polynomials::new(dyadic_circuit_size),
         public_inputs: Vec::with_capacity(circuit.public_inputs.len()),
@@ -64,8 +65,11 @@ pub fn create_prover_instance<
         num_public_inputs: circuit.public_inputs.len() as u32,
         ..Default::default()
     };
+    crate::phase_timing("pkgen/alloc_polynomials", t_alloc);
 
+    let t_memory_records = std::time::Instant::now();
     populate_memory_records(&mut proving_key, &mut circuit, driver);
+    crate::phase_timing("pkgen/memory_records", t_memory_records);
 
     // Construct and add to proving key the wire, selector and copy constraint polynomials
     populate_trace(id, &mut proving_key, &mut circuit, dyadic_circuit_size);
@@ -155,6 +159,7 @@ fn populate_trace<
     proving_key.active_region_data = active_region_data;
 
     // Compute the permutation argument polynomials (sigma/id) and add them to proving key
+    let t_perm = std::time::Instant::now();
     compute_permutation_argument_polynomials(
         &mut proving_key.polynomials.precomputed,
         builder,
@@ -162,6 +167,7 @@ fn populate_trace<
         circuit_size,
         proving_key.final_active_wire_idx,
     );
+    crate::phase_timing("pkgen/permutation_polys", t_perm);
 }
 
 fn populate_wires_and_selectors_and_compute_copy_cycles<
@@ -175,11 +181,19 @@ fn populate_wires_and_selectors_and_compute_copy_cycles<
     active_region_data: &mut ActiveRegionData,
 ) -> Vec<CyclicPermutation> {
     // At most one copy cycle per variable.
+    let t_alloc_cycles = std::time::Instant::now();
     let mut copy_cycles = vec![vec![]; builder.variables.len()];
+    crate::phase_timing("pkgen/alloc_copy_cycles", t_alloc_cycles);
 
     let wires: &mut [_; NUM_WIRES] = polynomials.witness.get_wires_mut().try_into().unwrap();
 
     let mut selectors = polynomials.precomputed.get_selectors_mut();
+
+    // Accumulated per-pass wall time (reported once, only under CO_NOIR_PHASE_TIMINGS=1):
+    // the wire pass copies witness *values* (per-proof), the selector pass copies circuit
+    // *structure* (identical for every proof of this circuit).
+    let mut t_wires = std::time::Duration::ZERO;
+    let mut t_selectors = std::time::Duration::ZERO;
 
     // For each block in the trace, populate wire polys, copy cycles and selector polys.
     for block in builder.blocks.get() {
@@ -188,6 +202,7 @@ fn populate_wires_and_selectors_and_compute_copy_cycles<
         if block_size > 0 {
             active_region_data.add_range(offset, offset + block_size);
         }
+        let t_block = std::time::Instant::now();
 
         // Update wire polynomials and copy cycles.
         // NB: The order of row/column loops is arbitrary but needs to be row/column
@@ -218,11 +233,14 @@ fn populate_wires_and_selectors_and_compute_copy_cycles<
             }
         }
 
+        t_wires += t_block.elapsed();
+
         // Insert the selector values for this block into the selector polynomials at the
         // correct offset.
         // AZTEC TODO(https://github.com/AztecProtocol/barretenberg/issues/398):
         // implicit arithmetization/flavor consistency.
 
+        let t_block = std::time::Instant::now();
         for (selector_poly, selector) in selectors.iter_mut().zip(block.selectors.iter()) {
             debug_assert_eq!(selector.len(), block_size);
 
@@ -230,7 +248,11 @@ fn populate_wires_and_selectors_and_compute_copy_cycles<
                 *des = *src;
             }
         }
+        t_selectors += t_block.elapsed();
     }
+
+    crate::phase_timing_secs("pkgen/wires_and_copy_cycles", t_wires.as_secs_f64());
+    crate::phase_timing_secs("pkgen/selectors", t_selectors.as_secs_f64());
 
     copy_cycles
 }
@@ -245,9 +267,17 @@ pub fn create_keys_barretenberg<
     crs: &ProverCrs<C>,
     driver: &mut U,
 ) -> HonkProofResult<(ProvingKey<T, C>, VerifyingKeyBarretenberg<C>)> {
+    let t_instance = std::time::Instant::now();
     let pk = create_prover_instance(id, circuit, driver)?;
+    crate::phase_timing("pkgen/prover_instance", t_instance);
     let circuit_size = pk.circuit_size;
 
+    // Committing to the precomputed polynomials IS the verification key: it depends
+    // only on the circuit, never on the witness, so a deployment computes it once per
+    // circuit. Timed separately so the bench can attribute it to setup rather than to
+    // per-proof work (it sits inside this call only because the plain driver writes a
+    // VK alongside every proof).
+    let t_commit = std::time::Instant::now();
     let mut commitments = PrecomputedEntities::default();
     for (des, src) in commitments
         .iter_mut()
@@ -256,6 +286,7 @@ pub fn create_keys_barretenberg<
         let comm = Utils::commit(src.as_ref(), crs)?;
         *des = C::Affine::from(comm);
     }
+    crate::phase_timing("vkgen/commit_precomputed", t_commit);
 
     // Create and return the VerifyingKey instance
     let vk = VerifyingKeyBarretenberg {
@@ -277,6 +308,7 @@ pub fn construct_lookup_polynomials<
     dyadic_circuit_size: usize,
     driver: &mut U,
 ) -> eyre::Result<()> {
+    let t_tables = std::time::Instant::now();
     construct_lookup_table_polynomials(
         proving_key
             .polynomials
@@ -285,6 +317,8 @@ pub fn construct_lookup_polynomials<
         circuit,
         dyadic_circuit_size,
     );
+    crate::phase_timing("pkgen/lookup_table_polys", t_tables);
+    let t_read_counts = std::time::Instant::now();
     construct_lookup_read_counts(
         driver,
         proving_key
@@ -295,5 +329,6 @@ pub fn construct_lookup_polynomials<
             .unwrap(),
         circuit,
     )?;
+    crate::phase_timing("pkgen/lookup_read_counts", t_read_counts);
     Ok(())
 }

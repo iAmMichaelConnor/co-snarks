@@ -24,6 +24,7 @@ pub mod honk_proof;
 pub mod keccak_hash;
 pub mod keys;
 pub mod mpc;
+pub mod phase_timing;
 pub mod polynomials;
 pub mod serialize;
 pub mod shplemini;
