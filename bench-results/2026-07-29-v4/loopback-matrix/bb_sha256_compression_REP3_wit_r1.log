@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.000268s
+[phase-timing] setup/acir_parse: 0.000264s
+[phase-timing] witness/deserialize_input_shares: 0.000036s
+[phase-timing] witness/deserialize_input_shares: 0.000036s
+[phase-timing] setup/acir_parse: 0.000240s
+[phase-timing] witness/deserialize_input_shares: 0.000031s
+[phase-timing] infra/net_connect: 0.000927s
+[phase-timing] infra/net_connect: 0.001123s
+[2m2026-07-29T11:05:15.818905Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T11:05:15.818927Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.001314s
+[2m2026-07-29T11:05:15.819123Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T11:05:15.912638Z[0m [32m INFO[0m Generate witness took 93.705 ms
+[phase-timing] witness/extension: 0.093765s
+[2m2026-07-29T11:05:15.912755Z[0m [32m INFO[0m Generate witness took 93.8 ms
+[phase-timing] witness/extension: 0.093839s
+[2m2026-07-29T11:05:15.912871Z[0m [32m INFO[0m Generate witness took 93.724 ms
+[phase-timing] witness/extension: 0.093748s
+[2m2026-07-29T11:05:15.912914Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/bb_sha256_compression_REP3_witext_r1_p0.json
+[2m2026-07-29T11:05:15.913022Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/bb_sha256_compression_REP3_witext_r1_p1.json
+[2m2026-07-29T11:05:15.913032Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.0.shared
+[2m2026-07-29T11:05:15.913071Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/bb_sha256_compression_REP3_witext_r1_p2.json
+[2m2026-07-29T11:05:15.913138Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.1.shared
+[2m2026-07-29T11:05:15.913172Z[0m [32m INFO[0m Witness successfully written to test_vectors/bb_sha256_compression/bb_sha256_compression.gz.2.shared

@@ -1,0 +1,12 @@
+[2m2026-07-28T02:34:43.482935Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:34:43.513046Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:34:43.543028Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-28T02:34:49.472898Z[0m [32m INFO[0m Generate witness took 5989.888 ms
+[2m2026-07-28T02:34:49.473210Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-continent/netstats/poseidon_REP3_witext_r3_p0.json
+[2m2026-07-28T02:34:49.473650Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/poseidon/poseidon.gz.0.shared
+[2m2026-07-28T02:34:49.502957Z[0m [32m INFO[0m Generate witness took 5989.858 ms
+[2m2026-07-28T02:34:49.503096Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-continent/netstats/poseidon_REP3_witext_r3_p1.json
+[2m2026-07-28T02:34:49.503429Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/poseidon/poseidon.gz.1.shared
+[2m2026-07-28T02:34:49.533057Z[0m [32m INFO[0m Generate witness took 5989.988 ms
+[2m2026-07-28T02:34:49.533256Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-continent/netstats/poseidon_REP3_witext_r3_p2.json
+[2m2026-07-28T02:34:49.533796Z[0m [32m INFO[0m Witness successfully written to /tmp/claude-1011/-mnt-user-data-mike-co-snarks/8082b761-6f4e-41b1-92cc-79da67eb2f6a/scratchpad/bench/netem-work/tv/poseidon/poseidon.gz.2.shared

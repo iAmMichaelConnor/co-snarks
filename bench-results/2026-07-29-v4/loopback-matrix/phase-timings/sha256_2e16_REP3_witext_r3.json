@@ -1,0 +1,19 @@
+{
+  "circuit": "sha256_2e16", "protocol": "REP3", "zk": "-", "rep": 3,
+  "_note": "one entry per [phase-timing] line seen in the combined 3-party log (v2.2, ch. 24 §3a item 5); NOT attributed to a party -- each phase name normally appears once per party per prove, so ~3x entries per phase name is expected, not a bug. malformed_lines counts lines that matched the marker but failed validation (see v4 note in bench-0_5.sh); it should be 0.",
+  "entries": [
+    {"phase": "setup/acir_parse", "seconds": 0.000182},
+    {"phase": "witness/deserialize_input_shares", "seconds": 0.000026},
+    {"phase": "setup/acir_parse", "seconds": 0.000271},
+    {"phase": "witness/deserialize_input_shares", "seconds": 0.000033},
+    {"phase": "setup/acir_parse", "seconds": 0.000263},
+    {"phase": "witness/deserialize_input_shares", "seconds": 0.000033},
+    {"phase": "infra/net_connect", "seconds": 0.101618},
+    {"phase": "infra/net_connect", "seconds": 0.101284},
+    {"phase": "infra/net_connect", "seconds": 0.100176},
+    {"phase": "witness/extension", "seconds": 1.359838},
+    {"phase": "witness/extension", "seconds": 1.360694},
+    {"phase": "witness/extension", "seconds": 1.360766}
+  ],
+  "malformed_lines": 0
+}

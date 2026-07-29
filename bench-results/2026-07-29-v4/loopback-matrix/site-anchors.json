@@ -1,0 +1,1716 @@
+{
+  "provenance": "measured",
+  "contended": false,
+  "source": "/mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/results.csv",
+  "manifest": {
+    "benchmark": "PLAN 0.5 co-SNARK proving matrix v4",
+    "started_utc": "2026-07-29T10:23:53Z",
+    "host": "mike-box",
+    "kernel": "Linux 6.14.0-1018-aws",
+    "cpu_model": "AMD EPYC 7R13 48-Core Processor",
+    "cpu_cores_total": 192,
+    "rayon_threads_per_party": 16,
+    "co_snarks_commit": "38bf42c6",
+    "co_snarks_branch": "mc/update-co-noir",
+    "co_snarks_worktree": "dirty",
+    "bb_oracle_path": "/mnt/user-data/mike/.bb-target-src-v5.0.1/bb",
+    "bb_version_pin": "5.0.1",
+    "bb_provenance": "built from ~/ap-next (public aztec-packages mirror) tag v5.0.1 (b97ff8c3e88f5a6d060287ac3af5580a2dd3048d, release commit 72666f8d1d6 \"chore(release): v5.0.1 (#24737)\"), clang-20, cmake --preset default -DAVM=OFF, 2026-07-20.",
+    "nargo_version": "nargo version = 1.0.0-beta.22",
+    "circuits": "poseidon poseidon_2e12 poseidon_2e13 poseidon_2e14 poseidon_2e15 poseidon_2e16 poseidon_2e17 poseidon_2e18 poseidon_2e19 poseidon_2e20 bb_sha256_compression sha256_2e16 sha256_2e17 sha256_2e18 sha256_2e19 recursion_zk",
+    "protocols": "bb plaindriver REP3 (Shamir: v2.2 adds poseidon-family-only SHAMIR prove cells via REP3-split + translate-witness, reusing REP3 witext; other families still deferred)",
+    "zk_modes": "nonzk zk",
+    "reps": "3 (2 for >=2^18 circuits)",
+    "cell_timeout_s": 1800,
+    "fairness": "bb prove uses -k (VK pregen, timed as vkgen); plaindriver prove is witness-fed; plaindriver solve+prove kept as separate phase; verify cells: bb verify per zk-mode (verifier-time baseline), plaindriver verify_bb = bb cross-verifies the plaindriver zk proof (rc=0 is the verifier-side parity invariant), REP3/SHAMIR verify via co-noir. v4 caveats that remain: bb prove and plaindriver both self-verify the proof they just made (bb ~20 ms, plaindriver ~7 ms) while co-noir prove does not; bb runs its own thread pool (32 threads observed) whereas RAYON_NUM_THREADS caps only the Rust provers",
+    "taxonomy_v4": "three buckets, cut identically for all four provers. SETUP = circuit-only, precomputable once per circuit, identical for every user and every proof: ACIR parse, trace structure, selector + permutation (sigma/id) + lookup-table polynomials, their commitments (the VK), CRS load. WITNESS = per-proof work before the prover proper: MPC builder work over shared witness values, lookup read counts and tags, memory records, wire polynomial population. PROVE = per-proof prover proper: witness-polynomial commitments, grand products, sumcheck, PCS. The v2/v3 'pk-gen' phase is NOT the setup bucket -- it is WITNESS plus a small SETUP slice (measured 0.02% of pk-gen on sha256 2^16, 9.9% on poseidon 2^20); see phase-split.csv for the resolved split",
+    "netstats": "per phase x party JSONs in netstats/ when the co-noir binary supports CO_NOIR_NET_STATS_JSON; recv_msgs from one REP3 neighbour ~ sequential rounds R (upper bound at scale -- see the v2.2 rounds field below); the *_pkgen_* JSONs are mid-run snapshots after proving-key generation (CO_NOIR_NET_STATS_JSON_PKGEN) \u2014 subtract from the matching *_prove_* totals for true per-phase comms; v2.2 (2026-07-26): each peer entry additionally carries rounds (logical-round count: a recv that found nothing queued and had to wait -- a tighter round-depth proxy than recv_msgs), blocked_recv_ms (cumulative time blocked in those waits), and recv_bytes_histogram (bytes received per round) -- all purely additive, old readers unaffected. Setup does no communication at all (single party, no network), so it has no netstats entry",
+    "phase_timings": "REP3/SHAMIR prove cells and (new in v4) plaindriver cells run with CO_NOIR_PHASE_TIMINGS=1; the [phase-timing] stderr lines are captured per cell into phase-timings/*.json. co-ultrahonk emits the prover sub-phases (oink/sumcheck/pcs); co-builder emits the pkgen/* sub-phases that resolve pk-gen into its setup slice (pkgen/selectors, pkgen/permutation_polys, pkgen/lookup_table_polys), its per-proof slice (pkgen/build_circuit, pkgen/wires_and_copy_cycles, pkgen/lookup_read_counts, pkgen/memory_records) and its allocation cost (pkgen/alloc_polynomials, pkgen/alloc_copy_cycles); plaindriver adds read_circuit, witness, build_circuit, read_crs, create_proving_key, vkgen/commit_precomputed, prove_total, verify, main_total. MPC entries are NOT attributed to a party -- each name normally appears once per party per prove, so ~3x entries per name is expected",
+    "tiers_csv": "v2.2: scripts/bench-tier-model.py (run by the launcher) turns the per-round byte histogram into a Local/LAN/WAN transfer-time estimate per phase, written to tiers.csv",
+    "features": "per circuit JSONs in features/ (co-noir circuit-info, bb gates, nargo info)",
+    "network": "loopback (single host; distance/latency NOT measured here \u2014 tiers.csv is a MODEL, not a real-network measurement; see project-docs ch. 24 \u00a73a for the netem v3 follow-up)",
+    "csv_schema": "circuit,protocol,zk,rep,phase,seconds,rc,max_rss_kb,cpu_pct,host_load1m (rc!=0 failed, rc=124 timeout, excluded from medians; max_rss_kb = peak RSS, max over the 3 parties for MPC cells; cpu_pct empty for MPC cells \u2014 per-party detail in mem/; host_load1m = HOST-wide 1-min loadavg at cell start \u2014 shared-mainframe noise context for the absolute seconds; SHAMIR rows add a 'translate' phase for the translate-witness step). v4 adds protocol=co-noir phase=vkgen: the MPC path's per-circuit setup (co-noir create-vk), which v2/v3 ran untimed and therefore never reported",
+    "extra_data": "mem/ per-party wall/RSS/CPU files (party skew); features/<c>.artifact-sizes.json proof/VK bytes"
+  },
+  "note": "medians across reps of rc==0 rows; loopback only; null => keep modeling that cell",
+  "circuits": {
+    "bb_sha256_compression": {
+      "bb": {
+        "prove_nonzk": 0.195,
+        "prove_zk": 0.291,
+        "vkgen": 0.093,
+        "prove_zk_rss_mb": 71.8
+      },
+      "plaindriver": {
+        "prove_zk": 0.886,
+        "prove_nonzk": 0.737,
+        "solveprove_zk": 0.883,
+        "prove_zk_rss_mb": 238.4
+      },
+      "rep3_rss_mb": {
+        "witext": 28.6,
+        "prove_zk": 2546.6
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 256,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 256,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 256,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 5,
+          "sent_bytes_party0": 32872
+        },
+        "prove_zk": {
+          "R": 2425,
+          "sent_bytes_party0": 675947141
+        },
+        "prove_nonzk": {
+          "R": 2313,
+          "sent_bytes_party0": 675888882
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 33,
+          "blocks": {
+            "arithmetic": 2414,
+            "delta_range": 1452,
+            "elliptic": 0,
+            "lookup": 2896,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 16
+          },
+          "circuit": "test_vectors/bb_sha256_compression/target/bb_sha256_compression.json",
+          "dyadic_size": 65536,
+          "finalized_rows": 6778,
+          "lookup_gates": 2896,
+          "num_lookup_tables": 12,
+          "opcode_histogram": {
+            "AssertZero": 8,
+            "BlackBoxFuncCall::range": 24,
+            "BlackBoxFuncCall::sha256_compression": 1
+          },
+          "public_inputs": 16,
+          "total_table_rows": 33944,
+          "witness_len": 40,
+          "witness_zero_fraction": 0.0
+        },
+        "bb_gates": {
+          "acir_opcodes": 33,
+          "circuit_size": 33944
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.01,
+          "witext": 0.115,
+          "prove": 13.661,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.01,
+          "witext": 0.115,
+          "prove": 14.005,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    },
+    "poseidon": {
+      "bb": {
+        "prove_nonzk": 0.067,
+        "prove_zk": 0.142,
+        "vkgen": 0.04,
+        "prove_zk_rss_mb": 12.2
+      },
+      "plaindriver": {
+        "prove_zk": 0.184,
+        "prove_nonzk": 0.144,
+        "solveprove_zk": 0.181,
+        "prove_zk_rss_mb": 12.1
+      },
+      "rep3_rss_mb": {
+        "witext": 12.1,
+        "prove_zk": 42.1
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 198,
+          "sent_bytes_party0": 13304
+        },
+        "prove_zk": {
+          "R": 271,
+          "sent_bytes_party0": 6305640
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 6271800
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 477,
+          "blocks": {
+            "arithmetic": 1403,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon/target/poseidon.json",
+          "dyadic_size": 2048,
+          "finalized_rows": 1412,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 477
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 1808,
+          "witness_zero_fraction": 0.7323008849557522
+        },
+        "bb_gates": {
+          "acir_opcodes": 477,
+          "circuit_size": 1412
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.013,
+          "witext": 0.132,
+          "prove": 0.373,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.013,
+          "witext": 0.132,
+          "prove": 0.412,
+          "verify": 0.019
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 0.537,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 0.587,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e12": {
+      "bb": {
+        "prove_nonzk": 0.089,
+        "prove_zk": 0.172,
+        "vkgen": 0.055,
+        "prove_zk_rss_mb": 13.6
+      },
+      "plaindriver": {
+        "prove_zk": 0.229,
+        "prove_nonzk": 0.188,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 18.1
+      },
+      "rep3_rss_mb": {
+        "witext": 10.6,
+        "prove_zk": 84.3
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 393,
+          "sent_bytes_party0": 26480
+        },
+        "prove_zk": {
+          "R": 277,
+          "sent_bytes_party0": 12525912
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 12489368
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 961,
+          "blocks": {
+            "arithmetic": 2813,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e12/target/poseidon_2e12.json",
+          "dyadic_size": 4096,
+          "finalized_rows": 2822,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 961
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 3663,
+          "witness_zero_fraction": 0.7357357357357357
+        },
+        "bb_gates": {
+          "acir_opcodes": 961,
+          "circuit_size": 2822
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.013,
+          "witext": 0.15,
+          "prove": 0.51,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.013,
+          "witext": 0.15,
+          "prove": 0.561,
+          "verify": 0.021
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 0.851,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 0.925,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e13": {
+      "bb": {
+        "prove_nonzk": 0.138,
+        "prove_zk": 0.222,
+        "vkgen": 0.077,
+        "prove_zk_rss_mb": 19.7
+      },
+      "plaindriver": {
+        "prove_zk": 0.307,
+        "prove_nonzk": 0.267,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 42.9
+      },
+      "rep3_rss_mb": {
+        "witext": 13.6,
+        "prove_zk": 172.3
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 978,
+          "sent_bytes_party0": 66008
+        },
+        "prove_zk": {
+          "R": 283,
+          "sent_bytes_party0": 25943368
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 25904120
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 2413,
+          "blocks": {
+            "arithmetic": 7043,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e13/target/poseidon_2e13.json",
+          "dyadic_size": 8192,
+          "finalized_rows": 7052,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 2413
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 9228,
+          "witness_zero_fraction": 0.7377546597312528
+        },
+        "bb_gates": {
+          "acir_opcodes": 2413,
+          "circuit_size": 7052
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.019,
+          "witext": 0.201,
+          "prove": 0.774,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": 0.019,
+          "witext": 0.201,
+          "prove": 0.806,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 1.582,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 1.628,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e14": {
+      "bb": {
+        "prove_nonzk": 0.205,
+        "prove_zk": 0.27,
+        "vkgen": 0.125,
+        "prove_zk_rss_mb": 36.0
+      },
+      "plaindriver": {
+        "prove_zk": 0.46,
+        "prove_nonzk": 0.42,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 81.6
+      },
+      "rep3_rss_mb": {
+        "witext": 16.5,
+        "prove_zk": 365.9
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 2148,
+          "sent_bytes_party0": 145064
+        },
+        "prove_zk": {
+          "R": 289,
+          "sent_bytes_party0": 52778040
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 52736088
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 5317,
+          "blocks": {
+            "arithmetic": 15503,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e14/target/poseidon_2e14.json",
+          "dyadic_size": 16384,
+          "finalized_rows": 15512,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 5317
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 20358,
+          "witness_zero_fraction": 0.7384811867570489
+        },
+        "bb_gates": {
+          "acir_opcodes": 5317,
+          "circuit_size": 15512
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.029,
+          "witext": 0.297,
+          "prove": 1.23,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.029,
+          "witext": 0.297,
+          "prove": 1.363,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 3.175,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 3.124,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e15": {
+      "bb": {
+        "prove_nonzk": 0.309,
+        "prove_zk": 0.406,
+        "vkgen": 0.198,
+        "prove_zk_rss_mb": 80.6
+      },
+      "plaindriver": {
+        "prove_zk": 0.751,
+        "prove_nonzk": 0.685,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 166.0
+      },
+      "rep3_rss_mb": {
+        "witext": 21.5,
+        "prove_zk": 741.9
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 4488,
+          "sent_bytes_party0": 303176
+        },
+        "prove_zk": {
+          "R": 295,
+          "sent_bytes_party0": 106447144
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 106402488
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 11125,
+          "blocks": {
+            "arithmetic": 32423,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e15/target/poseidon_2e15.json",
+          "dyadic_size": 32768,
+          "finalized_rows": 32432,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 11125
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 42618,
+          "witness_zero_fraction": 0.7387958139753156
+        },
+        "bb_gates": {
+          "acir_opcodes": 11125,
+          "circuit_size": 32432
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.051,
+          "witext": 0.496,
+          "prove": 2.358,
+          "verify": 0.021
+        },
+        "zk": {
+          "split": 0.051,
+          "witext": 0.496,
+          "prove": 2.278,
+          "verify": 0.021
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 5.715,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 6.073,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e16": {
+      "bb": {
+        "prove_nonzk": 0.526,
+        "prove_zk": 0.64,
+        "vkgen": 0.353,
+        "prove_zk_rss_mb": 128.3
+      },
+      "plaindriver": {
+        "prove_zk": 1.297,
+        "prove_nonzk": 1.202,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 361.7
+      },
+      "rep3_rss_mb": {
+        "witext": 33.4,
+        "prove_zk": 1476.4
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 8973,
+          "sent_bytes_party0": 606224
+        },
+        "prove_zk": {
+          "R": 301,
+          "sent_bytes_party0": 212807960
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 212760600
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 22257,
+          "blocks": {
+            "arithmetic": 64853,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e16/target/poseidon_2e16.json",
+          "dyadic_size": 65536,
+          "finalized_rows": 64862,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 22257
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 85283,
+          "witness_zero_fraction": 0.7389397652521604
+        },
+        "bb_gates": {
+          "acir_opcodes": 22257,
+          "circuit_size": 64862
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.09,
+          "witext": 0.843,
+          "prove": 4.678,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": 0.09,
+          "witext": 0.843,
+          "prove": 4.675,
+          "verify": 0.022
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 11.04,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 11.531,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e17": {
+      "bb": {
+        "prove_nonzk": 0.948,
+        "prove_zk": 1.079,
+        "vkgen": 0.66,
+        "prove_zk_rss_mb": 208.9
+      },
+      "plaindriver": {
+        "prove_zk": 2.247,
+        "prove_nonzk": 2.094,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 673.4
+      },
+      "rep3_rss_mb": {
+        "witext": 56.6,
+        "prove_zk": 3010.9
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 17943,
+          "sent_bytes_party0": 1212320
+        },
+        "prove_zk": {
+          "R": 307,
+          "sent_bytes_party0": 425529352
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 425479288
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 44521,
+          "blocks": {
+            "arithmetic": 129713,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e17/target/poseidon_2e17.json",
+          "dyadic_size": 131072,
+          "finalized_rows": 129722,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 44521
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 170613,
+          "witness_zero_fraction": 0.7390116814076302
+        },
+        "bb_gates": {
+          "acir_opcodes": 44521,
+          "circuit_size": 129722
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.168,
+          "witext": 1.547,
+          "prove": 8.576,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.168,
+          "witext": 1.547,
+          "prove": 8.74,
+          "verify": 0.019
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 21.558,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 24.322,
+          "verify": 0.02
+        }
+      }
+    },
+    "poseidon_2e18": {
+      "bb": {
+        "prove_nonzk": 1.8335,
+        "prove_zk": 1.9695,
+        "vkgen": 1.227,
+        "prove_zk_rss_mb": 414.8
+      },
+      "plaindriver": {
+        "prove_zk": 4.1915,
+        "prove_nonzk": null,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 1389.6
+      },
+      "rep3_rss_mb": {
+        "witext": 103.4,
+        "prove_zk": 5449.7
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 36078,
+          "sent_bytes_party0": 2437688
+        },
+        "prove_zk": {
+          "R": 313,
+          "sent_bytes_party0": 851949048
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 851896280
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 89533,
+          "blocks": {
+            "arithmetic": 260843,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e18/target/poseidon_2e18.json",
+          "dyadic_size": 262144,
+          "finalized_rows": 260852,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 89533
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 343128,
+          "witness_zero_fraction": 0.7390478188897438
+        },
+        "bb_gates": {
+          "acir_opcodes": 89533,
+          "circuit_size": 260852
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.3335,
+          "witext": 3.2295,
+          "prove": 17.1755,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": 0.3335,
+          "witext": 3.2295,
+          "prove": 17.589,
+          "verify": 0.0205
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 45.218,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 45.646,
+          "verify": 0.0195
+        }
+      }
+    },
+    "poseidon_2e19": {
+      "bb": {
+        "prove_nonzk": 3.4615,
+        "prove_zk": 3.588,
+        "vkgen": 2.282,
+        "prove_zk_rss_mb": 815.8
+      },
+      "plaindriver": {
+        "prove_zk": 7.718,
+        "prove_nonzk": null,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 2555.5
+      },
+      "rep3_rss_mb": {
+        "witext": 199.0,
+        "prove_zk": 10325.2
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 72348,
+          "sent_bytes_party0": 4888424
+        },
+        "prove_zk": {
+          "R": 319,
+          "sent_bytes_party0": 1704788200
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 1704732728
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 179557,
+          "blocks": {
+            "arithmetic": 523103,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e19/target/poseidon_2e19.json",
+          "dyadic_size": 524288,
+          "finalized_rows": 523112,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 179557
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 688158,
+          "witness_zero_fraction": 0.7390657378102122
+        },
+        "bb_gates": {
+          "acir_opcodes": 179557,
+          "circuit_size": 523112
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.6635,
+          "witext": 6.335,
+          "prove": 32.8105,
+          "verify": 0.0205
+        },
+        "zk": {
+          "split": 0.6635,
+          "witext": 6.335,
+          "prove": 34.345,
+          "verify": 0.0195
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 91.8135,
+          "verify": 0.0215
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 95.878,
+          "verify": 0.0205
+        }
+      }
+    },
+    "poseidon_2e20": {
+      "bb": {
+        "prove_nonzk": 6.5115,
+        "prove_zk": 6.672,
+        "vkgen": 4.795,
+        "prove_zk_rss_mb": 1531.1
+      },
+      "plaindriver": {
+        "prove_zk": 15.375,
+        "prove_nonzk": null,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 4593.4
+      },
+      "rep3_rss_mb": {
+        "witext": 389.7,
+        "prove_zk": 19795.2
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680,
+        "cosnark_proof_shamir": 14656,
+        "cosnark_public_input_shamir": 32
+      },
+      "net": {
+        "witext": {
+          "R": 144888,
+          "sent_bytes_party0": 9789896
+        },
+        "prove_zk": {
+          "R": 325,
+          "sent_bytes_party0": 3410466264
+        },
+        "prove_nonzk": {
+          "R": 197,
+          "sent_bytes_party0": 3410408088
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 359605,
+          "blocks": {
+            "arithmetic": 1047623,
+            "delta_range": 0,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/poseidon_2e20/target/poseidon_2e20.json",
+          "dyadic_size": 1048576,
+          "finalized_rows": 1047632,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "AssertZero": 359605
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 1378218,
+          "witness_zero_fraction": 0.7390746601771273
+        },
+        "bb_gates": {
+          "acir_opcodes": 359605,
+          "circuit_size": 1047632
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 1.334,
+          "witext": 12.4835,
+          "prove": 69.3915,
+          "verify": 0.0195
+        },
+        "zk": {
+          "split": 1.334,
+          "witext": 12.4835,
+          "prove": 68.9045,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": 190.672,
+          "verify": 0.021
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": 194.608,
+          "verify": 0.02
+        }
+      }
+    },
+    "recursion_zk": {
+      "bb": {
+        "prove_nonzk": 3.359,
+        "prove_zk": 3.572,
+        "vkgen": 2.135,
+        "prove_zk_rss_mb": 985.4
+      },
+      "plaindriver": {
+        "prove_zk": 12.644,
+        "prove_nonzk": 11.408,
+        "solveprove_zk": 12.568,
+        "prove_zk_rss_mb": 3688.7
+      },
+      "rep3_rss_mb": {
+        "witext": 9.1,
+        "prove_zk": 20093.4
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 32,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 32,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 32,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 3,
+          "sent_bytes_party0": 96
+        },
+        "prove_zk": {
+          "R": 38576,
+          "sent_bytes_party0": 3983035276
+        },
+        "prove_nonzk": {
+          "R": 38432,
+          "sent_bytes_party0": 3982962860
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 1,
+          "blocks": {
+            "arithmetic": 319947,
+            "delta_range": 143225,
+            "elliptic": 0,
+            "lookup": 0,
+            "memory": 38075,
+            "nnf": 187126,
+            "poseidon2_external": 2280,
+            "poseidon2_internal": 12996,
+            "pub_inputs": 9
+          },
+          "circuit": "test_vectors/recursion_zk/target/recursion_zk.json",
+          "dyadic_size": 1048576,
+          "finalized_rows": 703658,
+          "lookup_gates": 0,
+          "num_lookup_tables": 0,
+          "opcode_histogram": {
+            "BlackBoxFuncCall::recursive_aggregation": 1
+          },
+          "public_inputs": 9,
+          "total_table_rows": 0,
+          "witness_len": 575,
+          "witness_zero_fraction": 0.1356521739130435
+        },
+        "bb_gates": {
+          "acir_opcodes": 1,
+          "circuit_size": 703658
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.013,
+          "witext": 0.115,
+          "prove": 98.677,
+          "verify": 0.021
+        },
+        "zk": {
+          "split": 0.013,
+          "witext": 0.115,
+          "prove": 79.534,
+          "verify": 0.024
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    },
+    "sha256_2e16": {
+      "bb": {
+        "prove_nonzk": 0.411,
+        "prove_zk": 0.534,
+        "vkgen": 0.297,
+        "prove_zk_rss_mb": 110.0
+      },
+      "plaindriver": {
+        "prove_zk": 1.321,
+        "prove_nonzk": 1.222,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 284.3
+      },
+      "rep3_rss_mb": {
+        "witext": 27.0,
+        "prove_zk": 8105.7
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 256,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 256,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 256,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 33,
+          "sent_bytes_party0": 488152
+        },
+        "prove_zk": {
+          "R": 27864,
+          "sent_bytes_party0": 7697258452
+        },
+        "prove_nonzk": {
+          "R": 27758,
+          "sent_bytes_party0": 7697208554
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 47,
+          "blocks": {
+            "arithmetic": 16302,
+            "delta_range": 2264,
+            "elliptic": 0,
+            "lookup": 43440,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 16
+          },
+          "circuit": "test_vectors/sha256_2e16/target/sha256_2e16.json",
+          "dyadic_size": 65536,
+          "finalized_rows": 62022,
+          "lookup_gates": 43440,
+          "num_lookup_tables": 12,
+          "opcode_histogram": {
+            "AssertZero": 8,
+            "BlackBoxFuncCall::range": 24,
+            "BlackBoxFuncCall::sha256_compression": 15
+          },
+          "public_inputs": 16,
+          "total_table_rows": 33944,
+          "witness_len": 152,
+          "witness_zero_fraction": 0.0
+        },
+        "bb_gates": {
+          "acir_opcodes": 47,
+          "circuit_size": 62022
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.01,
+          "witext": 1.475,
+          "prove": 146.776,
+          "verify": 0.019
+        },
+        "zk": {
+          "split": 0.01,
+          "witext": 1.475,
+          "prove": 146.045,
+          "verify": 0.021
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    },
+    "sha256_2e17": {
+      "bb": {
+        "prove_nonzk": 0.758,
+        "prove_zk": 0.881,
+        "vkgen": 0.495,
+        "prove_zk_rss_mb": 209.1
+      },
+      "plaindriver": {
+        "prove_zk": 2.246,
+        "prove_nonzk": 2.094,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 591.9
+      },
+      "rep3_rss_mb": {
+        "witext": 30.9,
+        "prove_zk": 9810.1
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 256,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 256,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 256,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 67,
+          "sent_bytes_party0": 1040992
+        },
+        "prove_zk": {
+          "R": 58764,
+          "sent_bytes_party0": 16390902636
+        },
+        "prove_nonzk": {
+          "R": 58652,
+          "sent_bytes_party0": 16390849865
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 64,
+          "blocks": {
+            "arithmetic": 33166,
+            "delta_range": 3250,
+            "elliptic": 0,
+            "lookup": 92672,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 16
+          },
+          "circuit": "test_vectors/sha256_2e17/target/sha256_2e17.json",
+          "dyadic_size": 131072,
+          "finalized_rows": 129104,
+          "lookup_gates": 92672,
+          "num_lookup_tables": 12,
+          "opcode_histogram": {
+            "AssertZero": 8,
+            "BlackBoxFuncCall::range": 24,
+            "BlackBoxFuncCall::sha256_compression": 32
+          },
+          "public_inputs": 16,
+          "total_table_rows": 33944,
+          "witness_len": 288,
+          "witness_zero_fraction": 0.0
+        },
+        "bb_gates": {
+          "acir_opcodes": 64,
+          "circuit_size": 129104
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.011,
+          "witext": 3.0,
+          "prove": 303.953,
+          "verify": 0.02
+        },
+        "zk": {
+          "split": 0.011,
+          "witext": 3.0,
+          "prove": 310.75,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    },
+    "sha256_2e18": {
+      "bb": {
+        "prove_nonzk": 1.395,
+        "prove_zk": 1.5485,
+        "vkgen": 0.924,
+        "prove_zk_rss_mb": 406.0
+      },
+      "plaindriver": {
+        "prove_zk": 4.0065,
+        "prove_nonzk": null,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 1300.6
+      },
+      "rep3_rss_mb": {
+        "witext": 29.5,
+        "prove_zk": 16805.1
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 256,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 256,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 256,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 133,
+          "sent_bytes_party0": 2114152
+        },
+        "prove_zk": {
+          "R": 118728,
+          "sent_bytes_party0": 33276660580
+        },
+        "prove_nonzk": {
+          "R": 118610,
+          "sent_bytes_party0": 33276605570
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 97,
+          "blocks": {
+            "arithmetic": 65902,
+            "delta_range": 5164,
+            "elliptic": 0,
+            "lookup": 188240,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 16
+          },
+          "circuit": "test_vectors/sha256_2e18/target/sha256_2e18.json",
+          "dyadic_size": 262144,
+          "finalized_rows": 259322,
+          "lookup_gates": 188240,
+          "num_lookup_tables": 12,
+          "opcode_histogram": {
+            "AssertZero": 8,
+            "BlackBoxFuncCall::range": 24,
+            "BlackBoxFuncCall::sha256_compression": 65
+          },
+          "public_inputs": 16,
+          "total_table_rows": 33944,
+          "witness_len": 552,
+          "witness_zero_fraction": 0.0
+        },
+        "bb_gates": {
+          "acir_opcodes": 97,
+          "circuit_size": 259322
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.0095,
+          "witext": 5.981,
+          "prove": 634.1765,
+          "verify": 0.021
+        },
+        "zk": {
+          "split": 0.0095,
+          "witext": 5.981,
+          "prove": 619.6975,
+          "verify": 0.02
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    },
+    "sha256_2e19": {
+      "bb": {
+        "prove_nonzk": 2.6925,
+        "prove_zk": 2.823,
+        "vkgen": 1.793,
+        "prove_zk_rss_mb": 742.7
+      },
+      "plaindriver": {
+        "prove_zk": 7.1925,
+        "prove_nonzk": null,
+        "solveprove_zk": null,
+        "prove_zk_rss_mb": 2204.6
+      },
+      "rep3_rss_mb": {
+        "witext": 29.6,
+        "prove_zk": 21259.3
+      },
+      "artifact_sizes": {
+        "proof": 14656,
+        "public_inputs": 256,
+        "vk": 3680,
+        "proof_plaindriver": 14656,
+        "public_inputs_plaindriver": 256,
+        "vk_plaindriver": 3680,
+        "cosnark_proof": 14656,
+        "cosnark_public_input": 256,
+        "cosnark_vk": 3680
+      },
+      "net": {
+        "witext": {
+          "R": 267,
+          "sent_bytes_party0": 4292992
+        },
+        "prove_zk": {
+          "R": 240518,
+          "sent_bytes_party0": 67549726110
+        },
+        "prove_nonzk": {
+          "R": 240394,
+          "sent_bytes_party0": 67549668596
+        }
+      },
+      "features": {
+        "circuit_info": {
+          "acir_opcodes": 164,
+          "blocks": {
+            "arithmetic": 132366,
+            "delta_range": 9050,
+            "elliptic": 0,
+            "lookup": 382272,
+            "memory": 0,
+            "nnf": 0,
+            "poseidon2_external": 0,
+            "poseidon2_internal": 0,
+            "pub_inputs": 16
+          },
+          "circuit": "test_vectors/sha256_2e19/target/sha256_2e19.json",
+          "dyadic_size": 524288,
+          "finalized_rows": 523704,
+          "lookup_gates": 382272,
+          "num_lookup_tables": 12,
+          "opcode_histogram": {
+            "AssertZero": 8,
+            "BlackBoxFuncCall::range": 24,
+            "BlackBoxFuncCall::sha256_compression": 132
+          },
+          "public_inputs": 16,
+          "total_table_rows": 33944,
+          "witness_len": 1088,
+          "witness_zero_fraction": 0.0
+        },
+        "bb_gates": {
+          "acir_opcodes": 164,
+          "circuit_size": 523704
+        }
+      },
+      "rep3": {
+        "nonzk": {
+          "split": 0.009,
+          "witext": 11.8405,
+          "prove": 1270.1325,
+          "verify": 0.0195
+        },
+        "zk": {
+          "split": 0.009,
+          "witext": 11.8405,
+          "prove": 1287.335,
+          "verify": 0.021
+        }
+      },
+      "shamir": {
+        "nonzk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        },
+        "zk": {
+          "split": null,
+          "witext": null,
+          "prove": null,
+          "verify": null
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+[2m2026-07-29T10:23:56.377622Z[0m [32m INFO[0m Starting to generate verification key...
+[phase-timing] vkgen/build_structure: 0.001846s
+[phase-timing] vkgen/create_key: 0.022999s
+[2m2026-07-29T10:23:56.402574Z[0m [32m INFO[0m Verification key generation took 24.9 ms
+[2m2026-07-29T10:23:56.402745Z[0m [32m INFO[0m Wrote vk to file test_vectors/poseidon/cosnark_vk
+[2m2026-07-29T10:23:56.402751Z[0m [32m INFO[0m Verification key generation finished successfully

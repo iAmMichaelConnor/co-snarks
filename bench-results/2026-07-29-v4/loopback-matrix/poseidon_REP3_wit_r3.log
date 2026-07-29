@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.002414s
+[phase-timing] witness/deserialize_input_shares: 0.000036s
+[phase-timing] setup/acir_parse: 0.002447s
+[phase-timing] witness/deserialize_input_shares: 0.000029s
+[phase-timing] setup/acir_parse: 0.002429s
+[phase-timing] witness/deserialize_input_shares: 0.000033s
+[phase-timing] infra/net_connect: 0.100004s
+[2m2026-07-29T10:24:01.213688Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.101281s
+[phase-timing] infra/net_connect: 0.100904s
+[2m2026-07-29T10:24:01.213842Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:24:01.213859Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:24:01.229358Z[0m [32m INFO[0m Generate witness took 15.646 ms
+[phase-timing] witness/extension: 0.015674s
+[2m2026-07-29T10:24:01.229376Z[0m [32m INFO[0m Generate witness took 15.517 ms
+[phase-timing] witness/extension: 0.015534s
+[2m2026-07-29T10:24:01.229463Z[0m [32m INFO[0m Generate witness took 15.582 ms
+[phase-timing] witness/extension: 0.015610s
+[2m2026-07-29T10:24:01.229519Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r3_p1.json
+[2m2026-07-29T10:24:01.229615Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r3_p0.json
+[2m2026-07-29T10:24:01.229701Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r3_p2.json
+[2m2026-07-29T10:24:01.230203Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.1.shared
+[2m2026-07-29T10:24:01.230219Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.0.shared
+[2m2026-07-29T10:24:01.230482Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.2.shared

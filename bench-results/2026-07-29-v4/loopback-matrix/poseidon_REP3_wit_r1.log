@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.002423s
+[phase-timing] witness/deserialize_input_shares: 0.000044s
+[phase-timing] setup/acir_parse: 0.002648s
+[phase-timing] witness/deserialize_input_shares: 0.000029s
+[phase-timing] setup/acir_parse: 0.002386s
+[phase-timing] witness/deserialize_input_shares: 0.000020s
+[phase-timing] infra/net_connect: 0.101492s
+[phase-timing] infra/net_connect: 0.100779s
+[2m2026-07-29T10:23:56.569095Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:23:56.569118Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.100619s
+[2m2026-07-29T10:23:56.569377Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:23:56.585446Z[0m [32m INFO[0m Generate witness took 16.31 ms
+[phase-timing] witness/extension: 0.016327s
+[2m2026-07-29T10:23:56.585468Z[0m [32m INFO[0m Generate witness took 16.351 ms
+[phase-timing] witness/extension: 0.016363s
+[2m2026-07-29T10:23:56.585604Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r1_p1.json
+[2m2026-07-29T10:23:56.585624Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r1_p0.json
+[2m2026-07-29T10:23:56.585615Z[0m [32m INFO[0m Generate witness took 16.21 ms
+[phase-timing] witness/extension: 0.016245s
+[2m2026-07-29T10:23:56.585836Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_witext_r1_p2.json
+[2m2026-07-29T10:23:56.586059Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.1.shared
+[2m2026-07-29T10:23:56.586082Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.0.shared
+[2m2026-07-29T10:23:56.586303Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon/poseidon.gz.2.shared

@@ -1,0 +1,6 @@
+[2m2026-07-29T11:06:52.385964Z[0m [32m INFO[0m Starting to generate verification key...
+[phase-timing] vkgen/build_structure: 0.201643s
+[phase-timing] vkgen/create_key: 0.174460s
+[2m2026-07-29T11:06:52.762215Z[0m [32m INFO[0m Verification key generation took 376.176 ms
+[2m2026-07-29T11:06:52.762369Z[0m [32m INFO[0m Wrote vk to file test_vectors/sha256_2e16/cosnark_vk
+[2m2026-07-29T11:06:52.762375Z[0m [32m INFO[0m Verification key generation finished successfully

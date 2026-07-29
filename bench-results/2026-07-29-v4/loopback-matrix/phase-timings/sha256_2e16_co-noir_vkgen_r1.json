@@ -1,0 +1,9 @@
+{
+  "circuit": "sha256_2e16", "protocol": "co-noir", "zk": "-", "rep": 1,
+  "_note": "one entry per [phase-timing] line seen in the combined 3-party log (v2.2, ch. 24 §3a item 5); NOT attributed to a party -- each phase name normally appears once per party per prove, so ~3x entries per phase name is expected, not a bug. malformed_lines counts lines that matched the marker but failed validation (see v4 note in bench-0_5.sh); it should be 0.",
+  "entries": [
+    {"phase": "vkgen/build_structure", "seconds": 0.201643},
+    {"phase": "vkgen/create_key", "seconds": 0.174460}
+  ],
+  "malformed_lines": 0
+}

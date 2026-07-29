@@ -1,0 +1,64 @@
+[phase-timing] read_circuit: 0.852351s
+[phase-timing] witness: 0.111843s
+[phase-timing] build_circuit: 0.394189s
+[phase-timing] read_crs: 0.415552s
+[phase-timing] pkgen/alloc_polynomials: 0.262662s
+[phase-timing] pkgen/memory_records: 0.000001s
+[phase-timing] pkgen/alloc_copy_cycles: 0.011834s
+[phase-timing] pkgen/wires_and_copy_cycles: 0.060567s
+[phase-timing] pkgen/selectors: 0.046134s
+[phase-timing] pkgen/permutation_polys: 0.083799s
+[phase-timing] pkgen/lookup_table_polys: 0.000000s
+[phase-timing] pkgen/lookup_read_counts: 0.000011s
+[phase-timing] pkgen/prover_instance: 0.470354s
+[phase-timing] vkgen/commit_precomputed: 0.961005s
+[phase-timing] create_proving_key: 1.431434s
+[2m[0m [32m INFO[0m Wrote vk to file test_vectors/poseidon_2e19/vk_plaindriver
+[phase-timing] oink/vk_and_public_inputs: 0.000658s
+[phase-timing] oink/masking_poly: 0.250336s
+[phase-timing] oink/wires_commit: 0.647221s
+[phase-timing] oink/lookup_w4_commit: 0.195090s
+[phase-timing] oink/logderiv/row_loop: 0.020257s
+[phase-timing] oink/logderiv/mul_many: 0.002817s
+[phase-timing] oink/logderiv/batch_invert: 0.000696s
+[phase-timing] oink/logderiv_round_total: 0.023925s
+[phase-timing] oink/gp/operands: 0.200537s
+[phase-timing] oink/gp/mul_many_pairs: 0.013211s
+[phase-timing] oink/gp/mul_many_numden: 0.013200s
+[phase-timing] oink/gp/array_prod: 0.381095s
+[phase-timing] oink/gp/batch_invert: 0.008377s
+[phase-timing] oink/gp/final_mul: 0.004213s
+[phase-timing] oink/gp/z_perm_writeback: 0.003448s
+[phase-timing] oink/z_perm/commit_open: 0.262096s
+[phase-timing] oink/z_perm_round_total: 0.892948s
+[phase-timing] oink: 2.010392s
+[phase-timing] memory_handoff: 0.040359s
+[phase-timing] sumcheck/compute_univariate_total: 0.931862s
+[phase-timing] sumcheck/open_many_total: 0.000002s
+[phase-timing] sumcheck/partially_evaluate_total: 0.176321s
+[phase-timing] sumcheck/zk_updates_total: 0.000442s
+[phase-timing] sumcheck/masking_poly_eval_mle: 0.019266s
+[phase-timing] sumcheck: 1.183418s
+[phase-timing] pcs/small_subgroup_ipa: 0.007772s
+[phase-timing] shplemini/batched_polys: 0.051630s
+[phase-timing] shplemini/fold_polys: 0.009107s
+[phase-timing] shplemini/fold_commit_open: 0.307996s
+[phase-timing] shplemini/partial_eval_batch: 0.004553s
+[phase-timing] shplemini/opening_claims: 0.004684s
+[phase-timing] shplonk/fold_pos_evals: 0.001899s
+[phase-timing] shplonk/batched_quotient: 0.026547s
+[phase-timing] shplonk/q_commit_open: 0.233155s
+[phase-timing] shplonk/partial_eval_quotient: 0.009831s
+[phase-timing] pcs/shplemini_batching: 0.650689s
+[phase-timing] pcs/opening_proof: 0.260654s
+[phase-timing] pcs_total: 0.919178s
+[phase-timing] transcript_get_proof: 0.000045s
+[phase-timing] decider_total: 2.179551s
+[phase-timing] prove_total: 4.230427s
+[2m[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon_2e19/proof_plaindriver
+[2m[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon_2e19/public_inputs_plaindriver
+[phase-timing] verify: 0.007016s
+[phase-timing] main_total: 7.443745s
+[2m[0m [32m INFO[0m Proof verified successfully
+Scheme is: ultra_honk, num threads: 32 (mem: 4.61 MiB)
+Proof verified successfully (mem: 7.68 MiB)

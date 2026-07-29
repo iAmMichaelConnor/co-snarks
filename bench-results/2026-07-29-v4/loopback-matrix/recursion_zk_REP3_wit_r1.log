@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.000240s
+[phase-timing] witness/deserialize_input_shares: 0.000287s
+[phase-timing] setup/acir_parse: 0.000327s
+[phase-timing] setup/acir_parse: 0.000310s
+[phase-timing] witness/deserialize_input_shares: 0.000285s
+[phase-timing] witness/deserialize_input_shares: 0.000272s
+[phase-timing] infra/net_connect: 0.101141s
+[phase-timing] infra/net_connect: 0.100098s
+[2m2026-07-29T14:03:20.174421Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T14:03:20.174421Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.100520s
+[2m2026-07-29T14:03:20.174650Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T14:03:20.175176Z[0m [32m INFO[0m Generate witness took 0.738 ms
+[phase-timing] witness/extension: 0.000748s
+[2m2026-07-29T14:03:20.175202Z[0m [32m INFO[0m Generate witness took 0.541 ms
+[phase-timing] witness/extension: 0.000548s
+[2m2026-07-29T14:03:20.175227Z[0m [32m INFO[0m Generate witness took 0.79 ms
+[phase-timing] witness/extension: 0.000801s
+[2m2026-07-29T14:03:20.175371Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/recursion_zk_REP3_witext_r1_p2.json
+[2m2026-07-29T14:03:20.175410Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/recursion_zk_REP3_witext_r1_p0.json
+[2m2026-07-29T14:03:20.175465Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/recursion_zk_REP3_witext_r1_p1.json
+[2m2026-07-29T14:03:20.175636Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.2.shared
+[2m2026-07-29T14:03:20.175635Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.0.shared
+[2m2026-07-29T14:03:20.175688Z[0m [32m INFO[0m Witness successfully written to test_vectors/recursion_zk/recursion_zk.gz.1.shared

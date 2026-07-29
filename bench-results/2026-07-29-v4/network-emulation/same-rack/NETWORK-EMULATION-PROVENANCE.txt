@@ -1,0 +1,12 @@
+=== bench v3.2 tier: same-rack (2026-07-28T02:29:16+00:00) ===
+netem: delay=0.1ms rate=10000mbit (loopback RTT = 2 x delay)
+tree: 65d2ac86c53953ced69aeedfef1af9cc715260c6  RAYON_NUM_THREADS=51
+host load1m at tier start: 30.09
+--- tc qdisc show dev lo ---
+qdisc netem 800b: root refcnt 2 limit 1000 delay 99us rate 10Gbit
+--- ping -c4 127.0.0.1 (RTT check) ---
+--- 127.0.0.1 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3052ms
+rtt min/avg/max/mdev = 0.249/0.259/0.270/0.007 ms
+--- after tier same-rack, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 

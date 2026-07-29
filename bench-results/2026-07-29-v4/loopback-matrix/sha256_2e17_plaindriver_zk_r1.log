@@ -1,0 +1,64 @@
+[phase-timing] read_circuit: 0.000575s
+[phase-timing] witness: 0.000163s
+[phase-timing] build_circuit: 0.315897s
+[phase-timing] read_crs: 0.341277s
+[phase-timing] pkgen/alloc_polynomials: 0.070659s
+[phase-timing] pkgen/memory_records: 0.000001s
+[phase-timing] pkgen/alloc_copy_cycles: 0.004190s
+[phase-timing] pkgen/wires_and_copy_cycles: 0.019893s
+[phase-timing] pkgen/selectors: 0.006054s
+[phase-timing] pkgen/permutation_polys: 0.020976s
+[phase-timing] pkgen/lookup_table_polys: 0.001525s
+[phase-timing] pkgen/lookup_read_counts: 0.007654s
+[phase-timing] pkgen/prover_instance: 0.139629s
+[phase-timing] vkgen/commit_precomputed: 0.172766s
+[phase-timing] create_proving_key: 0.312440s
+[2m[0m [32m INFO[0m Wrote vk to file test_vectors/sha256_2e17/vk_plaindriver
+[phase-timing] oink/vk_and_public_inputs: 0.000688s
+[phase-timing] oink/masking_poly: 0.087389s
+[phase-timing] oink/wires_commit: 0.072015s
+[phase-timing] oink/lookup_w4_commit: 0.018512s
+[phase-timing] oink/logderiv/row_loop: 0.004062s
+[phase-timing] oink/logderiv/mul_many: 0.000473s
+[phase-timing] oink/logderiv/batch_invert: 0.001351s
+[phase-timing] oink/logderiv_round_total: 0.005993s
+[phase-timing] oink/gp/operands: 0.022296s
+[phase-timing] oink/gp/mul_many_pairs: 0.002091s
+[phase-timing] oink/gp/mul_many_numden: 0.007405s
+[phase-timing] oink/gp/array_prod: 0.092931s
+[phase-timing] oink/gp/batch_invert: 0.002046s
+[phase-timing] oink/gp/final_mul: 0.000500s
+[phase-timing] oink/gp/z_perm_writeback: 0.000885s
+[phase-timing] oink/z_perm/commit_open: 0.146798s
+[phase-timing] oink/z_perm_round_total: 0.288504s
+[phase-timing] oink: 0.473280s
+[phase-timing] memory_handoff: 0.006070s
+[phase-timing] sumcheck/compute_univariate_total: 0.254240s
+[phase-timing] sumcheck/open_many_total: 0.000001s
+[phase-timing] sumcheck/partially_evaluate_total: 0.041998s
+[phase-timing] sumcheck/zk_updates_total: 0.009582s
+[phase-timing] sumcheck/masking_poly_eval_mle: 0.008471s
+[phase-timing] sumcheck: 0.341019s
+[phase-timing] pcs/small_subgroup_ipa: 0.007584s
+[phase-timing] shplemini/batched_polys: 0.041589s
+[phase-timing] shplemini/fold_polys: 0.007069s
+[phase-timing] shplemini/fold_commit_open: 0.122457s
+[phase-timing] shplemini/partial_eval_batch: 0.002175s
+[phase-timing] shplemini/opening_claims: 0.001606s
+[phase-timing] shplonk/fold_pos_evals: 0.000699s
+[phase-timing] shplonk/batched_quotient: 0.009571s
+[phase-timing] shplonk/q_commit_open: 0.079091s
+[phase-timing] shplonk/partial_eval_quotient: 0.004373s
+[phase-timing] pcs/shplemini_batching: 0.269893s
+[phase-timing] pcs/opening_proof: 0.089100s
+[phase-timing] pcs_total: 0.366640s
+[phase-timing] transcript_get_proof: 0.000059s
+[phase-timing] decider_total: 0.715151s
+[phase-timing] prove_total: 1.216314s
+[2m[0m [32m INFO[0m Wrote proof to file test_vectors/sha256_2e17/proof_plaindriver
+[2m[0m [32m INFO[0m Wrote public inputs to file test_vectors/sha256_2e17/public_inputs_plaindriver
+[phase-timing] verify: 0.007436s
+[phase-timing] main_total: 2.194968s
+[2m[0m [32m INFO[0m Proof verified successfully
+Scheme is: ultra_honk, num threads: 32 (mem: 4.64 MiB)
+Proof verified successfully (mem: 7.72 MiB)

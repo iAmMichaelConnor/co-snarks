@@ -1,0 +1,27 @@
+These four distance-tier measurements were NOT re-measured for v4. They are a
+verbatim copy of bench-results/2026-07-27-v3.2/network-emulation, measured
+2026-07-27/28 with tc/netem shaping loopback (per-tier RTT ping-verified; see
+each tier's NETWORK-EMULATION-PROVENANCE.txt).
+
+Why reuse is sound: v4 changed how the SAME work is attributed to buckets, not
+what the protocol does. Circuit setup is single-party work with zero
+communication, so it cannot affect a tier's latency or bandwidth term; the
+per-tier numbers stand exactly as measured.
+
+Consequence to keep in mind: these tiers were measured under the pre-v4 phase
+names, so their phase-split.csv carries pkgen_seconds/prove_seconds only. The
+site therefore plots the distance chart on the legacy decomposition and says so
+in that section, rather than re-cutting measured anchors after the fact. The
+poseidon 2^12-2^16 circuits added in v4 have no tier measurement at all, so the
+site models them (badged modelled) instead of inventing anchors.
+
+DIFFERENCES TO KEEP IN MIND (recorded 2026-07-29 after checking both manifests):
+  * thread cap: these tiers ran with RAYON_NUM_THREADS=51; the v4 loopback matrix
+    ran with 16 (the script default, its "measured small-circuit optimum"). So the
+    site's distance model takes its compute floor from a 16-thread run and its
+    measured dots from a 51-thread one. The MPC path is locally serial (REP3 prove
+    measured at ~260% CPU of a 1600% budget), which is why v4's loopback numbers
+    came out 5-9% FASTER on fewer threads — but the dots are corroboration, not
+    points on the same curve.
+  * tree revision: 65d2ac86 (tiers) vs 38bf42c6 (v4 loopback).
+  * the poseidon 2^12-2^16 circuits do not exist in these tiers at all.

@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.076429s
+[phase-timing] witness/deserialize_input_shares: 0.000044s
+[phase-timing] setup/acir_parse: 0.076297s
+[phase-timing] witness/deserialize_input_shares: 0.000038s
+[phase-timing] setup/acir_parse: 0.077098s
+[phase-timing] witness/deserialize_input_shares: 0.000057s
+[phase-timing] infra/net_connect: 0.001865s
+[2m2026-07-29T10:26:24.373631Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.001418s
+[phase-timing] infra/net_connect: 0.001654s
+[2m2026-07-29T10:26:24.373761Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:26:24.373773Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:26:25.030076Z[0m [32m INFO[0m Generate witness took 656.415 ms
+[phase-timing] witness/extension: 0.656477s
+[2m2026-07-29T10:26:25.030547Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e16_REP3_witext_r1_p1.json
+[2m2026-07-29T10:26:25.030566Z[0m [32m INFO[0m Generate witness took 656.773 ms
+[phase-timing] witness/extension: 0.656828s
+[2m2026-07-29T10:26:25.031022Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e16_REP3_witext_r1_p0.json
+[2m2026-07-29T10:26:25.034113Z[0m [32m INFO[0m Generate witness took 660.315 ms
+[phase-timing] witness/extension: 0.660371s
+[2m2026-07-29T10:26:25.034673Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e16_REP3_witext_r1_p2.json
+[2m2026-07-29T10:26:25.046884Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e16/poseidon_2e16.gz.1.shared
+[2m2026-07-29T10:26:25.047251Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e16/poseidon_2e16.gz.0.shared
+[2m2026-07-29T10:26:25.057140Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e16/poseidon_2e16.gz.2.shared

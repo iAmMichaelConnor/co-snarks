@@ -1,0 +1,73 @@
+=== bench v3.2 tier: same-rack (2026-07-28T02:29:16+00:00) ===
+netem: delay=0.1ms rate=10000mbit (loopback RTT = 2 x delay)
+tree: 65d2ac86c53953ced69aeedfef1af9cc715260c6  RAYON_NUM_THREADS=51
+host load1m at tier start: 30.09
+--- tc qdisc show dev lo ---
+qdisc netem 800b: root refcnt 2 limit 1000 delay 99us rate 10Gbit
+--- ping -c4 127.0.0.1 (RTT check) ---
+--- 127.0.0.1 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3052ms
+rtt min/avg/max/mdev = 0.249/0.259/0.270/0.007 ms
+[02:29:19] same-rack / poseidon (reps=3, load1m=30.09)
+    witext r1 rc=0 wall=0.2s
+    prove r1 rc=0 wall=0.6s
+    witext r2 rc=0 wall=0.2s
+    prove r2 rc=0 wall=0.5s
+    witext r3 rc=0 wall=0.2s
+    prove r3 rc=0 wall=0.5s
+[02:29:21] same-rack / poseidon_2e17 (reps=3, load1m=28.64)
+    witext r1 rc=0 wall=3.5s
+    prove r1 rc=0 wall=9.4s
+    witext r2 rc=0 wall=3.6s
+    prove r2 rc=0 wall=9.8s
+    witext r3 rc=0 wall=3.5s
+    prove r3 rc=0 wall=9.5s
+[02:30:02] same-rack / poseidon_2e20 (reps=2, load1m=34.73)
+    witext r1 rc=0 wall=28.2s
+    prove r1 rc=0 wall=69.0s
+    witext r2 rc=0 wall=27.4s
+    prove r2 rc=0 wall=67.0s
+[02:33:22] same-rack / bb_sha256_compression (reps=3, load1m=31.30)
+    witext r1 rc=0 wall=0.2s
+    prove r1 rc=0 wall=14.7s
+    witext r2 rc=0 wall=0.1s
+    prove r2 rc=0 wall=14.4s
+    witext r3 rc=0 wall=0.1s
+    prove r3 rc=0 wall=14.8s
+[02:34:07] same-rack / poseidon_indep8 (reps=3, load1m=24.33)
+    witext r1 rc=0 wall=0.1s
+    prove r1 rc=0 wall=1.5s
+    witext r2 rc=0 wall=0.2s
+    prove r2 rc=0 wall=1.6s
+    witext r3 rc=0 wall=0.2s
+    prove r3 rc=0 wall=1.5s
+--- after tier same-rack, lo unshaped: ---
+qdisc noqueue 0: root refcnt 2 
+warning: bb_sha256_compression/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-rack/tiers.csv (60 rows from 126/126 netstats files with histograms, incl. 42 synthesized prove_proper party-cells)
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-27-v3.2-netem/same-rack/phase-split.csv (42 party-rows)
+
+circuit                      proto   zk      pkgen_med_s  prove_med_s
+bb_sha256_compression        REP3    nonzk        10.680        3.558
+poseidon                     REP3    nonzk         0.010        0.420
+poseidon_2e17                REP3    nonzk         0.274        8.347
+poseidon_2e20                REP3    nonzk         3.182       60.225
+poseidon_indep8              REP3    nonzk         0.036        1.316
+2026-07-28T02:34:13+00:00 TIER same-rack DONE

@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.000543s
+[phase-timing] witness/deserialize_input_shares: 0.000063s
+[phase-timing] setup/acir_parse: 0.000553s
+[phase-timing] witness/deserialize_input_shares: 0.000043s
+[phase-timing] setup/acir_parse: 0.000557s
+[phase-timing] witness/deserialize_input_shares: 0.000030s
+[phase-timing] infra/net_connect: 0.101281s
+[phase-timing] infra/net_connect: 0.100916s
+[2m2026-07-29T12:35:44.969917Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T12:35:44.969911Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.100304s
+[2m2026-07-29T12:35:44.970047Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T12:35:56.718346Z[0m [32m INFO[0m Generate witness took 11748.399 ms
+[phase-timing] witness/extension: 11.748436s
+[2m2026-07-29T12:35:56.718415Z[0m [32m INFO[0m Generate witness took 11748.476 ms
+[phase-timing] witness/extension: 11.748502s
+[2m2026-07-29T12:35:56.718564Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e19_REP3_witext_r1_p0.json
+[2m2026-07-29T12:35:56.718590Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e19_REP3_witext_r1_p1.json
+[2m2026-07-29T12:35:56.718609Z[0m [32m INFO[0m Generate witness took 11748.531 ms
+[phase-timing] witness/extension: 11.748572s
+[2m2026-07-29T12:35:56.718824Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e19_REP3_witext_r1_p2.json
+[2m2026-07-29T12:35:56.718974Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e19/sha256_2e19.gz.1.shared
+[2m2026-07-29T12:35:56.719003Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e19/sha256_2e19.gz.0.shared
+[2m2026-07-29T12:35:56.719235Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e19/sha256_2e19.gz.2.shared

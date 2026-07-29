@@ -1,0 +1,6 @@
+[2m2026-07-29T10:27:31.603389Z[0m [32m INFO[0m Starting split input...
+[2m2026-07-29T10:27:31.603478Z[0m [32m INFO[0m Split input took 0.016 ms
+[2m2026-07-29T10:27:31.603715Z[0m [32m INFO[0m Wrote input share 0 to file test_vectors/poseidon_2e16/Prover.toml.0.shared
+[2m2026-07-29T10:27:31.603810Z[0m [32m INFO[0m Wrote input share 1 to file test_vectors/poseidon_2e16/Prover.toml.1.shared
+[2m2026-07-29T10:27:31.603905Z[0m [32m INFO[0m Wrote input share 2 to file test_vectors/poseidon_2e16/Prover.toml.2.shared
+[2m2026-07-29T10:27:31.603910Z[0m [32m INFO[0m Split input into shares successfully

@@ -1,0 +1,347 @@
+2026-07-29T10:23:53+00:00 launcher started (host load1m=6.07 — HOST-wide, incl. other tenants)
+bench v4: 16 circuits queued; crude suite estimate ~583 min (timeout prunes cells >1800s; sha rates are the least certain)
+[10:23:53] circuit 1/16: poseidon (rows~2048, est ~0 min) — elapsed 0 min, est remaining ~583 min
+[10:24:03]   poseidon done in 0m10s (est was ~0 min)
+[10:24:03] circuit 2/16: poseidon_2e12 (rows~4096, est ~0 min) — elapsed 0 min, est remaining ~583 min
+[10:24:16]   poseidon_2e12 done in 0m13s (est was ~0 min)
+[10:24:16] circuit 3/16: poseidon_2e13 (rows~8192, est ~0 min) — elapsed 0 min, est remaining ~583 min
+[10:24:36]   poseidon_2e13 done in 0m20s (est was ~0 min)
+[10:24:36] circuit 4/16: poseidon_2e14 (rows~16384, est ~1 min) — elapsed 0 min, est remaining ~583 min
+[10:25:10]   poseidon_2e14 done in 0m34s (est was ~1 min)
+[10:25:10] circuit 5/16: poseidon_2e15 (rows~32768, est ~2 min) — elapsed 1 min, est remaining ~582 min
+[10:26:11]   poseidon_2e15 done in 1m1s (est was ~2 min)
+[10:26:11] circuit 6/16: poseidon_2e16 (rows~65536, est ~4 min) — elapsed 2 min, est remaining ~579 min
+[10:28:03]   poseidon_2e16 done in 1m52s (est was ~4 min)
+[10:28:03] circuit 7/16: poseidon_2e17 (rows~131072, est ~8 min) — elapsed 4 min, est remaining ~575 min
+[10:31:42]   poseidon_2e17 done in 3m39s (est was ~8 min)
+[10:31:42] circuit 8/16: poseidon_2e18 (rows~262144, est ~11 min) — elapsed 7 min, est remaining ~567 min
+[10:36:24]   poseidon_2e18 done in 4m42s (est was ~11 min)
+[10:36:24] circuit 9/16: poseidon_2e19 (rows~524288, est ~22 min) — elapsed 12 min, est remaining ~555 min
+[10:45:50]   poseidon_2e19 done in 9m26s (est was ~22 min)
+[10:45:50] circuit 10/16: poseidon_2e20 (rows~1048576, est ~45 min) — elapsed 21 min, est remaining ~533 min
+[11:05:07]   poseidon_2e20 done in 19m17s (est was ~45 min)
+[11:05:07] circuit 11/16: bb_sha256_compression (rows~32768, est ~20 min) — elapsed 41 min, est remaining ~487 min
+[11:06:40]   bb_sha256_compression done in 1m33s (est was ~20 min)
+[11:06:40] circuit 12/16: sha256_2e16 (rows~65536, est ~40 min) — elapsed 42 min, est remaining ~467 min
+[11:21:34]   sha256_2e16 done in 14m54s (est was ~40 min)
+[11:21:34] circuit 13/16: sha256_2e17 (rows~131072, est ~81 min) — elapsed 57 min, est remaining ~426 min
+[11:52:53]   sha256_2e17 done in 31m19s (est was ~81 min)
+[11:52:53] circuit 14/16: sha256_2e18 (rows~262144, est ~109 min) — elapsed 89 min, est remaining ~344 min
+[12:35:11]   sha256_2e18 done in 42m18s (est was ~109 min)
+[12:35:11] circuit 15/16: sha256_2e19 (rows~524288, est ~218 min) — elapsed 131 min, est remaining ~235 min
+[14:01:23]   sha256_2e19 done in 86m12s (est was ~218 min)
+[14:01:23] circuit 16/16: recursion_zk (rows~704000, est ~17 min) — elapsed 217 min, est remaining ~17 min
+[14:12:07]   recursion_zk done in 10m44s (est was ~17 min)
+bench-0_5 v4: done — results in /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/results.csv
+2026-07-29T14:12:07+00:00 bench finished rc=0
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/site-anchors.json + /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/RESULTS.md: 16 circuits
+2026-07-29T14:12:08+00:00 site-anchors.json + RESULTS.md written
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/phase-split.csv (345 rows)
+
+circuit                  proto        zk         setup    witness      prove     alloc  setup %
+-----------------------------------------------------------------------------------------------
+bb_sha256_compression    REP3         -/witext     0.000      0.098      0.000     0.000    0.27%
+bb_sha256_compression    REP3         nonzk/prove     0.128     10.198      3.036     0.045    0.95%
+bb_sha256_compression    REP3         zk/prove     0.130     10.195      3.346     0.046    0.95%
+bb_sha256_compression    bb           nonzk/prove     0.039      0.000      0.157     0.000   19.90%
+bb_sha256_compression    bb           zk/prove     0.039      0.003      0.250     0.000   13.36%
+bb_sha256_compression    plaindriver  nonzk/prove     0.170      0.110      0.381     0.037   24.39%
+bb_sha256_compression    plaindriver  zk/prove     0.169      0.110      0.525     0.038   20.09%
+poseidon                 REP3         -/witext     0.002      0.016      0.000     0.000   13.40%
+poseidon                 REP3         nonzk/prove     0.008      0.004      0.241     0.001    2.99%
+poseidon                 REP3         zk/prove     0.008      0.003      0.284     0.001    2.55%
+poseidon                 SHAMIR       nonzk/prove     0.008      0.005      0.416     0.001    1.80%
+poseidon                 SHAMIR       zk/prove     0.008      0.005      0.449     0.001    1.66%
+poseidon                 bb           nonzk/prove     0.010      0.000      0.057     0.000   14.93%
+poseidon                 bb           zk/prove     0.010      0.001      0.130     0.000    7.09%
+poseidon                 plaindriver  nonzk/prove     0.026      0.004      0.096     0.001   20.31%
+poseidon                 plaindriver  zk/prove     0.026      0.004      0.131     0.001   16.24%
+poseidon_2e12            REP3         -/witext     0.004      0.031      0.000     0.000   11.57%
+poseidon_2e12            REP3         nonzk/prove     0.011      0.006      0.363     0.003    3.00%
+poseidon_2e12            REP3         zk/prove     0.012      0.006      0.430     0.003    2.62%
+poseidon_2e12            SHAMIR       nonzk/prove     0.012      0.006      0.742     0.002    1.53%
+poseidon_2e12            SHAMIR       zk/prove     0.011      0.007      0.773     0.002    1.45%
+poseidon_2e12            bb           nonzk/prove     0.015      0.000      0.074     0.000   16.85%
+poseidon_2e12            bb           zk/prove     0.014      0.000      0.158     0.000    8.14%
+poseidon_2e12            plaindriver  nonzk/prove     0.037      0.005      0.122     0.002   22.21%
+poseidon_2e12            plaindriver  zk/prove     0.038      0.006      0.160     0.002   18.60%
+poseidon_2e13            REP3         -/witext     0.009      0.077      0.000     0.000   10.57%
+poseidon_2e13            REP3         nonzk/prove     0.022      0.012      0.607     0.005    3.46%
+poseidon_2e13            REP3         zk/prove     0.022      0.011      0.683     0.005    3.11%
+poseidon_2e13            SHAMIR       nonzk/prove     0.023      0.014      1.389     0.005    1.58%
+poseidon_2e13            SHAMIR       zk/prove     0.023      0.014      1.442     0.005    1.54%
+poseidon_2e13            bb           nonzk/prove     0.021      0.002      0.114     0.000   15.33%
+poseidon_2e13            bb           zk/prove     0.021      0.003      0.198     0.000    9.46%
+poseidon_2e13            plaindriver  nonzk/prove     0.059      0.009      0.170     0.004   24.60%
+poseidon_2e13            plaindriver  zk/prove     0.061      0.009      0.212     0.004   21.31%
+poseidon_2e14            REP3         -/witext     0.019      0.166      0.000     0.000   10.25%
+poseidon_2e14            REP3         nonzk/prove     0.047      0.025      1.101     0.009    3.95%
+poseidon_2e14            REP3         zk/prove     0.046      0.024      1.137     0.010    3.78%
+poseidon_2e14            SHAMIR       nonzk/prove     0.048      0.031      2.905     0.008    1.59%
+poseidon_2e14            SHAMIR       zk/prove     0.045      0.031      2.901     0.008    1.51%
+poseidon_2e14            bb           nonzk/prove     0.036      0.005      0.164     0.000   17.56%
+poseidon_2e14            bb           zk/prove     0.036      0.005      0.230     0.000   13.28%
+poseidon_2e14            plaindriver  nonzk/prove     0.107      0.016      0.259     0.008   27.37%
+poseidon_2e14            plaindriver  zk/prove     0.108      0.017      0.298     0.008   25.14%
+poseidon_2e15            REP3         -/witext     0.039      0.335      0.000     0.000   10.33%
+poseidon_2e15            REP3         nonzk/prove     0.089      0.049      2.015     0.018    4.10%
+poseidon_2e15            REP3         zk/prove     0.090      0.050      2.038     0.019    4.11%
+poseidon_2e15            SHAMIR       nonzk/prove     0.087      0.062      5.332     0.018    1.58%
+poseidon_2e15            SHAMIR       zk/prove     0.091      0.063      5.769     0.017    1.53%
+poseidon_2e15            bb           nonzk/prove     0.069      0.009      0.231     0.000   22.33%
+poseidon_2e15            bb           zk/prove     0.069      0.011      0.326     0.000   17.00%
+poseidon_2e15            plaindriver  nonzk/prove     0.193      0.032      0.409     0.015   29.69%
+poseidon_2e15            plaindriver  zk/prove     0.188      0.029      0.466     0.014   27.00%
+poseidon_2e16            REP3         -/witext     0.076      0.655      0.000     0.000   10.45%
+poseidon_2e16            REP3         nonzk/prove     0.181      0.103      4.121     0.039    4.06%
+poseidon_2e16            REP3         zk/prove     0.176      0.098      4.110     0.040    3.99%
+poseidon_2e16            SHAMIR       nonzk/prove     0.174      0.121     10.364     0.036    1.63%
+poseidon_2e16            SHAMIR       zk/prove     0.175      0.123     10.850     0.035    1.56%
+poseidon_2e16            bb           nonzk/prove     0.138      0.019      0.371     0.000   26.14%
+poseidon_2e16            bb           zk/prove     0.138      0.019      0.483     0.000   21.56%
+poseidon_2e16            plaindriver  nonzk/prove     0.351      0.058      0.699     0.029   30.90%
+poseidon_2e16            plaindriver  zk/prove     0.360      0.064      0.769     0.033   29.36%
+poseidon_2e17            REP3         -/witext     0.154      1.332      0.000     0.000   10.35%
+poseidon_2e17            REP3         nonzk/prove     0.360      0.205      7.652     0.071    4.34%
+poseidon_2e17            REP3         zk/prove     0.356      0.198      7.814     0.075    4.21%
+poseidon_2e17            SHAMIR       nonzk/prove     0.358      0.251     20.487     0.068    1.69%
+poseidon_2e17            SHAMIR       zk/prove     0.355      0.257     23.181     0.064    1.49%
+poseidon_2e17            bb           nonzk/prove     0.277      0.041      0.631     0.000   29.19%
+poseidon_2e17            bb           zk/prove     0.277      0.039      0.763     0.000   25.67%
+poseidon_2e17            plaindriver  nonzk/prove     0.650      0.120      1.141     0.070   32.80%
+poseidon_2e17            plaindriver  zk/prove     0.626      0.124      1.325     0.067   29.24%
+poseidon_2e18            REP3         -/witext     0.309      2.716      0.000     0.000   10.23%
+poseidon_2e18            REP3         nonzk/prove     0.728      0.414     15.383     0.151    4.37%
+poseidon_2e18            REP3         zk/prove     0.748      0.439     15.763     0.150    4.37%
+poseidon_2e18            SHAMIR       nonzk/prove     0.738      0.514     43.044     0.116    1.66%
+poseidon_2e18            SHAMIR       zk/prove     0.718      0.511     43.422     0.125    1.60%
+poseidon_2e18            bb           nonzk/prove     0.537      0.149      1.147     0.000   29.29%
+poseidon_2e18            bb           zk/prove     0.537      0.111      1.322     0.000   27.27%
+poseidon_2e18            plaindriver  zk/prove     1.173      0.263      2.448     0.123   29.28%
+poseidon_2e19            REP3         -/witext     0.625      5.428      0.000     0.000   10.32%
+poseidon_2e19            REP3         nonzk/prove     1.498      1.014     29.244     0.302    4.67%
+poseidon_2e19            REP3         zk/prove     1.505      1.070     30.827     0.319    4.46%
+poseidon_2e19            SHAMIR       nonzk/prove     1.474      1.149     87.539     0.244    1.63%
+poseidon_2e19            SHAMIR       zk/prove     1.507      1.162     91.499     0.253    1.60%
+poseidon_2e19            bb           nonzk/prove     1.063      0.225      2.173     0.000   30.71%
+poseidon_2e19            bb           zk/prove     1.063      0.259      2.267     0.000   29.63%
+poseidon_2e19            plaindriver  zk/prove     2.394      0.567      4.104     0.270   32.64%
+poseidon_2e20            REP3         -/witext     1.251     10.844      0.000     0.000   10.34%
+poseidon_2e20            REP3         nonzk/prove     2.995      2.343     62.393     0.608    4.38%
+poseidon_2e20            REP3         zk/prove     3.032      2.680     61.601     0.640    4.46%
+poseidon_2e20            SHAMIR       nonzk/prove     2.992      2.799    181.871     0.539    1.59%
+poseidon_2e20            SHAMIR       zk/prove     3.090      3.030    185.809     0.559    1.61%
+poseidon_2e20            bb           nonzk/prove     2.269      0.354      3.889     0.000   34.85%
+poseidon_2e20            bb           zk/prove     2.269      0.290      4.113     0.000   34.01%
+poseidon_2e20            plaindriver  zk/prove     5.127      1.266      7.862     0.603   34.51%
+recursion_zk             REP3         -/witext     0.000      0.001      0.000     0.000   23.08%
+recursion_zk             REP3         nonzk/prove     1.940      6.138     89.341     0.357    1.98%
+recursion_zk             REP3         zk/prove     2.203      6.130     70.470     0.337    2.78%
+recursion_zk             bb           nonzk/prove     1.450      0.222      1.699     0.000   43.01%
+recursion_zk             bb           zk/prove     1.450      0.178      1.974     0.000   40.26%
+recursion_zk             plaindriver  nonzk/prove     2.334      1.705      5.952     0.301   22.68%
+recursion_zk             plaindriver  zk/prove     2.362      1.719      7.123     0.300   20.53%
+sha256_2e16              REP3         -/witext     0.000      1.360      0.000     0.000    0.02%
+sha256_2e16              REP3         nonzk/prove     0.236    142.787      3.455     0.044    0.16%
+sha256_2e16              REP3         zk/prove     0.242    141.786      3.582     0.044    0.17%
+sha256_2e16              bb           nonzk/prove     0.159      0.000      0.252     0.000   38.69%
+sha256_2e16              bb           zk/prove     0.162      0.003      0.369     0.000   30.34%
+sha256_2e16              plaindriver  nonzk/prove     0.330      0.217      0.590     0.037   28.08%
+sha256_2e16              plaindriver  zk/prove     0.316      0.217      0.707     0.037   24.79%
+sha256_2e17              REP3         -/witext     0.000      2.887      0.000     0.000    0.01%
+sha256_2e17              REP3         nonzk/prove     0.377    296.385      6.636     0.094    0.12%
+sha256_2e17              REP3         zk/prove     0.376    302.853      7.093     0.093    0.12%
+sha256_2e17              bb           nonzk/prove     0.304      0.015      0.439     0.000   40.11%
+sha256_2e17              bb           zk/prove     0.304      0.013      0.558     0.000   34.74%
+sha256_2e17              plaindriver  nonzk/prove     0.519      0.354      1.090     0.073   25.47%
+sha256_2e17              plaindriver  zk/prove     0.542      0.351      1.216     0.075   24.80%
+sha256_2e18              REP3         -/witext     0.000      5.866      0.000     0.000    0.01%
+sha256_2e18              REP3         nonzk/prove     0.647    617.689     15.146     0.190    0.10%
+sha256_2e18              REP3         zk/prove     0.643    603.053     15.196     0.185    0.10%
+sha256_2e18              bb           nonzk/prove     0.588      0.041      0.766     0.000   42.15%
+sha256_2e18              bb           zk/prove     0.588      0.048      0.913     0.000   37.97%
+sha256_2e18              plaindriver  zk/prove     0.919      0.614      2.180     0.148   23.81%
+sha256_2e19              REP3         -/witext     0.001     11.726      0.000     0.000    0.00%
+sha256_2e19              REP3         nonzk/prove     1.235   1238.252     29.271     0.361    0.10%
+sha256_2e19              REP3         zk/prove     1.303   1253.502     31.272     0.364    0.10%
+sha256_2e19              bb           nonzk/prove     1.196      0.057      1.440     0.000   44.42%
+sha256_2e19              bb           zk/prove     1.196      0.047      1.580     0.000   42.37%
+sha256_2e19              plaindriver  zk/prove     1.732      1.146      3.819     0.304   24.74%
+2026-07-29T14:12:08+00:00 phase-split.csv written
+warning: bb_sha256_compression/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/nonzk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: bb_sha256_compression/REP3/zk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/nonzk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: recursion_zk/REP3/zk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/nonzk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e16/REP3/zk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/nonzk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e17/REP3/zk/rep3/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e18/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/nonzk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep1/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party0 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party0 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party1 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party1 peer 2: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party2 peer 0: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+warning: sha256_2e19/REP3/zk/rep2/party2 peer 1: pkgen histogram is not a prefix of prove's -- skipping prove_proper for this peer (mismatched pairing?)
+wrote /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/tiers.csv (546 rows from 1050/1050 netstats files with histograms, incl. 420 synthesized prove_proper party-cells)
+2026-07-29T14:12:14+00:00 tiers.csv written
+BENCH_DONE rc=0 out=/mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix   (bake: read /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/site-anchors.json into the explorer's ANCHOR block, then redeploy)

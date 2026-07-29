@@ -19,8 +19,11 @@ single SQLite database (`bench.sqlite`) aggregating all runs for querying
 and visualisation. This README is the pick-up-here doc for humans and
 future Claude sessions. The suite itself: `scripts/bench-0_5.sh` (matrix),
 `scripts/bench-0_5-launcher.sh` (detached/overnight wrapper),
-`scripts/bench-to-site.py` (per-run aggregation), `scripts/bench-ingest.py`
-(all-runs → SQLite). Design + full measurement audit table:
+`scripts/bench-to-site.py` (per-run aggregation),
+`scripts/bench-phase-split.py` (v4: resolves every prover's pipeline into
+setup / witness / prove buckets), `scripts/bench-ingest.py`
+(all-runs → SQLite), `scripts/build-explorer.sh` (the analysis page, built
+into the run's own `site/`). Design + full measurement audit table:
 `project-docs/22-cosnark-explorer-viz-plan.md` §5a/§5b. Optimisation plans
 consuming this data: ch. 23 (single-prover), ch. 24 (MPC path).
 
@@ -32,6 +35,12 @@ BENCH_OUT=bench-results/$(date +%F) bash scripts/bench-0_5.sh
 
 # smoke-test the pipeline on one circuit (~30 s)
 BENCH_OUT=/tmp/smoke BENCH_CIRCUITS=poseidon bash scripts/bench-0_5.sh
+
+# resolve setup / witness / prove for every prover in a run (also run by the launcher)
+python3 scripts/bench-phase-split.py bench-results/<date>/loopback-matrix
+
+# build the analysis page into the run's own site/ dir
+RUN=bench-results/<date> bash scripts/build-explorer.sh
 
 # aggregate one run for the explorer + humans (also run automatically by the launcher)
 python3 scripts/bench-to-site.py bench-results/<date>/results.csv bench-results/<date>/site-anchors.json
@@ -58,7 +67,8 @@ same-window ratios for fine comparisons. Leave ~20% of cores free
 | `features/*.circuit-info.json` | per circuit: trace-block gate composition, lookup gates / tables / table rows, ACIR opcode histogram, public inputs, witness zero-fraction, dyadic size. |
 | `features/*.bbgates.json`, `*.nargo-info.json` | independent cross-checks of size/opcode counts. |
 | `features/*.artifact-sizes.json` | proof / VK / public-input byte sizes per prover. |
-| `phase-timings/*.json` | added 2026-07-26 (v2.2). Per REP3/SHAMIR prove cell: every co-ultrahonk `[phase-timing]` line (oink/sumcheck/pcs sub-phases, `CO_NOIR_PHASE_TIMINGS=1`) captured from the cell's combined 3-party log into structured `{phase, seconds}` entries — NOT attributed to a single party (coarse; ~3 entries per phase name is expected). |
+| `phase-timings/*.json` | added 2026-07-26 (v2.2), extended in v4. Per cell: every `[phase-timing]` line (`CO_NOIR_PHASE_TIMINGS=1`) as structured `{phase, seconds}` entries. v2.2 captured co-ultrahonk's prover sub-phases (oink/sumcheck/pcs) for REP3/SHAMIR prove cells; v4 adds co-builder's `pkgen/*` (which resolve proving-key construction into its setup slice, its per-proof slice and its allocation cost), the `setup/*`, `witness/*` and `infra/*` phases either side of the timed regions, `vkgen/*` for the create-vk cell, and runs the same capture on plaindriver and witext cells. MPC entries are NOT attributed to a single party (~3 entries per phase name is expected); single-prover entries appear once. `malformed_lines` should always be 0 — it counts lines that survived the marker match but failed validation. |
+| `phase-split.csv` | v2.1–v3: pk-gen vs prove-proper for the MPC cell. **v4: the setup / witness / prove resolution for all four provers**, one row per circuit × protocol × zk × cell, with `setup_inline_seconds`, `witness_seconds`, `prove_seconds`, plus `alloc_seconds` and `selfverify_seconds` (deliberately in neither bucket), `infra_seconds`, `unaccounted_seconds`, and the legacy `pkgen_seconds`/`proveproper_seconds` for continuity. Written by `bench-phase-split.py`. |
 | `tiers.csv` | added 2026-07-26 (v2.2), written by `scripts/bench-tier-model.py`. Per circuit×protocol×phase×zk×tier (Local 10 Gbps/0.1 ms, LAN 1 Gbps/2 ms, WAN 100 Mbps/40 ms): THREE modeled transfer-time estimates that bracket reality. `est_pipelined_seconds` = `Σ_rounds max(RTT, bytes_r/bandwidth)` over the blocking-boundary histogram — OPTIMISTIC: at loopback independent messages pipeline, so blocking rounds undercount dependency depth (2^17 prove: 204 recv_msgs but only ~74 blocking rounds). `est_dependency_{lo,hi}_seconds` use `recv_msgs` (the validated round-depth proxy for today's serial protocol): lo = max(msgs·RTT, bytes/bw), hi = msgs·RTT + bytes/bw. True WAN cost for the current code lies in [lo, hi]; e.g. 2^17 pk-gen WAN ≈ 445 s of pure round latency (the ch. 24 §4 L8 lever). Plus a synthesized `prove_proper` phase (prove minus the pkgen prefix). Models, not measurements — network emulation v3 validates. |
 | `RESULTS.md` | human-readable per-circuit tables (read this first). |
 | `site-anchors.json` | machine shape the explorer bakes in (nulls = unmeasured, never fabricated). |
@@ -288,3 +298,38 @@ FROM overhead WHERE zk='zk' ORDER BY lookup_gates;
   - **First full-run outing of the v2.2 instrumentation**: tiers.csv
     (318 rows, 573/573 netstats carried histograms), phase-timings/,
     per-peer rounds/blocked_recv_ms — all produced and sane.
+- **v4 full run 2026-07-29** (`2026-07-29-v4/`, commit 38bf42c6, dirty tree,
+  16 threads/party, host load 6–17, 3 h 48 min): **16 circuits, 692 rows, zero
+  failed and zero censored cells.** The methodology change is the point — see
+  that dir's README.md. v2/v3 split the MPC cell at the binary's
+  `Build proving key took` line, a CODE boundary that was being read as a
+  *precomputability* boundary; v4 resolves **setup / witness / prove** for all
+  four provers instead.
+  - **Of the phase v2/v3 called "pk-gen", the circuit-only slice is 0.019%** on
+    sha256 2^16 (26 ms of 141 s: 129.4 s is `construct_lookup_read_counts` over
+    *secret* table indices, 11.5 s the builder's sha gadget) and 9.9% on
+    poseidon 2^20. Hiding that phase hid per-proof cost almost exclusively.
+  - **Setup is 20–39% of the single-prover baselines but 0.02–4.5% of the MPC
+    pipeline**, so precomputing it RAISES the privacy multiplier. Per-proof vs
+    setup-inline: poseidon 2^20 **15.0× vs 6.6×**, sha256 2^19 **790× vs 280×**,
+    bb_sha256_compression 54× vs 37×, recursion_zk 36× vs 15×. For big poseidon
+    circuits bb's setup exceeds its own per-proof time (2^20: 7.06 s vs 4.40 s).
+  - **For a plain prover the proving-key build is essentially all structural**:
+    bb's empty-witness vs real-witness build is 39 ms vs 37 ms. The
+    witness-assembly cost is an MPC phenomenon, not an UltraHonk one.
+  - poseidon is now a contiguous sweep 2^11–2^20 (2^12–2^16 added). Per-proof
+    cost is exactly linear in rows from 2^15 up and the per-row cost plateaus at
+    **~62 µs/row**, rising to 141 µs/row at 2^11 — small circuits are fixed-cost
+    dominated, so "cost per gate" is a bad model for them.
+  - `bb_sha256_compression` is dyadic **2^16**, not 2^15: one compression is only
+    6,778 rows, but sha's 12 lookup tables (33,944 table rows) must fit too. **No
+    sha256 circuit can be smaller than 2^16**, which is why that sweep starts
+    where it does. Natural experiment: 1 vs 15 compressions share a dyadic bucket
+    and table count, differ 15× in lookup *gates*, and differ 1,450× in witness
+    assembly (0.098 s → 141.8 s) while the prove step barely moves.
+  - sha256 2^20 dropped (only ever produced censored rows). Distance tiers and
+    K-sweep reused from v3.2 — see each subdir's REUSED-FROM.txt, incl. the
+    51-vs-16 thread-cap difference.
+  - New lever found by the instrumentation: **ch. 24 §4b (L9)** — the circuit
+    structure is built twice per proof (`compute_circuit_size` sizes the CRS, then
+    pk-gen rebuilds it), 0.89 s wasted at poseidon 2^20.

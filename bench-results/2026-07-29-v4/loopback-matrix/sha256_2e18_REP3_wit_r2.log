@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.000439s
+[phase-timing] witness/deserialize_input_shares: 0.000052s
+[phase-timing] setup/acir_parse: 0.000404s
+[phase-timing] witness/deserialize_input_shares: 0.000029s
+[phase-timing] setup/acir_parse: 0.000375s
+[phase-timing] witness/deserialize_input_shares: 0.000042s
+[phase-timing] infra/net_connect: 0.101220s
+[phase-timing] infra/net_connect: 0.099811s
+[2m2026-07-29T12:14:33.846099Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T12:14:33.846102Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.100401s
+[2m2026-07-29T12:14:33.846253Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T12:14:39.716789Z[0m [32m INFO[0m Generate witness took 5870.502 ms
+[2m2026-07-29T12:14:39.716800Z[0m [32m INFO[0m Generate witness took 5870.677 ms
+[phase-timing] witness/extension: 5.870584s
+[phase-timing] witness/extension: 5.870739s
+[2m2026-07-29T12:14:39.716933Z[0m [32m INFO[0m Generate witness took 5870.79 ms
+[phase-timing] witness/extension: 5.870827s
+[2m2026-07-29T12:14:39.717115Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e18_REP3_witext_r2_p0.json
+[2m2026-07-29T12:14:39.717142Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e18_REP3_witext_r2_p2.json
+[2m2026-07-29T12:14:39.717178Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/sha256_2e18_REP3_witext_r2_p1.json
+[2m2026-07-29T12:14:39.717530Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e18/sha256_2e18.gz.2.shared
+[2m2026-07-29T12:14:39.717531Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e18/sha256_2e18.gz.0.shared
+[2m2026-07-29T12:14:39.717532Z[0m [32m INFO[0m Witness successfully written to test_vectors/sha256_2e18/sha256_2e18.gz.1.shared

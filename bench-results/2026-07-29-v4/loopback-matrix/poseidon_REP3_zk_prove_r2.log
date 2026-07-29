@@ -1,0 +1,193 @@
+[phase-timing] setup/acir_parse: 0.002808s
+[phase-timing] setup/acir_parse: 0.002912s
+[phase-timing] setup/acir_parse: 0.002958s
+[phase-timing] infra/net_connect: 0.101281s
+[phase-timing] infra/net_connect: 0.099862s
+[phase-timing] infra/net_connect: 0.100029s
+[phase-timing] setup/compute_circuit_size: 0.003982s
+[phase-timing] setup/compute_circuit_size: 0.004216s
+[phase-timing] setup/compute_circuit_size: 0.004119s
+[phase-timing] setup/crs_load: 0.000260s
+[phase-timing] setup/vk_read: 0.000081s
+[2m2026-07-29T10:23:59.345992Z[0m [32m INFO[0m Starting proving key generation...
+[phase-timing] setup/crs_load: 0.000239s
+[phase-timing] setup/crs_load: 0.000234s
+[phase-timing] setup/vk_read: 0.000076s
+[2m2026-07-29T10:23:59.346193Z[0m [32m INFO[0m Starting proving key generation...
+[phase-timing] setup/vk_read: 0.000073s
+[2m2026-07-29T10:23:59.346220Z[0m [32m INFO[0m Starting proving key generation...
+[phase-timing] witness/deserialize_shares: 0.000318s
+[phase-timing] witness/deserialize_shares: 0.000319s
+[phase-timing] witness/deserialize_shares: 0.000330s
+[phase-timing] pkgen/build_circuit: 0.002747s
+[phase-timing] pkgen/build_circuit: 0.002770s
+[phase-timing] pkgen/build_circuit: 0.002811s
+[phase-timing] pkgen/alloc_polynomials: 0.001171s
+[phase-timing] pkgen/memory_records: 0.000000s
+[phase-timing] pkgen/alloc_polynomials: 0.001211s
+[phase-timing] pkgen/memory_records: 0.000000s
+[phase-timing] pkgen/alloc_copy_cycles: 0.000035s
+[phase-timing] pkgen/alloc_polynomials: 0.001239s
+[phase-timing] pkgen/alloc_copy_cycles: 0.000035s
+[phase-timing] pkgen/memory_records: 0.000000s
+[phase-timing] pkgen/alloc_copy_cycles: 0.000037s
+[phase-timing] pkgen/wires_and_copy_cycles: 0.000102s
+[phase-timing] pkgen/selectors: 0.000042s
+[phase-timing] pkgen/wires_and_copy_cycles: 0.000100s
+[phase-timing] pkgen/selectors: 0.000043s
+[phase-timing] pkgen/wires_and_copy_cycles: 0.000122s
+[phase-timing] pkgen/selectors: 0.000041s
+[phase-timing] pkgen/permutation_polys: 0.000368s
+[phase-timing] pkgen/lookup_table_polys: 0.000000s
+[phase-timing] pkgen/lookup_read_counts: 0.000001s
+[phase-timing] pkgen/prover_instance: 0.001809s
+[2m2026-07-29T10:23:59.351287Z[0m [32m INFO[0m Build proving key took 4.753 ms
+[phase-timing] pkgen/permutation_polys: 0.000471s
+[phase-timing] pkgen/lookup_table_polys: 0.000000s
+[phase-timing] pkgen/lookup_read_counts: 0.000000s
+[phase-timing] pkgen/permutation_polys: 0.000417s
+[phase-timing] pkgen/lookup_table_polys: 0.000000s
+[phase-timing] pkgen/lookup_read_counts: 0.000001s
+[phase-timing] pkgen/prover_instance: 0.001870s
+[2m2026-07-29T10:23:59.351376Z[0m [32m INFO[0m Build proving key took 4.802 ms
+[phase-timing] pkgen/prover_instance: 0.001909s
+[2m2026-07-29T10:23:59.351393Z[0m [32m INFO[0m Build proving key took 5.068 ms
+[2m2026-07-29T10:23:59.351446Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_pkgen_zk_r2_p1.json
+[2m2026-07-29T10:23:59.351454Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-29T10:23:59.351474Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_pkgen_zk_r2_p2.json
+[2m2026-07-29T10:23:59.351482Z[0m [32m INFO[0m Starting proof generation...
+[2m2026-07-29T10:23:59.351509Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_pkgen_zk_r2_p0.json
+[2m2026-07-29T10:23:59.351517Z[0m [32m INFO[0m Starting proof generation...
+[phase-timing] oink/vk_and_public_inputs: 0.000639s
+[phase-timing] oink/vk_and_public_inputs: 0.000639s
+[phase-timing] oink/vk_and_public_inputs: 0.000634s
+[phase-timing] oink/masking_poly: 0.004945s
+[phase-timing] oink/masking_poly: 0.004915s
+[phase-timing] oink/masking_poly: 0.004968s
+[phase-timing] oink/wires_commit: 0.010460s
+[phase-timing] oink/wires_commit: 0.010439s
+[phase-timing] oink/wires_commit: 0.010455s
+[phase-timing] oink/lookup_w4_commit: 0.005011s
+[phase-timing] oink/lookup_w4_commit: 0.005085s
+[phase-timing] oink/lookup_w4_commit: 0.005088s
+[phase-timing] oink/logderiv/row_loop: 0.000293s
+[phase-timing] oink/logderiv/row_loop: 0.000287s
+[phase-timing] oink/logderiv/row_loop: 0.000335s
+[phase-timing] oink/logderiv/mul_many: 0.000980s
+[phase-timing] oink/logderiv/mul_many: 0.001054s
+[phase-timing] oink/logderiv/mul_many: 0.001059s
+[phase-timing] oink/logderiv/batch_invert: 0.001482s
+[phase-timing] oink/logderiv_round_total: 0.002849s
+[phase-timing] oink/logderiv/batch_invert: 0.001603s
+[phase-timing] oink/logderiv_round_total: 0.003042s
+[phase-timing] oink/logderiv/batch_invert: 0.001545s
+[phase-timing] oink/logderiv_round_total: 0.003033s
+[phase-timing] oink/gp/operands: 0.000957s
+[phase-timing] oink/gp/operands: 0.000972s
+[phase-timing] oink/gp/operands: 0.001041s
+[phase-timing] oink/gp/mul_many_pairs: 0.002032s
+[phase-timing] oink/gp/mul_many_pairs: 0.002441s
+[phase-timing] oink/gp/mul_many_pairs: 0.002385s
+[phase-timing] oink/gp/mul_many_numden: 0.001692s
+[phase-timing] oink/gp/mul_many_numden: 0.001329s
+[phase-timing] oink/gp/mul_many_numden: 0.001472s
+[phase-timing] oink/gp/array_prod: 0.007310s
+[phase-timing] oink/gp/array_prod: 0.007706s
+[phase-timing] oink/gp/array_prod: 0.007446s
+[phase-timing] oink/gp/batch_invert: 0.001384s
+[phase-timing] oink/gp/batch_invert: 0.001315s
+[phase-timing] oink/gp/batch_invert: 0.001265s
+[phase-timing] oink/gp/final_mul: 0.000833s
+[phase-timing] oink/gp/z_perm_writeback: 0.000010s
+[phase-timing] oink/gp/final_mul: 0.000954s
+[phase-timing] oink/gp/z_perm_writeback: 0.000023s
+[phase-timing] oink/gp/final_mul: 0.000942s
+[phase-timing] oink/gp/z_perm_writeback: 0.000011s
+[phase-timing] oink/z_perm/commit_open: 0.004343s
+[phase-timing] oink/z_perm_round_total: 0.019110s
+[phase-timing] oink/z_perm/commit_open: 0.004459s
+[phase-timing] oink/z_perm/commit_open: 0.004435s
+[phase-timing] oink/z_perm_round_total: 0.019109s
+[phase-timing] oink/z_perm_round_total: 0.019301s
+[phase-timing] oink: 0.043336s
+[phase-timing] oink: 0.043387s
+[phase-timing] oink: 0.043320s
+[phase-timing] memory_handoff: 0.000211s
+[phase-timing] memory_handoff: 0.000313s
+[phase-timing] memory_handoff: 0.000373s
+[phase-timing] sumcheck/compute_univariate_total: 0.162787s
+[phase-timing] sumcheck/open_many_total: 0.001541s
+[phase-timing] sumcheck/partially_evaluate_total: 0.002018s
+[phase-timing] sumcheck/zk_updates_total: 0.000308s
+[phase-timing] sumcheck/compute_univariate_total: 0.164410s
+[phase-timing] sumcheck/open_many_total: 0.000093s
+[phase-timing] sumcheck/partially_evaluate_total: 0.002007s
+[phase-timing] sumcheck/zk_updates_total: 0.000243s
+[phase-timing] sumcheck/compute_univariate_total: 0.163784s
+[phase-timing] sumcheck/open_many_total: 0.000561s
+[phase-timing] sumcheck/partially_evaluate_total: 0.002168s
+[phase-timing] sumcheck/zk_updates_total: 0.000265s
+[phase-timing] sumcheck/masking_poly_eval_mle: 0.000228s
+[phase-timing] sumcheck/masking_poly_eval_mle: 0.000224s
+[phase-timing] sumcheck/masking_poly_eval_mle: 0.000244s
+[phase-timing] sumcheck: 0.199333s
+[phase-timing] sumcheck: 0.199482s
+[phase-timing] sumcheck: 0.199450s
+[phase-timing] pcs/small_subgroup_ipa: 0.012638s
+[phase-timing] pcs/small_subgroup_ipa: 0.012648s
+[phase-timing] pcs/small_subgroup_ipa: 0.012606s
+[phase-timing] shplemini/batched_polys: 0.003079s
+[phase-timing] shplemini/batched_polys: 0.003272s
+[phase-timing] shplemini/batched_polys: 0.003263s
+[phase-timing] shplemini/fold_polys: 0.000280s
+[phase-timing] shplemini/fold_polys: 0.000273s
+[phase-timing] shplemini/fold_polys: 0.000255s
+[phase-timing] shplemini/fold_commit_open: 0.016264s
+[phase-timing] shplemini/fold_commit_open: 0.016286s
+[phase-timing] shplemini/fold_commit_open: 0.016458s
+[phase-timing] shplemini/partial_eval_batch: 0.000165s
+[phase-timing] shplemini/partial_eval_batch: 0.000168s
+[phase-timing] shplemini/opening_claims: 0.000132s
+[phase-timing] shplemini/opening_claims: 0.000135s
+[phase-timing] shplemini/partial_eval_batch: 0.000350s
+[phase-timing] shplemini/opening_claims: 0.000133s
+[phase-timing] shplonk/fold_pos_evals: 0.000123s
+[phase-timing] shplonk/fold_pos_evals: 0.000098s
+[phase-timing] shplonk/fold_pos_evals: 0.000102s
+[phase-timing] shplonk/batched_quotient: 0.000940s
+[phase-timing] shplonk/batched_quotient: 0.000930s
+[phase-timing] shplonk/batched_quotient: 0.001012s
+[phase-timing] shplonk/q_commit_open: 0.003962s
+[phase-timing] shplonk/q_commit_open: 0.004027s
+[phase-timing] shplonk/q_commit_open: 0.004036s
+[phase-timing] shplonk/partial_eval_quotient: 0.000866s
+[phase-timing] pcs/shplemini_batching: 0.027392s
+[phase-timing] shplonk/partial_eval_quotient: 0.001004s
+[phase-timing] pcs/shplemini_batching: 0.027599s
+[phase-timing] shplonk/partial_eval_quotient: 0.001048s
+[phase-timing] pcs/shplemini_batching: 0.027572s
+[phase-timing] pcs/opening_proof: 0.005032s
+[phase-timing] pcs_total: 0.045241s
+[phase-timing] pcs/opening_proof: 0.005097s
+[phase-timing] transcript_get_proof: 0.000035s
+[phase-timing] pcs_total: 0.045361s
+[phase-timing] pcs/opening_proof: 0.005268s
+[phase-timing] pcs_total: 0.045332s
+[phase-timing] decider_total: 0.244766s
+[phase-timing] transcript_get_proof: 0.000032s
+[phase-timing] transcript_get_proof: 0.000028s
+[2m2026-07-29T10:23:59.640063Z[0m [32m INFO[0m Generate proof took 288.535 ms
+[2m2026-07-29T10:23:59.640233Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_prove_zk_r2_p0.json
+[2m2026-07-29T10:23:59.640372Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof
+[2m2026-07-29T10:23:59.640500Z[0m [32m INFO[0m Wrote public inputs to file test_vectors/poseidon/cosnark_public_input
+[2m2026-07-29T10:23:59.640547Z[0m [32m INFO[0m Proof generation finished successfully
+[phase-timing] decider_total: 0.245547s
+[2m2026-07-29T10:23:59.640889Z[0m [32m INFO[0m Generate proof took 289.421 ms
+[phase-timing] decider_total: 0.245819s
+[2m2026-07-29T10:23:59.641039Z[0m [32m INFO[0m Generate proof took 289.548 ms
+[2m2026-07-29T10:23:59.641066Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_prove_zk_r2_p1.json
+[2m2026-07-29T10:23:59.641168Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_REP3_prove_zk_r2_p2.json
+[2m2026-07-29T10:23:59.641262Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.1.proof
+[2m2026-07-29T10:23:59.641285Z[0m [32m INFO[0m Wrote proof to file test_vectors/poseidon/cosnark_proof.2.proof
+[2m2026-07-29T10:23:59.641333Z[0m [32m INFO[0m Proof generation finished successfully
+[2m2026-07-29T10:23:59.641364Z[0m [32m INFO[0m Proof generation finished successfully

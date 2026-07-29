@@ -1,0 +1,6 @@
+[2m2026-07-29T14:03:16.618601Z[0m [32m INFO[0m Starting to generate verification key...
+[phase-timing] vkgen/build_structure: 1.589309s
+[phase-timing] vkgen/create_key: 1.782014s
+[2m2026-07-29T14:03:19.990102Z[0m [32m INFO[0m Verification key generation took 3371.412 ms
+[2m2026-07-29T14:03:19.990312Z[0m [32m INFO[0m Wrote vk to file test_vectors/recursion_zk/cosnark_vk
+[2m2026-07-29T14:03:19.990319Z[0m [32m INFO[0m Verification key generation finished successfully

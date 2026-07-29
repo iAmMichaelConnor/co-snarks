@@ -1,0 +1,7 @@
+Verbatim copy of bench-results/2026-07-27-v3.2/batch-size-sweep (k-sweep.csv),
+measured 2026-07-27 on bb_sha256_compression.
+
+Why reuse is sound: K batches the lookup read-count one-hot vectors, which are
+derived from secret table indices — per-proof witness work in the v4 taxonomy.
+v4 renamed that phase (pk-gen -> witness assembly) and re-attributed a small
+setup slice out of it; neither changes what K does or what the sweep measured.

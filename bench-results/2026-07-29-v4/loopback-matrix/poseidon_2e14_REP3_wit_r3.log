@@ -1,0 +1,24 @@
+[phase-timing] setup/acir_parse: 0.019026s
+[phase-timing] witness/deserialize_input_shares: 0.000041s
+[phase-timing] setup/acir_parse: 0.019251s
+[phase-timing] witness/deserialize_input_shares: 0.000035s
+[phase-timing] setup/acir_parse: 0.020210s
+[phase-timing] witness/deserialize_input_shares: 0.000035s
+[phase-timing] infra/net_connect: 0.101052s
+[2m2026-07-29T10:25:01.324231Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.100450s
+[2m2026-07-29T10:25:01.324279Z[0m [32m INFO[0m Starting witness generation...
+[phase-timing] infra/net_connect: 0.099611s
+[2m2026-07-29T10:25:01.324642Z[0m [32m INFO[0m Starting witness generation...
+[2m2026-07-29T10:25:01.483850Z[0m [32m INFO[0m Generate witness took 159.594 ms
+[phase-timing] witness/extension: 0.159639s
+[2m2026-07-29T10:25:01.484108Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e14_REP3_witext_r3_p0.json
+[2m2026-07-29T10:25:01.484109Z[0m [32m INFO[0m Generate witness took 159.44 ms
+[phase-timing] witness/extension: 0.159471s
+[2m2026-07-29T10:25:01.484180Z[0m [32m INFO[0m Generate witness took 159.873 ms
+[phase-timing] witness/extension: 0.159911s
+[2m2026-07-29T10:25:01.484373Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e14_REP3_witext_r3_p2.json
+[2m2026-07-29T10:25:01.484466Z[0m [32m INFO[0m Wrote network stats to /mnt/user-data/mike/co-snarks/bench-results/2026-07-29-v4/loopback-matrix/netstats/poseidon_2e14_REP3_witext_r3_p1.json
+[2m2026-07-29T10:25:01.488837Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e14/poseidon_2e14.gz.2.shared
+[2m2026-07-29T10:25:01.488853Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e14/poseidon_2e14.gz.0.shared
+[2m2026-07-29T10:25:01.489055Z[0m [32m INFO[0m Witness successfully written to test_vectors/poseidon_2e14/poseidon_2e14.gz.1.shared
