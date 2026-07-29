@@ -209,6 +209,61 @@ ul.clean li{margin:5px 0}
 
 <div class="wrap"><div class="tiles" id="tiles"></div></div>
 
+<!-- ============ COST BASIS ============ -->
+<div class="wrap"><section id="basis" style="border-top:0;padding-top:18px">
+  <h2><span class="n">·</span> What counts as “proving time”</h2>
+  <p class="lead">Some of the work is <b>the same for every user and every proof</b> of a given circuit, so it
+  need only be done once: parsing the circuit, building its gate structure, the
+  selector / permutation / lookup-table polynomials, committing to those (that <em>is</em> the verification key),
+  and loading the CRS. Everything else has to happen again for every proof, because it depends on the
+  witness. This switch decides which of the two the charts below add up.</p>
+  <div class="note"><b>What today's binary actually reuses.</b> Of that first category, only the
+  <b>verification key</b> is genuinely precomputed and reused here: it is written once by a separate command and
+  passed into every proof. The rest — the structural build, the precomputed polynomials, the CRS load — is
+  <em>rebuilt on every proof</em>, because co-noir has no way to persist a finalized circuit and reload it. (It
+  can persist a <em>proving</em> key, but that one contains the witness polynomials, so it is per-proof by
+  construction.) So <b>“per proof” is a statement about the protocol's intrinsic cost, not about a switch you
+  can flip today</b> — it is what a deployment reaches once that plumbing exists. The gap is small and worth
+  naming: on this box it is ~1–1.5% of the pipeline, of which the largest single item is a structural build the
+  binary performs <em>purely to decide how much CRS to load</em> and then immediately repeats
+  (<span class="mono">0.89 s</span> at poseidon 2²⁰, <span class="mono">0.20 s</span> at sha256 2¹⁶).</div>
+  <div class="controls">
+    <div class="ctl"><label>Cost basis</label><div class="segs" id="basis-mode">
+      <button data-v="perproof" aria-pressed="true">per proof</button>
+      <button data-v="withsetup">per proof + circuit setup</button></div></div>
+  </div>
+  <div class="grid2" style="margin-top:4px">
+    <div class="card">
+      <h3 style="margin-top:2px">Per proof · unavoidable</h3>
+      <ul class="clean">
+        <li><b>witness extension</b> — solving the circuit's witness under MPC (the MPC nodes' first job).</li>
+        <li><b>witness assembly</b> — MPC work over the shared values inside the builder, lookup
+          read-counts and tags, memory records, filling the wire polynomials.</li>
+        <li><b>prove</b> — committing to the witness polynomials, grand products, sumcheck, PCS.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:2px">Circuit setup · precomputable once</h3>
+      <ul class="clean">
+        <li><b>structure</b> — ACIR parse plus building and finalizing the gate trace with an <em>empty</em>
+          witness. Witness-independent by construction, which is exactly why it can be precomputed.</li>
+        <li><b>precomputed polynomials</b> — selectors, the permutation (σ/id) polynomials, lookup tables.</li>
+        <li><b>the verification key</b> — the commitments to all of the above.</li>
+        <li><b>CRS load</b> — depends on circuit size only.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note warn"><b>“Proving-key generation” is not this second column.</b> UltraHonk has no reusable
+  per-circuit proving key: what the prover calls the proving key holds the precomputed polynomials
+  <em>and</em> the witness polynomials, and building it is dominated by per-proof MPC over the secret witness.
+  Measured on this box: of the MPC prover's “pk-gen” phase, the precomputable slice is
+  <span class="mono">~0.02%</span> on sha256 2¹⁶ (31 ms of 139.8 s — the rest is secret-index lookup
+  read-counts and the builder's sha gadget) and <span class="mono">~10%</span> on poseidon 2²⁰. Earlier
+  versions of this page let you hide the whole phase, which hid almost entirely <em>per-proof</em> cost. The
+  switch above hides only what a deployment can genuinely precompute — which is why turning it off barely
+  moves the MPC bars while visibly shrinking the single-prover baselines, whose totals are 20–30% setup.</div>
+</section></div>
+
 <!-- ============ THE FOUR PROVERS ============ -->
 <div class="wrap"><section id="provers" style="border-top:0;padding-top:20px">
   <h2><span class="n">·</span> The four provers, in one minute</h2>
@@ -276,7 +331,8 @@ ul.clean li{margin:5px 0}
       <svg class="viz" id="exp-svg" viewBox="0 0 560 300" preserveAspectRatio="xMinYMin meet"></svg>
       <div class="arm-def">
         <div class="t"><span class="sw" style="background:var(--p-pkgen)"></span>compute</div>
-        <div>Measured proving time on the machines — <b>all phases, including proving-key generation</b>.
+        <div>Measured proving time on the machines, on the <a href="#basis">selected cost basis</a> — every
+          per-proof phase, plus circuit setup only if you asked for it.
           Doesn't touch the network, so it's the same at every distance.</div>
         <div class="t"><span class="sw" style="background:var(--p-witext)"></span>+ latency</div>
         <div>Delay from the back-and-forth: <b>(number of sequential rounds) × round-trip time</b>. Depends on
@@ -305,7 +361,10 @@ ul.clean li{margin:5px 0}
   — we ran the real protocol on one host while the Linux kernel's <b>network emulator</b> (the
   <span class="mono">tc</span> traffic-control tool) injected each preset's real latency and link speed onto the
   loopback connection, with the round-trip ping-verified. Witness extension is round-bound, so it climbs steeply with
-  distance; prove-proper is bandwidth-bound; proving-key generation sits between.</p>
+  distance; the prove step is bandwidth-bound; witness assembly sits between. The phase named
+  <b>pk-gen</b> in the measured anchors is what this page now calls <b>witness assembly</b> plus a few hundred
+  milliseconds of circuit setup — see <a href="#basis">what counts as proving time</a>; the anchors keep their
+  measured definition rather than being re-cut after the fact.</p>
   <div class="controls">
     <div class="ctl"><label>Circuit</label><select id="dist-circuit"></select></div>
   </div>
@@ -320,9 +379,13 @@ ul.clean li{margin:5px 0}
 <div class="wrap"><section id="matrix">
   <h2><span class="n">03</span> Proving-time matrix <span class="badge m" id="mx-badge"></span></h2>
   <p class="lead">Median wall-clock seconds at <span class="hl">same-machine</span> (loopback), across every circuit ×
-  prover × ZK mode. <span class="mono">bb</span> and <span class="mono">plaindriver</span> are single-prover
-  baselines; <span class="mono">REP3</span> is the 3-party replicated protocol (its total = split + witext + pk-gen +
-  prove-proper); <span class="mono">Shamir</span> is the threshold protocol (poseidon family only in this run).
+  prover × ZK mode, on the <a href="#basis">selected cost basis</a>. <span class="mono">bb</span> and
+  <span class="mono">plaindriver</span> are single-prover baselines; <span class="mono">REP3</span> is the
+  3-party replicated protocol, its total being <b>share + witext + assemble + prove</b>;
+  <span class="mono">Shamir</span> is the threshold protocol (poseidon family only in this run).
+  <b>assemble</b> is the per-proof half of what earlier versions called “pk-gen” — MPC over the shared witness,
+  lookup read-counts, filling the wire polynomials — while the circuit-only half is in the
+  <b>setup (once)</b> column, which a deployment pays once per circuit rather than per proof.
   The last column <b>REP3÷bb</b> is the <b>privacy multiplier</b>: how many times slower the private 3-party
   path is than one bb prover — the price paid for nobody seeing the whole witness. It tracks gate
   <em>composition</em>, not just size (a lookup-heavy sha circuit costs far more per gate than plain arithmetic).</p>
@@ -337,11 +400,13 @@ ul.clean li{margin:5px 0}
 <!-- ============ PHASE BARS ============ -->
 <div class="wrap"><section id="phasebars">
   <h2><span class="n">·</span> Where the REP3 time goes, per run <span class="badge m" id="pb-badge"></span></h2>
-  <p class="lead">The same total, broken into the four REP3 phases so you can see <em>which</em> step dominates
-  each circuit — one bar per run, on loopback. <b>Split</b> secret-shares the witness; <b>witness extension</b>
-  computes the full witness under MPC; <b>proving-key generation</b> builds the key (this is where the
-  lookup-heavy sha256 cost lands); <b>prove-proper</b> is the SNARK proof itself. Each family has its own
-  time scale.</p>
+  <p class="lead">The same total, broken into phases so you can see <em>which</em> step dominates
+  each circuit — one bar per run, on loopback. <b>Share inputs</b> secret-shares the witness;
+  <b>witness extension</b> computes the full witness under MPC; <b>witness assembly</b> turns those shared
+  values into the prover's polynomials — MPC over the shares, lookup read-counts, wire population, and where
+  the lookup-heavy sha256 cost lands; <b>prove</b> is the SNARK proof itself. Circuit setup appears as its own
+  segment only when the <a href="#basis">cost basis</a> includes it — on the per-proof basis it is precomputed
+  and therefore absent. Each family has its own time scale.</p>
   <div class="controls">
     <div class="ctl"><label>ZK</label><div class="segs" id="pb-zk">
       <button data-v="nonzk">non-ZK</button><button data-v="zk" aria-pressed="true">ZK</button></div></div>
@@ -356,11 +421,10 @@ ul.clean li{margin:5px 0}
     <svg class="viz" id="pb-recursion" preserveAspectRatio="xMinYMin meet"></svg></div>
   <div class="legend" id="pb-legend" style="margin-top:12px"></div>
   <div class="note" style="margin-top:10px">Bars show <b>measured loopback</b> time (no network). On a WAN the
-  round-bound phases — witness extension and, for lookup circuits, proving-key generation — grow with distance;
-  see the distance chart above. For <b>recursion</b> and <b>sha256 ≥ 2¹⁸</b> the run captured only the combined
-  prove time, not the pk-gen/prove-proper split, so those appear as a single blue “prove” segment. Very small
-  phases (recursion's split and witness-extension are ~0.01–0.1 s next to a ~72 s prove) are drawn at a minimum
-  width so they stay visible — hover for the true value and share.</div>
+  round-bound phases — witness extension and, for lookup circuits, witness assembly — grow with distance;
+  see the distance chart above. Where a run didn't resolve assembly from prove, the two appear as a single blue
+  combined segment. Very small phases (recursion's input sharing and witness extension are ~0.01–0.1 s next to a
+  ~72 s prove) are drawn at a minimum width so they stay visible — hover for the true value and share.</div>
 </section></div>
 
 <!-- ============ COMPOSITION ============ -->
@@ -397,7 +461,8 @@ ul.clean li{margin:5px 0}
   <p class="lead">The two things that make distance hurt: <b>sequential rounds</b> (each one costs a full RTT — this
   is why witext explodes on WAN) and <b>total bytes</b> (which the link bandwidth meters out). Measured per phase
   from mpc-net counters at party 0's busiest peer; round-counts and byte-volumes are network-independent, so these
-  hold at any distance. pk-gen is split out from prove-proper via the pk-gen snapshot.</p>
+  hold at any distance. Witness assembly is split out from the prove step via the mid-run comms snapshot.
+  Circuit setup does no communication at all — it is single-party work — so it never appears here.</p>
   <div class="tablewrap"><table id="comms-table"></table></div>
   <div class="tcap">rounds = logical blocking rounds (the latency multiplier) · msgs = received messages (conservative round proxy) · bytes = received by the busiest peer.</div>
 </section></div>
@@ -406,36 +471,37 @@ ul.clean li{margin:5px 0}
 <div class="wrap"><section id="charts">
   <h2><span class="n">06</span> How proving scales with circuit size <span class="badge m"></span></h2>
   <p class="lead">Proving time versus circuit size (dyadic rows), on loopback, for a circuit family that has a full
-  size sweep — pick <b>poseidon</b> or <b>sha256</b>. By default this is <b>proof generation only</b>:
-  proving-key generation is <em>excluded</em>, so it answers "once you have the key, how long to make the
-  proof?" on equal terms. Toggle the key generation back in to see the full pipeline the MPC provers actually
-  pay end-to-end. (recursion has only one size, so it isn't a sweep.)</p>
+  size sweep — pick <b>poseidon</b> (contiguous 2¹¹–2²⁰) or <b>sha256</b>. Every prover is measured on the
+  <a href="#basis">same cost basis</a>, including the single-prover baselines: bb's internal proving-key build
+  and plaindriver's VK generation are split out of their totals exactly as the MPC path's are, so the vertical
+  gap between the lines is a like-for-like privacy multiplier at every size. (recursion has only one size, so
+  it isn't a sweep.)</p>
   <div class="controls">
     <div class="ctl"><label>Family</label><select id="sweep-family">
       <option value="poseidon">poseidon</option><option value="sha256">sha256</option></select></div>
     <div class="ctl"><label>ZK</label><div class="segs" id="sweep-zk">
       <button data-v="nonzk">non-ZK</button><button data-v="zk" aria-pressed="true">ZK</button></div></div>
-    <div class="ctl"><label>Proving-key generation</label><div class="segs" id="sweep-pk">
-      <button data-v="excl" aria-pressed="true">excluded</button><button data-v="incl">included</button></div></div>
+    <div class="ctl"><label>Cost basis</label><div class="dim" style="font-size:12px;padding-top:7px">set at the
+      <a href="#basis">top of the page</a> — applies to every chart</div></div>
   </div>
   <div class="chart"><div class="ct" id="sweep-title">Proof-generation time vs. circuit size</div>
     <div class="cs" id="sweep-sub"></div>
     <svg class="viz" id="sweep-svg" viewBox="0 0 720 360" preserveAspectRatio="xMinYMin meet"></svg>
     <div class="legend" id="sweep-legend"></div>
-    <div class="note" style="margin-top:10px">A line stops where a point wasn't measured: on <b>sha256</b> in
-    <em>proof-generation-only</em> mode, the pk-gen/prove-proper split wasn't captured for 2¹⁸ and up (switch pk-gen
-    <em>included</em> to see them), and sha256 2²⁰ REP3 exceeded the 30-minute cap. Shamir ran the poseidon family only.</div>
+    <div class="note" style="margin-top:10px">A line stops where a point wasn't measured. sha256 2²⁰ is not in this
+    run: every prior attempt hit the 30-minute per-cell cap without producing a number, so the four cells were
+    dropped rather than reported as censored. Shamir ran the poseidon family only.</div>
   </div>
 </section></div>
 
 <!-- ============ BATCH K ============ -->
 <div class="wrap"><section id="batchk">
   <h2><span class="n">07</span> The batch-size dial <span class="mono" style="font-size:15px">K</span> <span class="badge m" id="k-badge"></span></h2>
-  <p class="lead">Lookup-heavy proving-key generation (the sha256 read-counts) turns each secret table index into
+  <p class="lead">Lookup-heavy witness assembly (the sha256 read-counts) turns each secret table index into
   a one-hot vector over an MPC round. Doing <em>all</em> gates in one batch is fewest rounds but materialises
   every vector at once — which hit <b>~176 GB/party and OOM-killed the box</b> at sha256 2¹⁸. The fix: a batch
-  size <b>K</b> — process the gates in chunks of K. <b>Peak memory ∝ K, pk-gen rounds ∝ gates ÷ K, and the proof
-  stays byte-identical for every K.</b> K only affects <em>pk-gen</em>; the prove-proper step is unchanged by it.
+  size <b>K</b> — process the gates in chunks of K. <b>Peak memory ∝ K, assembly rounds ∝ gates ÷ K, and the proof
+  stays byte-identical for every K.</b> K only affects <em>witness assembly</em>; the prove step is unchanged by it.
   Measured on <span class="mono" id="k-circuit">a lookup circuit</span> — drag K to see the tradeoff.</p>
   <div class="note" style="margin-top:0"><b>Circuit: <span class="mono" id="k-circuit2"></span>.</b> This is the
   only circuit K was swept on so far — and the only kind that needs it: only lookup-heavy circuits (sha256)
@@ -449,7 +515,7 @@ ul.clean li{margin:5px 0}
           <button class="minibtn" id="k-reset" title="Back to the default K=4096">reset</button>
         </div></div>
       <div class="ctl"><label>Wall-clock &amp; memory show</label><div class="segs" id="k-pk">
-        <button data-v="incl" aria-pressed="true">with pk-gen</button><button data-v="excl">prove-proper only</button></div></div>
+        <button data-v="incl" aria-pressed="true">assembly + prove</button><button data-v="excl">prove only</button></div></div>
     </div>
     <div class="tiles" id="k-tiles" style="margin:4px 0 16px"></div>
     <div class="grid2" style="grid-template-columns:1fr 1fr">
@@ -457,19 +523,20 @@ ul.clean li{margin:5px 0}
         <svg class="viz" id="k-mem" preserveAspectRatio="xMinYMin meet"></svg></div>
       <div class="chart"><div class="ct">Wall-clock</div><div class="cs" id="k-wall-cs"></div>
         <svg class="viz" id="k-wall" preserveAspectRatio="xMinYMin meet"></svg></div>
-      <div class="chart"><div class="ct">pk-gen rounds</div><div class="cs">∝ gates ÷ K — each costs one round-trip on a WAN</div>
+      <div class="chart"><div class="ct">assembly rounds</div><div class="cs">∝ gates ÷ K — each costs one round-trip on a WAN</div>
         <svg class="viz" id="k-rounds" preserveAspectRatio="xMinYMin meet"></svg></div>
-      <div class="chart"><div class="ct">prove-proper rounds</div><div class="cs">the actual proving step — K-independent (not batched by K)</div>
+      <div class="chart"><div class="ct">prove rounds</div><div class="cs">the actual proving step — K-independent (not batched by K)</div>
         <svg class="viz" id="k-pprounds" preserveAspectRatio="xMinYMin meet"></svg></div>
     </div>
-    <div class="note">Read across the panels: as K falls, <b>memory</b> drops sharply and <b>pk-gen rounds</b> climb —
+    <div class="note">Read across the panels: as K falls, <b>memory</b> drops sharply and <b>assembly rounds</b> climb —
     but <b>total wall-clock</b> is nearly <em>flat</em> on loopback, because round-trips are almost free on one machine.
-    Flip “with pk-gen → prove-proper only” and both the memory and the wall-clock collapse to a small, flat floor:
-    everything K controls lives in <em>pk-gen</em>; the proving step itself is untouched by K. <b>Why?</b> K only
-    chunks the <em>lookup read-count</em> one-hot vectors, and those are built while assembling the <em>proving
-    key</em>. Prove-proper then consumes the finished key and runs the ordinary sumcheck + PCS — and since the
-    proof is <b>byte-identical for every K</b>, the key it works from is identical too, so it does exactly the same
-    work no matter how the key was batched. K is a pk-gen memory/round dial, nothing more. So
+    Flip “assembly + prove → prove only” and both the memory and the wall-clock collapse to a small, flat floor:
+    everything K controls lives in <em>witness assembly</em>; the proving step itself is untouched by K. <b>Why?</b> K only
+    chunks the <em>lookup read-count</em> one-hot vectors, which are derived from <em>secret</em> table indices and
+    so must be rebuilt for every proof — per-proof work that no amount of precomputation removes. The prove step
+    then consumes the finished polynomials and runs the ordinary sumcheck + PCS — and since the
+    proof is <b>byte-identical for every K</b>, what it works from is identical too, so it does exactly the same
+    work no matter how the batching went. K is a memory/round dial on witness assembly, nothing more. So
     K's real tradeoff is <b>peak memory (∝ K)</b> vs. <b>WAN round-trips (∝ gates ÷ K)</b> — not memory vs. time. Pick a
     small K on a memory-tight node or a LAN; a larger K to cut round-trips on a long link. The default <b>K=4096</b>
     sits near the round-count floor at ~8 GB/party — safe out of the box. Exposed as
@@ -535,6 +602,9 @@ const fmtDur=v=>{
 const fmtN=v=>v==null?'—':v.toLocaleString('en-US');
 const fmtB=v=>{if(v==null)return '—';const u=['B','KB','MB','GB'];let i=0,x=v;while(x>=1024&&i<3){x/=1024;i++;}return (x>=100?x.toFixed(0):x>=10?x.toFixed(1):x.toFixed(2))+' '+u[i];};
 const fmtX=v=>v==null?'—':(v>=100?v.toFixed(0):v>=10?v.toFixed(1):v.toFixed(1))+'×';
+// share of a total, for "setup is N% of this bar" readouts
+const pctOf=(part,total)=>!total?'—':(100*part/total>=10?(100*part/total).toFixed(0)
+  :(100*part/total>=1?(100*part/total).toFixed(1):(100*part/total).toFixed(2)))+'%';
 const CIRCS=Object.keys(DATA.circuits);
 const famColor=f=>({poseidon:'var(--c-bb)',sha256:'var(--p-prove)',recursion:'var(--p-witext)'}[f]||'var(--muted)');
 const famBg=f=>({poseidon:'rgba(42,120,214,.14)',sha256:'rgba(235,104,52,.15)',recursion:'rgba(74,58,167,.15)'}[f]||'var(--surface-2)');
@@ -573,8 +643,8 @@ function rep3Pipeline(c,zk,rttMs,bwMbps){
   const C=DATA.circuits[c], t=C.timings_loopback.REP3, cm=C.comms;
   const phases=[
     {name:'witext', comp:t.witext, cm:cm.witext},
-    {name:'pk-gen', comp:t['pkgen_'+zk], cm:cm.pkgen},
-    {name:'prove-proper', comp:t['proveproper_'+zk], cm:cm.proveproper},
+    {name:'witness assembly', comp:t['pkgen_'+zk], cm:cm.pkgen},
+    {name:'prove', comp:t['proveproper_'+zk], cm:cm.proveproper},
   ];
   let compute=0,lat_lo=0,lat_hi=0,bw_s=0;
   const parts=[];
@@ -606,8 +676,58 @@ function renderTiles(){
     box.appendChild(e);}
 }
 
+/* ================= COST BASIS (per-proof vs + circuit setup) =================
+   One global switch, honoured by every chart, so the page can never show a
+   prover on one basis next to a prover on another. Reads the v4 bucket data and
+   falls back to the pre-v4 cell walls (which sit BETWEEN the two bases: they
+   include each prover's inline setup but not its separately-timed setup cell). */
+const BASIS={mode:'perproof'};
+const withSetup=()=>BASIS.mode==='withsetup';
+function bkt(C,proto,zk,cell){const b=C.buckets&&C.buckets[proto];if(!b)return null;
+  return cell==='witext'?(b.witext||null):((b.prove&&b.prove[zk])||null);}
+// One cell's seconds on the current basis (null when this run has no buckets).
+function cellSecs(C,proto,zk,cell){const x=bkt(C,proto,zk,cell);if(!x)return null;
+  return (x.per_proof||0)+(withSetup()?(x.setup_inline||0):0);}
+function setupOnce(C,proto){const b=C.buckets&&C.buckets[proto];
+  return (b&&b.setup_once)||0;}
+// Whole charted pipeline for one prover, on the current basis. bb/plaindriver are
+// one cell; the MPC provers add input sharing and witness extension.
+function provTime(C,proto,zk){
+  const t=C.timings_loopback,once=withSetup()?setupOnce(C,proto):0;
+  if(proto==='bb'){const v=cellSecs(C,'bb',zk,'prove');
+    return v==null?(t.bb['prove_'+zk]==null?null:t.bb['prove_'+zk]+once):v+once;}
+  if(proto==='plaindriver'){const v=cellSecs(C,'plaindriver',zk,'prove');
+    return v==null?t.plaindriver['prove_'+zk]:v+once;}
+  if(proto==='REP3'){const pr=cellSecs(C,'REP3',zk,'prove');
+    if(pr==null){const pp=t.REP3['proveproper_'+zk],pk=t.REP3['pkgen_'+zk];
+      const core=pp!=null?pp+(pk||0):t.REP3['prove_'+zk];
+      return core==null?null:core+(t.REP3.split||0)+(t.REP3.witext||0);}
+    const wx=cellSecs(C,'REP3',zk,'witext');
+    return pr+(wx==null?(t.REP3.witext||0):wx)+(t.REP3.split||0)+once;}
+  if(proto==='SHAMIR'){const pr=cellSecs(C,'SHAMIR',zk,'prove');
+    if(pr==null)return t.SHAMIR['prove_'+zk];
+    const wx=cellSecs(C,'REP3',zk,'witext');   // Shamir reuses the REP3 witext
+    return pr+(wx==null?(t.REP3.witext||0):wx)+(t.REP3.split||0)
+      +(t.SHAMIR.translate||0)+once;}
+  return null;}
+// The setup a prover would shed by precomputing, for tooltips and the readout.
+function setupTotal(C,proto,zk){
+  const cells=proto==='REP3'||proto==='SHAMIR'?['prove','witext']:['prove'];
+  let s=setupOnce(C,proto);
+  for(const cl of cells){const x=bkt(C,proto,zk,cl);if(x)s+=x.setup_inline||0;}
+  return s;}
+function initBasis(){
+  $('#basis-mode').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    BASIS.mode=b.dataset.v;
+    $('#basis-mode').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+    redrawAll();});}
+function redrawAll(){drawExplorer();drawMatrix();drawFamilyBars();drawSweep();drawDist();}
+
 /* ================= EXPLORER ================= */
-const EXP={circuit:'poseidon_2e17',zk:'zk',tier:'same-continent',customRtt:null,bwIdx:null};
+// pickCircuit: prefer a named default, but never assume a dataset contains it —
+// a run that drops or censors a circuit must still render.
+const pickCircuit=want=>DATA.circuits[want]?want:CORD[0];
+const EXP={circuit:pickCircuit('poseidon_2e17'),zk:'zk',tier:'same-continent',customRtt:null,bwIdx:null};
 function initExplorer(){
   const sel=$('#exp-circuit'); CORD.forEach(c=>{const o=CE('option');o.value=c;o.textContent=clabel(c)+'  ('+fmtN(nrows(c))+' rows)';sel.appendChild(o);});
   sel.value=EXP.circuit; sel.onchange=e=>{EXP.circuit=e.target.value;drawExplorer();};
@@ -636,34 +756,42 @@ function drawExplorer(){
   $('#exp-badge').innerHTML=custom?'<span class="badge mod">custom network — modelled</span>':'';
   const C=DATA.circuits[EXP.circuit], zk=EXP.zk;
   // configs
-  const bb=C.timings_loopback.bb['prove_'+zk], bbvk=C.timings_loopback.bb.vkgen;
-  const pd=C.timings_loopback.plaindriver['prove_'+zk];
+  const bb=provTime(C,'bb',zk), pd=provTime(C,'plaindriver',zk);
   const rep3=rep3Pipeline(EXP.circuit,zk,rtt,bw);
-  const sh=C.timings_loopback.SHAMIR['prove_'+zk], shx=C.timings_loopback.SHAMIR.translate;
+  const rep3compute=provTime(C,'REP3',zk);
+  const sh=provTime(C,'SHAMIR',zk);
+  const basisNote=withSetup()?'incl. circuit setup':'per proof · setup precomputed';
   const rows=[
-    {label:'bb',color:'var(--c-bb)',compute:(bb||0)+(bbvk||0),lat:0,bw:0,note:'single prover · vkgen+prove',flat:true,avail:bb!=null},
+    {label:'bb',color:'var(--c-bb)',compute:bb||0,lat:0,bw:0,note:'single prover · '+basisNote,flat:true,avail:bb!=null},
     {label:'plaindriver',color:'var(--c-pd)',compute:pd||0,lat:0,bw:0,note:'co-noir, 1 node, no MPC',flat:true,avail:pd!=null},
-    {label:'REP3 3-party',color:'var(--c-rep3)',compute:rep3.compute,lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'witext+pkgen+prove',avail:rep3.compute>0,pipeline:rep3},
+    {label:'REP3 3-party',color:'var(--c-rep3)',compute:rep3compute||rep3.compute,lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'share+witext+assemble+prove',avail:(rep3compute||rep3.compute)>0,pipeline:rep3},
   ];
-  if(sh!=null)rows.push({label:'Shamir 3-party',color:'var(--c-shamir)',compute:(sh||0)+(shx||0),lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'threshold · comms modelled from REP3',avail:true,approxComms:true});
+  if(sh!=null)rows.push({label:'Shamir 3-party',color:'var(--c-shamir)',compute:sh,lat:rep3.lat_lo,lat2:rep3.lat_hi,bw:rep3.bw_s,note:'threshold · comms modelled from REP3',avail:true,approxComms:true});
   drawExpBars(rows);
   const netLabel=custom?`${(rtt<1?rtt.toFixed(2):rtt.toFixed(0))} ms · ${bwLabel(bw)}`:`${TIER_LABEL[EXP.tier]} (${TIERS[EXP.tier].rtt_ms} ms · ${bwLabel(TIERS[EXP.tier].bw_mbps)})`;
   $('#exp-sub').textContent=`${clabel(EXP.circuit)} · ${zk==='zk'?'ZK':'non-ZK'} · ${netLabel}`;
   // readout
   const priv=rows[2];
   const mid=priv.compute+ (priv.lat+priv.lat2)/2 + priv.bw;
-  const bbTot=(bb||0)+(bbvk||0);
+  const bbTot=bb||0;
+  const setupR=setupTotal(C,'REP3',zk), setupB=setupTotal(C,'bb',zk);
   $('#exp-readout').innerHTML=`
     <div class="split-tiles">
       <div class="tile" style="padding:12px"><div class="k">bb baseline</div><div class="v" style="font-size:22px">${fmtS(bbTot)}</div><div class="d">one machine · flat at every network</div></div>
       <div class="tile" style="padding:12px"><div class="k">REP3 @ this network</div><div class="v" style="font-size:22px">${fmtS(mid)}</div><div class="d">range ${fmtS(priv.compute+priv.lat+priv.bw)} – ${fmtS(priv.compute+priv.lat2+priv.bw)}</div></div>
     </div>
     <div class="note" style="margin-top:12px">
-      REP3 breaks down as <b>compute</b> ${fmtS(priv.compute)} (measured; all phases incl. proving-key gen)
+      REP3 breaks down as <b>compute</b> ${fmtS(priv.compute)} (measured, ${withSetup()?'including circuit setup':'per proof — circuit setup precomputed'})
       + <b>latency</b> ${fmtS(priv.lat)}–${fmtS(priv.lat2)} (${fmtN(priv.pipeline.parts.reduce((s,p)=>s+p.arm.rounds_lo,0))}–${fmtN(priv.pipeline.parts.reduce((s,p)=>s+p.arm.rounds_hi,0))} sequential rounds × ${rtt<1?rtt.toFixed(2):rtt.toFixed(0)} ms)
       + <b>bandwidth</b> ${fmtS(priv.bw)}${bw==null?' (no link limit)':' ('+bwLabel(bw)+')'}.
       ${bbTot?`That makes the private path ~<b>${fmtX(mid/bbTot)}</b> the single-machine bb time here.`:''}
     </div>
+    ${(setupR||setupB)?`<div class="note" style="margin-top:8px">Circuit setup here is
+      <b>${fmtS(setupR)}</b> on the REP3 path (${pctOf(setupR,priv.compute+(withSetup()?0:setupR))} of its
+      compute) and <b>${fmtS(setupB)}</b> for bb (${pctOf(setupB,bbTot+(withSetup()?0:setupB))}) —
+      precomputable once and reusable for every proof by every user, and ${withSetup()?'included':'excluded'}
+      above. Note which way that cuts: setup is a far larger share of the single-prover baseline than of the
+      MPC pipeline, so precomputing it <em>raises</em> the privacy multiplier rather than lowering it.</div>`:''}
     <div class="note" style="margin-top:8px">The latency range spans best case (rounds fully overlapped) to worst
       case (no overlap); reality sits between. Drag the nodes to <span class="hl">antipodal</span> and the latency
       term takes over — round-trips, not compute, are what long links punish.</div>`;
@@ -704,7 +832,7 @@ function drawExpBars(rows){
 }
 
 /* ================= DISTANCE CHART ================= */
-const DIST={circuit:'poseidon_2e17'};
+const DIST={circuit:pickCircuit('poseidon_2e17')};
 function initDist(){
   const sel=$('#dist-circuit'); CORD.forEach(c=>{const o=CE('option');o.value=c;o.textContent=clabel(c);sel.appendChild(o);});
   sel.value=DIST.circuit; sel.onchange=e=>{DIST.circuit=e.target.value;drawDist();};
@@ -720,8 +848,8 @@ function drawDist(){
   const rttMin=0.03,rttMax=320;
   const phases=[
     {key:'witext',label:'witext',color:'var(--p-witext)',comp:C.timings_loopback.REP3.witext,cm:C.comms.witext,mkey:'witext'},
-    {key:'pkgen',label:'pk-gen',color:'var(--p-pkgen)',comp:C.timings_loopback.REP3.pkgen_nonzk,cm:C.comms.pkgen,mkey:'pkgen'},
-    {key:'prove',label:'prove-proper',color:'var(--p-prove)',comp:C.timings_loopback.REP3.proveproper_nonzk,cm:C.comms.proveproper,mkey:'proveproper'},
+    {key:'pkgen',label:'witness assembly',color:'var(--p-pkgen)',comp:C.timings_loopback.REP3.pkgen_nonzk,cm:C.comms.pkgen,mkey:'pkgen'},
+    {key:'prove',label:'prove',color:'var(--p-prove)',comp:C.timings_loopback.REP3.proveproper_nonzk,cm:C.comms.proveproper,mkey:'proveproper'},
   ];
   const bwFor=rtt=>{ let best=null;for(const t of TIER_ORDER){const T=TIERS[t];
     if(best==null||Math.abs(T.rtt_ms-rtt)<Math.abs(TIERS[best].rtt_ms-rtt))best=t;}return TIERS[best].bw_mbps;};
@@ -789,23 +917,30 @@ function initMatrix(){
 function drawMatrix(){
   const zk=MX.zk, T=$('#mx-table');
   const head=`<thead><tr><th class="lab">circuit</th><th class="num">rows</th>
-    <th class="num">bb prove</th><th class="num">bb vkgen</th><th class="num">plaindriver</th>
-    <th class="num">REP3 split</th><th class="num">REP3 witext</th><th class="num">REP3 pk-gen</th><th class="num">REP3 prove-proper</th><th class="num">REP3 total</th>
-    <th class="num">Shamir prove</th><th class="num">REP3÷bb</th></tr></thead>`;
+    <th class="num">bb</th><th class="num">plaindriver</th>
+    <th class="num">REP3 share</th><th class="num">REP3 witext</th><th class="num">REP3 assemble</th><th class="num">REP3 prove</th><th class="num">REP3 total</th>
+    <th class="num">Shamir total</th><th class="num">setup (once)</th><th class="num">REP3÷bb</th></tr></thead>`;
   let body='<tbody>';let lastFam='';
   for(const c of CORD){const C=DATA.circuits[c],t=C.timings_loopback;
     if(C.family!==lastFam){lastFam=C.family;body+=`<tr class="group"><td colspan="12">${C.family}</td></tr>`;}
-    const bb=t.bb['prove_'+zk],pd=t.plaindriver['prove_'+zk],
-      split=t.REP3.split,wit=t.REP3.witext,pk=t.REP3['pkgen_'+zk],pp=t.REP3['proveproper_'+zk],
-      rep3tot=[split,wit,pk,pp].every(x=>x!=null)?(split+wit+pk+pp):t.REP3['prove_'+zk],
-      sh=t.SHAMIR['prove_'+zk];
+    const bb=provTime(C,'bb',zk),pd=provTime(C,'plaindriver',zk),
+      rep3tot=provTime(C,'REP3',zk),sh=provTime(C,'SHAMIR',zk),
+      split=t.REP3.split,
+      wit=cellSecs(C,'REP3',zk,'witext'),
+      pv=bkt(C,'REP3',zk,'prove');
+    // "assemble" = the per-proof half of what used to be called pk-gen: MPC over
+    // the shared witness, lookup read-counts, wire population (+ arena alloc).
+    const asm=pv?(pv.witness||0)+(pv.alloc||0)+(pv.unaccounted||0)+(withSetup()?(pv.setup_inline||0):0)
+                :t.REP3['pkgen_'+zk];
+    const prv=pv?pv.prove:t.REP3['proveproper_'+zk];
     const ratio=(bb&&rep3tot)?rep3tot/bb:null;
     body+=`<tr><td class="lab">${clabel(c)}<span class="fam-pill" style="color:${famColor(C.family)};background:${famBg(C.family)}">${C.family[0]}</span></td>
       <td class="num dim">${fmtN(C.features.dyadic_size)}</td>
-      <td class="num">${fmtS(bb)}</td><td class="num dim">${fmtS(t.bb.vkgen)}</td><td class="num">${fmtS(pd)}</td>
-      <td class="num dim">${fmtS(split)}</td><td class="num">${fmtS(wit)}</td><td class="num">${fmtS(pk)}</td><td class="num">${fmtS(pp)}</td>
+      <td class="num">${fmtS(bb)}</td><td class="num">${fmtS(pd)}</td>
+      <td class="num dim">${fmtS(split)}</td><td class="num">${fmtS(wit==null?t.REP3.witext:wit)}</td><td class="num">${fmtS(asm)}</td><td class="num">${fmtS(prv)}</td>
       <td class="num" style="font-weight:650">${fmtS(rep3tot)}</td>
       <td class="num">${fmtS(sh)}</td>
+      <td class="num dim">${fmtS(setupTotal(C,'REP3',zk)||null)}</td>
       <td class="num" style="color:var(--accent);font-weight:650">${fmtX(ratio)}</td></tr>`;
   }
   T.innerHTML=head+body+'</tbody>';
@@ -814,20 +949,29 @@ function drawMatrix(){
 /* ================= PHASE BARS (per family) ================= */
 const PB={zk:'zk'};
 const PB_PHASES=[
-  {k:'split',label:'split (secret-share witness)',color:'var(--axis)'},
+  {k:'setup',label:'circuit setup (precomputable once)',color:'var(--axis)'},
+  {k:'split',label:'share inputs',color:'var(--c-shamir)'},
   {k:'witext',label:'witness extension',color:'var(--p-witext)'},
-  {k:'pkgen',label:'pk-gen',color:'var(--p-pkgen)'},
-  {k:'proveproper',label:'prove-proper',color:'var(--p-prove)'},
-  {k:'prove',label:'prove (pk-gen + prove-proper, not split in this run)',color:'var(--c-bb)'},
+  {k:'assemble',label:'witness assembly (MPC over shared values, read-counts, wires)',color:'var(--p-pkgen)'},
+  {k:'prove',label:'prove (commit, grand products, sumcheck, PCS)',color:'var(--p-prove)'},
+  {k:'conflated',label:'assemble + prove (not resolved in this run)',color:'var(--c-bb)'},
 ];
-// pk-gen + prove-proper were only captured separately for some circuits; where they weren't
-// (recursion, sha256 ≥ 2^18), fall back to the combined prove_{zk} as one 'prove' segment.
+// Uses the v4 buckets where present; falls back to the legacy pk-gen/prove-proper
+// pair, and to one conflated segment where even that wasn't captured.
 function pbVals(C){const t=C.timings_loopback.REP3||{},zk=PB.zk;
+  const out={setup:0,split:t.split||0,witext:0,assemble:0,prove:0,conflated:0};
+  const pv=bkt(C,'REP3',zk,'prove'),wx=bkt(C,'REP3',zk,'witext');
+  if(pv){
+    out.witext=(wx?wx.per_proof:t.witext)||0;
+    out.assemble=(pv.witness||0)+(pv.alloc||0)+(pv.unaccounted||0);
+    out.prove=pv.prove||0;
+    if(withSetup())out.setup=setupTotal(C,'REP3',zk);
+    return out;}
+  out.witext=t.witext||0;
   const pk=t['pkgen_'+zk],pp=t['proveproper_'+zk];
-  const split={split:t.split||0,witext:t.witext||0,pkgen:0,proveproper:0,prove:0};
-  if(pk!=null&&pp!=null){split.pkgen=pk;split.proveproper=pp;}
-  else if(t['prove_'+zk]!=null){split.prove=t['prove_'+zk];}
-  return split;}
+  if(pk!=null&&pp!=null){out.assemble=pk;out.prove=pp;}
+  else if(t['prove_'+zk]!=null){out.conflated=t['prove_'+zk];}
+  return out;}
 function pbTotal(v){return PB_PHASES.reduce((s,p)=>s+(v[p.k]||0),0);}
 function initFamilyBars(){
   $('#pb-zk').querySelectorAll('button').forEach(b=>b.onclick=()=>{PB.zk=b.dataset.v;
@@ -936,7 +1080,7 @@ function initComms(){
   const T=$('#comms-table');
   const head=`<thead><tr><th class="lab">circuit</th>
     <th class="num">witext rounds</th><th class="num">witext msgs</th><th class="num">witext bytes</th>
-    <th class="num">pk-gen rounds</th><th class="num">pk-gen bytes</th>
+    <th class="num">assembly rounds</th><th class="num">assembly bytes</th>
     <th class="num">prove rounds</th><th class="num">prove msgs</th><th class="num">prove bytes</th>
     <th class="num">total sent</th></tr></thead>`;
   let body='<tbody>';let lastFam='';
@@ -954,28 +1098,25 @@ function initComms(){
 }
 
 /* ================= SWEEP ================= */
-const SWEEP={zk:'zk',pk:'excl',family:'poseidon'};
+const SWEEP={zk:'zk',family:'poseidon'};
 function initSweep(){
   const fam=$('#sweep-family'); if(fam){fam.value=SWEEP.family; fam.onchange=e=>{SWEEP.family=e.target.value;drawSweep();};}
   $('#sweep-zk').querySelectorAll('button').forEach(b=>b.onclick=()=>{SWEEP.zk=b.dataset.v;
     $('#sweep-zk').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawSweep();});
-  $('#sweep-pk').querySelectorAll('button').forEach(b=>b.onclick=()=>{SWEEP.pk=b.dataset.v;
-    $('#sweep-pk').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));drawSweep();});
   drawSweep();
 }
-// proving-time getter honouring the zk + pk-gen toggles. pk 'excl' = proof generation only.
-function sweepGet(C,who){const t=C.timings_loopback,zk=SWEEP.zk,incl=SWEEP.pk==='incl';
-  if(who==='bb'){const p=t.bb['prove_'+zk];return p==null?null:p+(incl?(t.bb.vkgen||0):0);}
-  if(who==='pd')return t.plaindriver['prove_'+zk]; // plaindriver key-gen not separately timed
-  const d=t[who]; if(!d)return null;
-  const pp=d['proveproper_'+zk], pk=d['pkgen_'+zk];
-  if(pp==null)return incl?d['prove_'+zk]:null;
-  return incl?pp+(pk||0):pp;}
+// Proving-time getter. The cost basis is global (see initBasis), so every prover
+// on this chart is measured the same way — the old per-chart pk-gen toggle
+// subtracted the MPC pk-gen phase while leaving bb's internal pk build inside
+// bb's number, which swung the sha256 2^17 ratio between 8.5x and 250x depending
+// on a switch the reader had no way to interpret.
+function sweepGet(C,who){const zk=SWEEP.zk;
+  return provTime(C,who==='pd'?'plaindriver':who,zk);}
 function drawSweep(){
   const svg=$('#sweep-svg'),W=720,H=360,padL=58,padR=104,padT=14,padB=44;
-  const incl=SWEEP.pk==='incl';
-  $('#sweep-title').textContent=incl?'Full pipeline time vs. circuit size (proving-key gen included)':'Proof-generation time vs. circuit size (proving-key gen excluded)';
-  $('#sweep-sub').textContent=`${SWEEP.family} family · loopback · ${SWEEP.zk==='zk'?'ZK':'non-ZK'} · both axes log · ${incl?'MPC = pk-gen + prove-proper':'MPC = prove-proper only; bb = prove (no vkgen); plaindriver = prove'}`;
+  $('#sweep-title').textContent=withSetup()?'Time per proof incl. circuit setup, vs. circuit size'
+    :'Time per proof vs. circuit size (circuit setup precomputed)';
+  $('#sweep-sub').textContent=`${SWEEP.family} family · loopback · ${SWEEP.zk==='zk'?'ZK':'non-ZK'} · both axes log · every prover on the same basis: ${withSetup()?'per-proof work + circuit setup':'per-proof work only'}`;
   const configs=[
     {k:'bb',label:'bb',color:'var(--c-bb)'},{k:'pd',label:'plaindriver',color:'var(--c-pd)'},
     {k:'REP3',label:'REP3',color:'var(--c-rep3)'},{k:'SHAMIR',label:'Shamir',color:'var(--c-shamir)'},
@@ -1025,7 +1166,7 @@ function initStaticTables(){
   ];
   $('#prov-table').innerHTML='<tbody>'+rows.map(r=>`<tr><td class="lab" style="font-family:var(--sans);color:var(--ink-2)">${r[0]}</td><td class="lab" style="text-align:left;font-size:11.5px">${r[1]}</td></tr>`).join('')+'</tbody>';
   // caveats
-  $('#caveats').innerHTML=`<b>Honest limits:</b> the Linux network emulator shapes a single loopback interface, so all parties' flows share one bandwidth cap — the <b>bandwidth</b> term is pessimistic vs. a real per-NIC link (the latency term is faithful). Censored (▲) cells exceeded the ${(DATA.meta.full_manifest||{}).cell_timeout_s?Math.round((DATA.meta.full_manifest.cell_timeout_s)/60)+'-minute':'time'} cap and are lower bounds. Security model is <b>semi-honest, honest-majority</b> REP3 — a malicious-secure variant would cost more (not measured here). Loopback matrix and measured distance anchors come from the same tree revision (see provenance).`;
+  $('#caveats').innerHTML=`<b>Honest limits:</b> the Linux network emulator shapes a single loopback interface, so all parties' flows share one bandwidth cap — the <b>bandwidth</b> term is pessimistic vs. a real per-NIC link (the latency term is faithful). Censored (▲) cells exceeded the ${(DATA.meta.full_manifest||{}).cell_timeout_s?Math.round((DATA.meta.full_manifest.cell_timeout_s)/60)+'-minute':'time'} cap and are lower bounds. Security model is <b>semi-honest, honest-majority</b> REP3 — a malicious-secure variant would cost more (not measured here). The <b>distance anchors and the batch-K sweep were measured in the preceding run</b> and are reused verbatim: circuit setup is single-party work with zero communication, so re-attributing it cannot change a tier's latency or bandwidth term, and K batches per-proof lookup read-counts either way (see each subdirectory's REUSED-FROM.txt). Two honest differences follow from that reuse: those anchors came from a <b>different tree revision and a different thread cap</b> (${(DATA.meta.full_manifest||{}).rayon_threads_per_party||16} threads per party here vs 51 there), so the modelled lines and the measured dots are not from one run — the MPC path is locally serial (~260% CPU of a 16-thread budget), which is why the loopback numbers came out 5–9% <em>faster</em> here on fewer threads, but treat the dots as corroboration rather than as points on the same curve. And the poseidon 2¹²–2¹⁶ circuits are new in this run, so they have no measured anchor at all and are modelled throughout. The baselines carry two artefacts of their own, reported but excluded from both cost bases: bb and plaindriver each <b>verify the proof they just produced</b> (co-noir does not), and bb runs its own 32-thread pool while the Rust provers are capped at ${(DATA.meta.full_manifest||{}).rayon_threads_per_party||16}.`;
 }
 
 /* ================= util ================= */
@@ -1036,7 +1177,7 @@ function niceTicks(lo,hi,n){const span=hi-lo,step0=span/n,mag=Math.pow(10,Math.f
 let KPTS=[],KIDX=3,KPK='incl';
 function klabel(K){return K===0?'∞ (unbounded)':fmtN(K);}
 function kCircuit(){const ks=DATA.meta.k_sweep;return ks&&DATA.circuits[ks.circuit];}
-// prove-proper is K-independent — pulled from the main dataset (comms + time)
+// the prove step is K-independent — pulled from the main dataset (comms + time)
 function kProveProper(){const C=kCircuit();return (C&&C.comms&&C.comms.proveproper)||null;}
 function kProveProperTime(){const C=kCircuit();if(!C)return 0;const r=C.timings_loopback.REP3;return r.proveproper_zk??r.proveproper_nonzk??0;}
 function kMemFloorGB(){return Math.min(...KPTS.map(p=>p.peak_rss_kb))/1024/1024;}
@@ -1065,18 +1206,18 @@ function drawKSweep(){
   $('#k-tiles').innerHTML=[
     ['Batch size K',klabel(p.K),'shared lookup gates per one-hot batch'],
     ['Peak memory / party',rssGB.toFixed(1)+' <small>GB</small>','∝ K — this is what OOMed the box at ∞'],
-    ['pk-gen rounds',fmtN(p.pkgen_rounds),'∝ gates ÷ K · each costs one RTT on a WAN'],
-    ['avg pk-gen round size',fmtB(avgFrame),'pk-gen bytes ÷ rounds (busiest peer)'],
-    ['prove-proper rounds',ppRounds!=null?fmtN(ppRounds):'—','K-independent · '+(pp?fmtB(pp.recv_bytes):'')+' total'],
-    ['Wall-clock (total)',fmtS(p.seconds),'pk-gen + prove-proper, loopback'],
+    ['assembly rounds',fmtN(p.pkgen_rounds),'∝ gates ÷ K · each costs one RTT on a WAN'],
+    ['avg assembly round size',fmtB(avgFrame),'assembly bytes ÷ rounds (busiest peer)'],
+    ['prove rounds',ppRounds!=null?fmtN(ppRounds):'—','K-independent · '+(pp?fmtB(pp.recv_bytes):'')+' total'],
+    ['Wall-clock (total)',fmtS(p.seconds),'witness assembly + prove, loopback'],
   ].map(t=>`<div class="tile" style="padding:13px"><div class="k">${t[0]}</div><div class="v" style="font-size:21px">${t[1]}</div><div class="d">${t[2]}</div></div>`).join('');
-  // memory & wall honour the pk-gen toggle; 'prove-proper only' = the K-independent floor
-  $('#k-mem-cs').textContent=incl?'∝ K — the OOM axis (pk-gen peak)':'prove-proper floor · ≈ K-independent';
-  $('#k-wall-cs').textContent=incl?'pk-gen + prove-proper, loopback':'prove-proper only · K-independent';
+  // memory & wall honour the assembly toggle; 'prove only' = the K-independent floor
+  $('#k-mem-cs').textContent=incl?'∝ K — the OOM axis (assembly peak)':'prove floor · ≈ K-independent';
+  $('#k-wall-cs').textContent=incl?'witness assembly + prove, loopback':'prove only · K-independent';
   drawKMini('#k-mem',i, incl?(q=>q.peak_rss_kb/1024/1024):(()=>floorGB), v=>v.toFixed(1)+' GB','var(--p-prove)','peak memory (GB / party)');
   drawKMini('#k-wall',i, incl?(q=>q.seconds):(()=>ppTime), v=>fmtDur(v),'var(--p-pkgen)','wall-clock time');
-  drawKMini('#k-rounds',i, q=>q.pkgen_rounds, v=>fmtN(Math.round(v)),'var(--p-witext)','pk-gen rounds');
-  drawKMini('#k-pprounds',i, ()=>ppRounds||0, v=>fmtN(Math.round(v)),'var(--c-bb)','prove-proper rounds');
+  drawKMini('#k-rounds',i, q=>q.pkgen_rounds, v=>fmtN(Math.round(v)),'var(--p-witext)','assembly rounds');
+  drawKMini('#k-pprounds',i, ()=>ppRounds||0, v=>fmtN(Math.round(v)),'var(--c-bb)','prove rounds');
 }
 // one small-multiple panel: yUnit vs K, own linear y-axis from 0, selected K highlighted.
 // yTitle = what the y-axis measures (rendered rotated on the left).
@@ -1109,7 +1250,7 @@ function redrawAll(){drawExplorer();drawDist();drawMatrix();drawComposition();dr
 function boot(){
   // trust banner from manifest
   const m=DATA.meta.full_manifest||{};
-  renderTiles();initExplorer();initDist();initMatrix();initComposition();initFamilyBars();initComms();
+  renderTiles();initBasis();initExplorer();initDist();initMatrix();initComposition();initFamilyBars();initComms();
   initSweep();initStaticTables();initKSweep();
   $('#foot').innerHTML=`co-SNARK UltraHonk performance explorer · data ingested from <span class="mono">${DATA.meta.full_run_dir||''}</span>${(DATA.meta.network_emulation_runs||[]).length?' + network-emulation '+(DATA.meta.network_emulation_runs).map(r=>r.label).join('/'):''} · decision-support tool, not a benchmark of record · measured numbers badged, modelled numbers badged, censored numbers marked.`;
 }

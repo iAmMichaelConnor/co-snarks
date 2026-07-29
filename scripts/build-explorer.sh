@@ -20,7 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RUN=${RUN:-bench-results/2026-07-27-v3.2}
+RUN=${RUN:-bench-results/2026-07-29-v4}
 LOOPBACK=${LOOPBACK:-$RUN/loopback-matrix}
 NETWORK_EMULATION=${NETWORK_EMULATION:-$RUN/network-emulation}
 BATCH_SWEEP=${BATCH_SWEEP:-$RUN/batch-size-sweep/k-sweep.csv}   # a CSV file, not the dir
