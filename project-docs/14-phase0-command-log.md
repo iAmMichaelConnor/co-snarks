@@ -1468,3 +1468,141 @@ round's real MPC proof, so it confirms the co-noir prover changes preserved
 byte-parity with the pinned bb oracle. (The noir circuits, contract, and
 `e2e/run.sh` on-chain flow depend only on the pinned aztec/noir release deps,
 not on the co-noir Rust crates, so they are unaffected by this branch's churn.)
+
+```bash
+cd ~/monty-hall-aztec/e2e && EXPECT_REAL_PROOFS=1 ./run.sh   # PASS: 7 real ClientIVC proofs, ~2m13s
+```
+
+[Corrected 2026-07-29: this section originally said the on-chain `e2e/run.sh`
+was not re-run. It was, and it passed — the "unaffected by the churn" reasoning
+above is still why it was optional, not a claim that it was skipped.]
+
+---
+
+## 30. Bench v4 command surface — setup vs per-proof (2026-07-29)
+
+What changed vs §28: the bench now resolves every prover's pipeline into
+**setup / witness / prove** instead of splitting only the MPC cell into
+pk-gen / prove-proper. Every command below was run in session 24; the new
+sub-phases are all gated on the existing `CO_NOIR_PHASE_TIMINGS=1`.
+
+### Run the matrix (16 circuits, ~4 h)
+
+```bash
+# one self-contained run dir: loopback-matrix/ + network-emulation/ + batch-size-sweep/ + site/
+mkdir -p bench-results/2026-07-29-v4/loopback-matrix
+BENCH_OUT=$PWD/bench-results/2026-07-29-v4/loopback-matrix \
+  nohup bash scripts/bench-0_5-launcher.sh >/dev/null 2>&1 &
+
+# progress (per-circuit estimate-vs-actual + BENCH_DONE sentinel)
+tail -f bench-results/2026-07-29-v4/loopback-matrix/launcher.log
+
+# smoke-test the harness first — ALWAYS do this before a long run
+BENCH_OUT=/tmp/smoke BENCH_CIRCUITS="poseidon_2e16 bb_sha256_compression" \
+  CELL_TIMEOUT=600 bash scripts/bench-0_5.sh
+```
+
+`CELL_TIMEOUT` now defaults to 1800 (was 600 in the script but every v3.x run
+was launched with 1800). `BENCH_CIRCUITS` overrides the circuit list.
+
+### Post-processing (the launcher runs all three)
+
+```bash
+python3 scripts/bench-phase-split.py   <run>/loopback-matrix    # setup/witness/prove, all four provers
+python3 scripts/bench-to-site.py       <run>/loopback-matrix/results.csv <run>/loopback-matrix/site-anchors.json
+python3 scripts/bench-tier-model.py    <run>/loopback-matrix    # tiers.csv (model, not measurement)
+RUN=<run> bash scripts/build-explorer.sh                        # -> <run>/site/explorer.html
+```
+
+`scripts/bench-retro-phase-split.py` is SUPERSEDED (kept only because the v3.x
+dirs' `phase-split.csv` came from it). Do not use it for new runs.
+
+### Reading the new phase timings directly
+
+```bash
+# every sub-phase of one MPC prove cell (3 entries per name = 3 parties, unattributed)
+python3 -c "import json;d=json.load(open('<run>/loopback-matrix/phase-timings/poseidon_2e17_REP3_nonzk_prove_r1.json'));[print(f\"{e['phase']:<32}{e['seconds']:.6f}\") for e in d['entries']]"
+
+# ad-hoc: the setup/per-proof split of a single circuit, without a bench run
+cd co-noir/co-noir/examples
+RAYON_NUM_THREADS=16 CO_NOIR_PHASE_TIMINGS=1 ../../../target/release/plaindriver \
+  --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat \
+  --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat \
+  --input test_vectors/<c>/Prover.toml --witness test_vectors/<c>/target/<c>.gz \
+  --circuit test_vectors/<c>/target/<c>.json --hasher poseidon2 --out-dir /tmp --zk 2>&1 \
+  | grep -E 'read_circuit|read_crs|build_circuit|vkgen/|pkgen/|prove_total|main_total'
+```
+
+Phase-name prefixes and which bucket each belongs to:
+
+| prefix | bucket | what |
+|---|---|---|
+| `setup/acir_parse`, `setup/compute_circuit_size`, `setup/crs_load`, `setup/vk_read` | SETUP | pre-pk-gen work; `compute_circuit_size` is a **second** full structural build |
+| `vkgen/build_structure`, `vkgen/create_key`, `vkgen/commit_precomputed` | SETUP | the VK: structure, then the precomputed-poly commitments |
+| `pkgen/selectors`, `pkgen/permutation_polys`, `pkgen/lookup_table_polys` | SETUP | the circuit-only slice **inside** pk-gen |
+| `pkgen/build_circuit`, `pkgen/lookup_read_counts`, `pkgen/wires_and_copy_cycles`, `pkgen/memory_records` | WITNESS | per-proof MPC over shared values |
+| `pkgen/alloc_polynomials`, `pkgen/alloc_copy_cycles` | (neither) | arena zeroing — amortisable by a long-lived node |
+| `witness/extension`, `witness/deserialize_shares`, `witness/deserialize_input_shares` | WITNESS | |
+| `infra/net_connect` | (neither) | a deployed node holds connections open across proofs |
+| `oink/*`, `sumcheck*`, `pcs*`, `shplemini/*`, `shplonk/*`, `prove_total` | PROVE | prover proper (unchanged from §28) |
+
+### Render-testing the page before publishing
+
+The explorer is data-driven and must survive datasets that lack circuits or
+buckets (a censored cell, or any pre-v4 run). Build it and drive every control
+in jsdom rather than eyeballing it:
+
+```bash
+npm install --no-audit --no-fund jsdom          # dev-only, deliberately not vendored
+JSDOM_PATH=$PWD/node_modules/jsdom/lib/api.js \
+  node scripts/render-check.mjs <run>/site/explorer.html
+```
+
+Run it against BOTH a v4 run dir and a pre-v4 one — the legacy fallback path has
+to keep working.
+
+This caught two real defects in session 24: a hardcoded default circuit
+(`poseidon_2e17`) crashing every chart on any dataset without it, and — before
+that — invalid JSON in `phase-timings/*.json` from three parties' stderr lines
+splicing mid-token.
+
+### New circuits (poseidon 2^12–2^16)
+
+```bash
+cd co-noir/co-noir/examples/test_vectors
+# K permutations -> rows = 1410*K + 2; K chosen to maximally fill each dyadic bucket
+# 2^12:K=2  2^13:K=5  2^14:K=11  2^15:K=23  2^16:K=46  (2^17:92, 2^18:185, 2^19:371, 2^20:743)
+for spec in 12:2 13:5 14:11 15:23 16:46; do
+  n=${spec%%:*}; k=${spec##*:}; d=poseidon_2e$n
+  mkdir -p $d/src
+  sed "s/^name = .*/name = \"$d\"/" poseidon_2e17/Nargo.toml >$d/Nargo.toml
+  cp poseidon_2e17/Prover.toml $d/Prover.toml
+  sed "s/^global K: u32 = .*/global K: u32 = $k;/" poseidon_2e17/src/main.nr >$d/src/main.nr
+  (cd $d && nargo execute)
+done
+# verify each hits its dyadic bucket exactly
+../../../../target/release/co-noir circuit-info --circuit poseidon_2e14/target/poseidon_2e14.json
+```
+
+Do NOT recompile the pre-existing poseidon variants — their artifacts are what
+v3.2 measured, and recompiling would break run-to-run comparability.
+
+### monty-hall UH circuit sizes (asked 2026-07-29, static analysis only)
+
+```bash
+cd ~/monty-hall-aztec/noir_logic
+for c in monty_hall_init monty_hall_open_door monty_hall_finish taceo_commit; do
+  ~/co-snarks/target/release/co-noir circuit-info --circuit $c/target/$c.json; done
+```
+
+| circuit | rows | dyadic | ACIR opcodes | lookup gates |
+|---|---|---|---|---|
+| `monty_hall_init` | 4,178 | 2^13 | 59 | 0 |
+| `monty_hall_open_door` | 5,570 | 2^13 | 142 | 0 |
+| `monty_hall_finish` | 4,357 | 2^13 | 84 | 0 |
+| `taceo_commit` | 171 | 2^8 | 7 | 0 |
+
+All arithmetic + delta_range + poseidon2, **zero lookup gates** — so the sha256
+cost mechanism (secret-index read-counts dominating witness assembly) does not
+arise for them, and `poseidon_2e13` is a good size-proxy. Note `--witness` fails
+on init/open_door's `target/witness.gz`; omit the flag (structure-only stats).

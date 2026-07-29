@@ -4,14 +4,20 @@ Append-only, newest session last. Each entry: date, what was done, decisions,
 open questions, next steps.
 
 **Quick link — benchmark explorer (live site).** Updated to the current
-dataset each time it is republished (same URL). Built from
-`bench-results/2026-07-27-v3.2/` via `scripts/build-explorer.sh` (page template
-= `scripts/explorer.template.html`). Last published 2026-07-28: full v3.2
-dataset (12 circuits loopback + 4 measured network-emulation tiers +
-batch-size-K panels) + the gap-fill pk-gen/prove-proper splits (sha256_2e18
-both modes; sha256_2e19 + recursion_zk non-ZK — ZK cells filling as the
-detached run finishes):
+dataset each time it is republished (same URL). Built from a bench run dir via
+`scripts/build-explorer.sh` (page template = `scripts/explorer.template.html`,
+ingest = `scripts/bench-explorer-data.py` + `scripts/bench-phase-split.py`):
 <https://claude.ai/code/artifact/90d4bf98-8b70-4f9e-814b-5d07b20daefa>
+
+- Last published 2026-07-28: full v3.2 dataset (12 circuits loopback + 4 measured
+  network-emulation tiers + batch-size-K panels) + the gap-fill
+  pk-gen/prove-proper splits.
+- **Published 2026-07-29 (current): the v4 dataset** — 16 circuits (poseidon
+  2^11-2^20 contiguous, bb_sha256_compression, sha256 2^16-2^19, recursion_zk),
+  zero failed or censored cells, re-cut into setup / per-proof buckets for all
+  four provers. Built from `bench-results/2026-07-29-v4/` (the default in
+  `build-explorer.sh`). Distance tiers + K-sweep reused from v3.2 with provenance
+  and their thread-cap difference stated on the page. See session 24 below.
 
 ## Session 1 — 2026-07-08
 
@@ -3574,8 +3580,11 @@ small/single-chunk). Full surface re-run, all green vs the current branch:
   it confirms the co-noir prover changes (witext U1/U2, verifier F1/F2,
   parametrised lookup-batch K) preserved byte-parity with the pinned bb oracle.
 - `contract && aztec test` — 10/10 (incl. `full_game_flow`).
-- `e2e/run.sh` (on-chain) NOT re-run: it depends only on the pinned aztec/noir
-  release deps, not the co-noir Rust crates, so it is unaffected by this churn.
+- `e2e/run.sh` (on-chain) — PASS: **7 real ClientIVC proofs**, tamper fired once,
+  GAME COMPLETE, ~2m13s, clean teardown. [Corrected 2026-07-29: this entry
+  originally said "NOT re-run" on the reasoning that the on-chain flow depends
+  only on the pinned aztec/noir release deps, not the co-noir Rust crates. The
+  reasoning still holds, but the suite WAS run in that session and passed.]
 
 **Command log (ch.14) got §28 + §29.** §28 = a *reference index* of the current
 canonical command surface after session 22 (fast-check.sh flags; co-noir
@@ -3591,3 +3600,217 @@ debris/backup files present; only pre-existing TODO is the upstream `#8970` one
 in `dh.nr`. Left uncommitted per the no-commits-without-ask rule: monty-hall
 `README.md` + `mpc/mpc-node/src/mpc.rs` + `mpc/Cargo.lock` (rayon propagated in
 from the co-noir dep bump); co-snarks `project-docs/14` + PROGRESS (this entry).
+
+---
+
+## Session 24 — 2026-07-29 — bench v4: SETUP vs PER-PROOF, because "pk-gen" was never the precomputable half
+
+Mike's ask, in his words: "there are things that can be precomputed about a
+circuit which are the same for all users of that circuit (which I would
+categorise as 'proving key'), and there are some things that must be computed
+on-the-fly for each attempt at generating a proof... For proving proper I care
+only about the compute effort that absolutely needs to be done on a per-proof
+basis." He had noticed the explorer only offered its "exclude proving-key
+generation" toggle on some charts, and asked whether the benchmark was
+categorising things correctly in the first place.
+
+**It was not. The answer inverted his premise.**
+
+### The audit (ch. 24 §3a follow-up; measured, not reasoned)
+
+The v2/v3 datasets split the MPC prove cell at the binary's own
+`Build proving key took` log line — a *code* boundary being read as a
+*precomputability* boundary. UltraHonk has no reusable per-circuit proving key:
+`ProvingKey` holds the precomputed polynomials **and** the witness polynomials,
+and `generate_proving_key_rep3` = builder-over-shared-witness +
+`create_prover_instance`. The reusable per-circuit artifact is the VK, which the
+bench generated **untimed** (`scripts/bench-0_5.sh`, the `create-vk` call), so
+the MPC path's real setup cost was absent from the dataset entirely.
+
+Added env-gated sub-phase timers and measured (party 0, loopback, non-ZK):
+
+| circuit | pk-gen | of which circuit-only | dominant per-proof term |
+|---|---|---|---|
+| sha256 2^16 | 139.85 s | 31 ms = **0.02%** | `construct_lookup_read_counts` 128.17 s (92%) |
+| bb_sha256_compression | 9.96 s | 6.5 ms = 0.07% | read-counts 8.89 s (89%) |
+| poseidon 2^17 | 0.27 s | 20 ms = 7.5% | builder pass + arena alloc |
+| poseidon 2^20 | 3.10 s | 307 ms = 9.9% | builder 1.86 s, alloc 0.66 s |
+
+So hiding "pk-gen" hid almost entirely **per-proof** cost — worst exactly where
+it mattered most (sha256). The read-counts term is one-hot vectors over *secret*
+table indices: witness-dependent by construction, precomputable by nobody.
+
+Also found: for a *plain* prover the proving-key build is essentially all
+structural. bb logs its own pk build, and running `write_vk` (empty witness) vs
+`prove` (real witness) gives **39 ms vs 37 ms** on bb_sha256_compression —
+within noise. **The witness-dependent assembly cost is an MPC phenomenon, not an
+UltraHonk one.**
+
+And a second, previously invisible term: ACIR parse, CRS load, VK read and a
+**second full structural circuit build** (`compute_circuit_size` builds and
+finalizes the circuit with an empty witness just to size the CRS) all sat
+outside both timers, showing up only as a 6–10% residual of the poseidon cell
+wall — charged to per-proof cost. Now named phases.
+
+### What the site was doing wrong
+
+Only §06 and §07 had the toggle (Mike's observation), but the deeper problems
+were elsewhere and all favoured the baselines:
+
+1. `plaindriver`'s charted number is its whole process, and it always writes a
+   VK — 25–30% of the v3 number was setup (`vkgen/commit_precomputed`).
+2. §01's bb bar was `vkgen + prove` while the REP3 bar excluded `create-vk`:
+   setup charged to bb only.
+3. bb `prove` includes a full self-verification (`_prove` → "Sanity-check the
+   generated proof", ~20 ms); co-noir's prove does not.
+4. §06's copy — "once you have the key, how long to make the proof?" — describes
+   a key nobody can have in advance; and in that mode bb's number still
+   contained bb's own pk build, swinging the sha256 2^17 ratio between 8.5× and
+   250× on a switch with no stated meaning.
+
+### v4: three buckets, cut identically for all four provers
+
+SETUP (circuit-only, precomputable once) / WITNESS (per-proof pre-prover) /
+PROVE (prover proper), with ALLOC (arena zeroing — amortisable by a long-lived
+node) and SELFVERIFY (baselines checking their own proof) reported but in
+neither bucket, so neither can flatter the comparison.
+
+**Headline, measured on the contiguous poseidon sweep (ZK, loopback):** setup is
+7.1%→27.3% of bb and 16.2%→29.3% of plaindriver from 2^11 to 2^18, but only
+2.5%→4.4% of REP3 and ~1.5% of Shamir. **Precomputing setup therefore RAISES the
+privacy multiplier**: poseidon 2^18 goes 8.7× (setup inline) → 11.4× (setup
+precomputed). The old toggle moved it the other way.
+
+### Code (all uncommitted, per the standing rule)
+
+- **New circuits**: poseidon 2^12–2^16 (`K = 2/5/11/23/46` permutations;
+  `rows = 1410·K + 2`, each maximally filling its dyadic bucket, verified with
+  `circuit-info`). The poseidon sweep is now contiguous 2^11–2^20. Existing
+  variants deliberately NOT recompiled (would break comparability with v3.2).
+- **Instrumentation** (env-gated on the existing `CO_NOIR_PHASE_TIMINGS`, stderr
+  only, zero effect on proof bytes): `pkgen/*` sub-phases in
+  `co-builder/src/keys/proving_key.rs`; `vkgen/build_structure` +
+  `vkgen/create_key` in `generate_vk_barretenberg`; `vkgen/commit_precomputed`
+  separating the VK MSMs from `create_prover_instance`; `setup/*`, `infra/*`,
+  `witness/*` around the untimed regions of `build-and-generate-proof` and
+  `generate-witness`.
+- **Emitter moved to `co-noir-common::phase_timing`** (co-builder depends on
+  co-ultrahonk, so neither could host it for the other) and rewritten to do
+  **one atomic `write_all` per line**. This fixed a real corruption: three
+  parties appending to one log spliced mid-token
+  (`[phase-timing] 0.pkgen/alloc_copy_cycles000: 2180.s`), producing INVALID
+  JSON that would have silently failed downstream. The extractor now also
+  validates each line and counts `malformed_lines`.
+- **Harness v4** (`scripts/bench-0_5.sh`): timed `create-vk` setup cell
+  (`protocol=co-noir phase=vkgen`); `CO_NOIR_PHASE_TIMINGS=1` on plaindriver and
+  witext cells with per-cell extraction; `CELL_TIMEOUT` default 600→1800 (what
+  the v3.x runs were actually launched with); sha256 2^20 dropped — it only ever
+  produced censored rows, ~2 h of timeout per run for no data. **Fixed a
+  latent bug: the manifest heredoc is unquoted, so v2/v3 were *executing* the
+  backticked field names in the prose** and blanking parts of `manifest.json`.
+- **`scripts/bench-phase-split.py`** (supersedes `bench-retro-phase-split.py`,
+  which keeps a header note since the v3.x dirs' data came from it): resolves all
+  four provers. bb needed no new instrumentation — its pk-build line plus the
+  empty-witness `write_vk` run give its structural/witness split for free.
+- **Site** (`scripts/explorer.template.html`): one **global cost-basis switch**
+  honoured by every chart (replacing the per-chart toggle), a new §"What counts
+  as proving time" explaining the two categories, pk-gen renamed to **witness
+  assembly** throughout, matrix gains a `setup (once)` column, and the stale copy
+  in §01/§03/§06/§07 + caveats rewritten. Verified by rendering the built page in
+  jsdom and driving every control, against **both** v4 and pre-v4 data — the
+  legacy fallback has to keep working, and that test caught a genuine crash on
+  any dataset missing the hardcoded default circuit (`poseidon_2e17`).
+
+### L9 — a new lever the instrumentation found
+
+`run_build_and_generate_proof` calls `compute_circuit_size`, which builds and
+finalizes the ENTIRE circuit structure with an empty witness purely to size the
+CRS load — then `generate_proving_key_rep3` immediately repeats that structural
+work. Measured cost of the duplicate pass: **0.890 s at poseidon 2^20** (29.9% of
+pk-gen), 0.102 s at 2^17 (39.7%), 0.204 s at sha256 2^16 (0.1% there, since its
+pk-gen is 141 s). ~1–1.5% of the poseidon pipeline; pure duplication.
+
+Behind it, an honesty point now stated on the site: the "per proof" basis is a
+statement about the protocol's intrinsic cost, NOT a switch that exists today. Of
+the setup bucket only the **VK** is genuinely reused (written by `create-vk`,
+passed via `--vk`); the structural build, precomputed polynomials and CRS load are
+redone every proof because co-noir cannot persist a finalized circuit and reload
+it. (`build-proving-key` persists a proving key, but that holds the witness
+polynomials — per-proof by construction.) Recorded as ch. 24 §4b: L9a (reuse the
+size computation) and L9b (persist the circuit setup), with the security review
+notes. Ceiling is ~1–1.5%, so it must not displace the read-counts work where the
+sha256 orders of magnitude live.
+
+### Run
+
+`bench-results/2026-07-29-v4/` — one self-contained dir per Mike's ask, with the
+analysis page in `site/`. netem tiers + K-sweep are **reused verbatim from v3.2**
+with `REUSED-FROM.txt` provenance in each: setup is single-party zero-comms work
+so it cannot affect a tier's latency/bandwidth term, and K batches per-proof
+read-counts either way.
+
+**DONE 10:24–14:12 UTC (3 h 48 min): 16 circuits, 692 rows, ZERO failed and ZERO
+censored cells.** Quality gates all green: all 345 resolved rows reconcile with
+their measured cell wall-clocks (tolerance 5%/50 ms — a gate added to
+`bench-phase-split.py` to catch double-counted or dropped buckets in our OWN
+attribution), 278 phase-timing JSONs valid with 0 malformed lines. Published to
+the usual artifact URL.
+
+**Final headline — per-proof vs setup-inline privacy multiplier:**
+
+| circuit | REP3 per-proof | REP3 setup | bb per-proof | bb setup | ratio per-proof | ratio incl. setup |
+|---|---|---|---|---|---|---|
+| poseidon 2^20 | 65.86 s | 9.89 s | 4.403 s | 7.064 s | **15.0×** | 6.6× |
+| sha256 2^19 | 1286.03 s | 4.54 s | 1.627 s | 2.989 s | **790×** | 280× |
+| bb_sha256_compression | 13.77 s | 0.48 s | 0.253 s | 0.132 s | **54.4×** | 37.0× |
+| recursion_zk | 77.82 s | 7.42 s | 2.152 s | 3.585 s | **36.2×** | 14.9× |
+
+Note bb's setup EXCEEDS its own per-proof time on the big poseidon circuits
+(2^20: 7.06 s vs 4.40 s) — more than half a plain prover's wall-clock is
+precomputable there. That is the whole reason the multiplier moves so far.
+
+**The new poseidon sizes paid off immediately:** per-proof cost is exactly linear
+in rows from 2^15 up (successive ratios 2.02/1.90/2.02/1.97/2.02) and per-row cost
+plateaus at **~62 µs/row**, rising to 141 µs/row at 2^11 — small circuits are
+fixed-cost dominated, so "cost per gate" is a bad model below ~2^15. v3.2 jumped
+2^11 → 2^17 and could not show this.
+
+**Corrections recorded this session:** `bb_sha256_compression` is dyadic **2^16**,
+not 2^15 as I stated mid-session — one compression is 6,778 gate rows, but sha's
+12 lookup tables add 33,944 table rows, so no sha256 circuit can be smaller than
+2^16 (which is why that sweep starts there; `nominal_rows` in the harness had
+32768, an ETA-only input, now fixed). Nothing downstream depended on the slip
+since the setup slice was measured directly. Also: the reused v3.2 tiers ran with
+`RAYON_NUM_THREADS=51` vs v4's 16, and a different tree revision — stated on the
+page and in REUSED-FROM.txt rather than assumed away. v4 came out 5-9% FASTER on
+fewer threads, consistent with the MPC path being locally serial (~260% CPU of a
+1600% budget).
+
+**Natural experiment now in the dataset:** at dyadic 2^16 with identical table
+counts, poseidon / 1-compression sha / 15-compression sha differ only in lookup
+GATES (0 / 2,896 / 43,440) and their witness assembly spans 0.098 s → 10.2 s →
+141.8 s (1,450×) while the prove step barely moves (4.11 → 3.35 → 3.58 s). Lookup
+gates drive per-proof MPC cost; size and table rows do not.
+
+**Process note (Mike's catch):** I launched the run while still writing the
+ingest; he stopped it. Killing it 10 min in cost nothing and was right — writing
+the ingest is exactly when the missing `setup/*` timers surfaced, and finding
+that at hour 3 would have wasted the whole run. Measurement code must be frozen
+before a long run; presentation code can change during it. Never `cargo build`
+while a run is live either, or later cells use a different binary than earlier
+ones. Recorded in session memory.
+
+---
+
+## 🔗 Public forks (personal, 2026-07-29)
+
+Mike asked to publish both work branches as public forks under his own GitHub
+(`iAmMichaelConnor`) — an explicit, one-time exception to the confidentiality
+rule above (see PLAN.md and session memory), pushed with everything included
+(docs not stripped). Not a change to the standing rule for future work.
+
+- co-snarks branch: <https://github.com/iAmMichaelConnor/co-snarks/tree/mc/update-co-noir>
+- monty-hall-aztec branch: <https://github.com/iAmMichaelConnor/monty-hall-aztec/tree/mc/modernize>
+- project-docs dir: <https://github.com/iAmMichaelConnor/co-snarks/tree/mc/update-co-noir/project-docs>
+
+---

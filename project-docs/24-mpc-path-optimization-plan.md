@@ -1045,3 +1045,68 @@ What the field knows, filtered by our parity constraint:
 - ch. 13 gains the §5 fences once implemented (T2–T4 specs land there as
   test-plan items when built).
 - PLAN.md Phase 6 tracks status; this chapter is the HOW/WHY record.
+
+---
+
+## §4b. L9 — stop rebuilding the circuit structure on every proof (found by bench v4, 2026-07-29)
+
+**Status: OPEN, unimplemented. Discovered by the v4 setup/per-proof
+instrumentation, not by code reading.**
+
+`run_build_and_generate_proof` calls `co_noir::compute_circuit_size` before the
+timed phases, which builds *and finalizes the whole circuit structure* with an
+empty witness for the sole purpose of learning how many CRS points to load. The
+structural work is then **repeated immediately** inside
+`generate_proving_key_rep3` → `create_circuit`. Measured cost of the redundant
+pass alone (party median, non-ZK, loopback, v4 run):
+
+| circuit | `setup/compute_circuit_size` | pk-gen | share of pk-gen |
+|---|---|---|---|
+| poseidon 2^20 | 0.890 s | 2.977 s | 29.9% |
+| poseidon 2^19 | 0.431 s | 1.260 s | 34.2% |
+| poseidon 2^17 | 0.102 s | 0.257 s | 39.7% |
+| poseidon 2^12 | 0.005 s | 0.008 s | 63.3% |
+| sha256 2^16 | 0.204 s | 140.975 s | 0.1% |
+| sha256 2^17 | 0.320 s | 296.519 s | 0.1% |
+
+As a share of the whole per-proof pipeline it is ~1–1.5% (poseidon) and ~0.1%
+(sha256) — small, but it is *pure duplication*, it is the single largest item in
+the setup bucket, and every party pays it on every proof.
+
+**The bigger point behind it.** The v4 dataset reports a "per proof" cost basis
+in which circuit setup is precomputed. That basis is honest about the protocol's
+intrinsic cost, but **co-noir cannot currently realise it**: of the setup bucket,
+only the VK is genuinely reused (written by `create-vk`, passed in via `--vk`).
+There is no way to persist a finalized circuit + its precomputed polynomials and
+reload them, so the structural build, the selector / sigma-id / lookup-table
+polynomials and the CRS load are redone for every proof. (`build-proving-key`
+does persist a proving key, but that object holds the witness polynomials, so it
+is per-proof by construction.) The site says so explicitly rather than implying a
+switch that does not exist.
+
+**Two levers, in increasing order of work:**
+
+1. **L9a — reuse the size computation.** Build the structure once, keep the
+   builder, take `circuit_size` from it and hand the same builder to proving-key
+   generation. Removes the duplicate pass outright. Parity-preserving by
+   construction (identical arithmetic, one fewer execution). Small, local change
+   in `run_build_and_generate_proof` + `generate_proving_key_*`, whose signatures
+   currently take a constraint system rather than a finalized builder.
+2. **L9b — persist the circuit setup.** A `create-setup` command writing the
+   finalized structure + precomputed polynomials (the same object `create-vk`
+   already commits to), and a `--setup` flag on the prove path that loads it
+   instead of rebuilding. This is what makes the per-proof cost basis real, and
+   it is the shape a deployed MPC node wants anyway: hold the circuit's
+   precomputable half in memory across proofs. Note the ceiling is small —
+   ~1–1.5% of the pipeline — so this is a *correctness-of-story* item more than a
+   performance one. Do not let it displace the read-counts work (L0/L8), which is
+   where the sha256 orders of magnitude live.
+
+**Security review (per §4a):** both are parity-preserving refactors of public,
+witness-independent computation — no shared values are touched, no rounds are
+added or removed, and the resulting polynomials are bit-identical by
+construction. L9b additionally introduces a *deserialized* setup artifact, which
+must be treated as untrusted input at the parse boundary (same rail as the R1 fix
+for transcript/VK loaders: reject non-canonical encodings), and it must be bound
+to the circuit it came from — the VK hash is the natural binding, and a mismatch
+must be a hard error, never a silent rebuild.
