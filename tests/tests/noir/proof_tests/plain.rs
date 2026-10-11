@@ -4,6 +4,7 @@ use ark_bn254::Bn254;
 use co_acvm::PlainAcvmSolver;
 use co_builder::prelude::constraint_system_from_reader;
 use co_builder::prelude::HonkRecursion;
+use co_builder::prelude::RecursionInputVisibility;
 use co_builder::prelude::UltraCircuitBuilder;
 use co_noir::UltraHonk;
 use co_noir_common::crs::parse::CrsParser;
@@ -36,13 +37,14 @@ fn plain_test<H: TranscriptHasher<TranscriptFieldType>>(
     } else {
         ProverCrs::default()
     };
-    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
         &constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         &recursion_crs,
         &mut driver,
+        RecursionInputVisibility::RevealToParticipants,
     )
     .unwrap();
     let crs_size = builder.compute_dyadic_size();
@@ -105,13 +107,14 @@ fn vk_kat_test(
     } else {
         ProverCrs::default()
     };
-    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
         &constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         &recursion_crs,
         &mut driver,
+        RecursionInputVisibility::RevealToParticipants,
     )
     .unwrap();
     let crs_size = builder.compute_dyadic_size();
@@ -211,15 +214,17 @@ fn poseidon_proof_bytes_thread_count_invariance() {
         } else {
             ProverCrs::default()
         };
-        let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
-            &constraint_system,
-            0,
-            witness,
-            HonkRecursion::UltraHonk,
-            &recursion_crs,
-            &mut driver,
-        )
-        .unwrap();
+        let builder =
+            UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
+                &constraint_system,
+                0,
+                witness,
+                HonkRecursion::UltraHonk,
+                &recursion_crs,
+                &mut driver,
+                RecursionInputVisibility::RevealToParticipants,
+            )
+            .unwrap();
         let crs_size = builder.compute_dyadic_size();
         let crs = CrsParser::<Bn254G1>::get_crs::<Bn254>(
             CRS_PATH_G1,

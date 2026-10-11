@@ -166,6 +166,21 @@ impl<C: CurveGroup> UltraCircuitBuilder<C> {
     }
 }
 
+/// Visibility policy for inputs consumed by the recursive verifier during MPC building.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecursionInputVisibility {
+    /// Keep recursive inputs private and blind the final public pairing accumulator.
+    /// Supported by Plain and BN254 REP3; other drivers reject this profile.
+    /// This adds constraints, so key generation and proving must select the same profile.
+    /// Use a ZK outer proof to hide the recursive witness from proof observers.
+    #[default]
+    KeepSecret,
+    /// Reveal the inner proof, its public inputs, verification key, key hash and
+    /// witness predicate to every MPC participant, even if those witnesses are
+    /// also used elsewhere in the circuit. All parties must opt in.
+    RevealToParticipants,
+}
+
 pub struct GenericUltraCircuitBuilder<
     P: CurveGroup,
     T: NoirWitnessExtensionProtocol<P::ScalarField>,
@@ -200,6 +215,9 @@ pub struct GenericUltraCircuitBuilder<
     // Stores gate index where Read/Write type is shared
     pub memory_records_shared: BTreeMap<u32, T::AcvmType>, // order does not matter
     pub is_write_vk_mode: bool,
+    pub(crate) recursion_input_visibility: RecursionInputVisibility,
+    /// Only these final blinded accumulator witnesses may be opened by MPC key generation.
+    pub(crate) recursion_public_output_indices: Vec<u32>,
 }
 
 // This workaround is required due to mutability issues
@@ -4238,6 +4256,8 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             memory_records_shared: BTreeMap::new(),
             current_tag: 0,
             is_write_vk_mode: true,
+            recursion_input_visibility: RecursionInputVisibility::KeepSecret,
+            recursion_public_output_indices: Vec::new(),
         }
     }
 
@@ -4251,10 +4271,33 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
     pub fn create_circuit(
         constraint_system: &AcirFormat<P::ScalarField>,
         size_hint: usize,
+        witness: Vec<T::AcvmType>,
+        honk_recursion: HonkRecursion, // 1 for ultrahonk
+        crs: &ProverCrs<P>, // We need the CRS because in recursive verification, we need to generate a placeholder proof
+        driver: &mut T,
+    ) -> eyre::Result<Self> {
+        Self::create_circuit_with_recursion_input_visibility(
+            constraint_system,
+            size_hint,
+            witness,
+            honk_recursion,
+            crs,
+            driver,
+            RecursionInputVisibility::KeepSecret,
+        )
+    }
+
+    /// Build a circuit with an explicit recursive-input visibility policy.
+    /// KeepSecret adds accumulator-blinding constraints; key generation and proving
+    /// must use the same policy. The inner and outer proof flavors are independent.
+    pub fn create_circuit_with_recursion_input_visibility(
+        constraint_system: &AcirFormat<P::ScalarField>,
+        size_hint: usize,
         mut witness: Vec<T::AcvmType>,
         honk_recursion: HonkRecursion, // 1 for ultrahonk
         crs: &ProverCrs<P>, // We need the CRS because in recursive verification, we need to generate a placeholder proof
         driver: &mut T,
+        recursion_input_visibility: RecursionInputVisibility,
     ) -> eyre::Result<Self> {
         tracing::trace!("Builder create circuit");
 
@@ -4281,6 +4324,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             constraint_system.public_inputs.to_owned(),
             is_write_vk_mode,
         );
+        builder.recursion_input_visibility = recursion_input_visibility;
         let metadata = ProgramMetadata {
             honk_recursion,
             size_hint,
@@ -4310,6 +4354,9 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             constraint_system.public_inputs.to_owned(),
             true,
         );
+        // This legacy inspection API uses the canonical BB circuit profile.
+        // Private recursion sizing requires the real CRS and explicit profile.
+        builder.recursion_input_visibility = RecursionInputVisibility::RevealToParticipants;
         let metadata: ProgramMetadata = ProgramMetadata {
             honk_recursion,
             size_hint,
@@ -4533,7 +4580,20 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
         // Process the result of adding recursion constraints and propagate the public inputs as needed.
         if has_pairing_points {
-            honk_output.set_public(self, driver)?;
+            let private_profile =
+                self.recursion_input_visibility == RecursionInputVisibility::KeepSecret;
+            if private_profile {
+                honk_output.blind_for_private_recursion(crs, self, driver)?;
+            }
+            let start = honk_output.set_public(self, driver)?;
+            if private_profile {
+                self.recursion_public_output_indices = self.public_inputs[start..].to_vec();
+                eyre::ensure!(
+                    self.recursion_public_output_indices.len()
+                        == co_noir_common::constants::PAIRING_POINT_ACCUMULATOR_SIZE as usize,
+                    "Invalid final accumulator output count"
+                );
+            }
         } else {
             self.add_default_to_public_inputs();
         }

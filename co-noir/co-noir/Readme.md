@@ -116,6 +116,41 @@ The corresponding Barretenberg command (from `barretenberg/cpp/build/bin`) is:
 where poseidon.gz is the witness file created by Noir (which is equivalent to a non-secret-shared variant of `poseidon.gz.shared`). The generated proof key is the same, regardless of using Co-Noir or Barretenberg.
 Note: Barretenberg does not require the file for storing the CRS, since Barretenberg automatically downloads it if it is not present.
 
+#### Recursive input visibility
+
+`build-proving-key` and `build-and-generate-proof` keep shared recursive
+inputs secret by default. If the circuit needs a recursive operation whose
+private implementation is unavailable, proving-key construction returns an
+error before opening those inputs.
+
+Private recursive witness construction supports BN254 REP3 and plain execution;
+Shamir rejects this profile. The private profile blinds the final pairing
+accumulator and requires a zero-knowledge outer proof (`--zk`). Predictable
+seeded masking is rejected for private-recursion proving keys.
+
+The added blinding constraints produce a different verification key from the
+canonical Barretenberg circuit. Key generation and proving must select the same
+profile and CRS. Proofs retain the v6 format and verify using the key for their
+profile. Saved co-proving keys carry mandatory privacy metadata; older saved
+keys must be regenerated.
+
+For a computation where every participating prover may learn the recursive
+inputs, explicitly pass `--reveal-recursion-inputs`. This permits disclosure of
+the **inner proof, its public inputs, verification key, key hash, and predicate**
+to the MPC participants. It does not permit disclosure of unrelated witness
+values. All participants should select the same setting. The outer proof's
+`--zk` flag does not grant this permission and does not prevent participants
+from seeing inputs opened during witness extension.
+
+The equivalent configuration setting is `reveal_recursion_inputs = true`
+(or `CONOIR_REVEAL_RECURSION_INPUTS=true`). The default is false;
+`--reveal-recursion-inputs=false` overrides an opt-in from configuration.
+The `generate-proof` command operates on an already constructed proving key and
+does not perform this recursive-input opening or accept the disclosure flag.
+The standing recursive parity fixture opts in explicitly; this checks proof
+compatibility with public-to-participants recursive inputs, not private
+recursive witness extension.
+
 #### CreateVK
 
 To verify the created proof, we first need to create a verification key. This can be done with:
