@@ -236,7 +236,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             multivariate_d as usize,
         );
 
-        let mut multivariate_challenge = Vec::with_capacity(multivariate_d as usize);
+        let mut multivariate_challenge = Vec::with_capacity(virtual_log_n);
         let round_idx = 0;
 
         tracing::trace!("Sumcheck prove round {}", round_idx);
@@ -311,21 +311,18 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         }
         tracing::trace!("Completed {multivariate_d} rounds of sumcheck");
 
-        // Virtual rounds: unified path for ZK and non-ZK. The row-disabling polynomial 1-L is
-        // circuit-size independent, so it keeps updating through virtual rounds, and Libra
-        // univariates are generated for all `virtual_log_n` rounds (not just the real `multivariate_d`),
-        // so `compute_libra_round_univariate` and `update_zk_sumcheck_data` work here too.
+        // Virtual rounds: the prover's multilinear polynomials in `multivariate_d` variables are
+        // extended by zero to polynomials in `virtual_log_n` variables. The round univariates are
+        // computed honestly: relation contribution at the single non-zero edge, scaled by the
+        // row-disabling factor (1 - L), plus the Libra univariate of the round. The row-disabling
+        // polynomial is circuit-size independent, so it keeps being updated through virtual rounds,
+        // and the Libra data covers all `virtual_log_n` rounds.
         let mut virtual_gate_separator = GateSeparatorPolynomial::construct_virtual_separator(
             &self.memory.gate_challenges,
             &multivariate_challenge,
         );
-        // Tracks the zero-extension scaling factor prod(1 - u_k) applied to `partially_evaluated_polys`
-        // during virtual rounds below, so it can be applied identically to the masking polynomial's
-        // evaluation (which is otherwise computed directly from the real challenges only, and would
-        // then be inconsistent with the other, zero-extended claimed evaluations).
-        let mut zero_extension_factor = P::ScalarField::one();
         for idx in multivariate_d as usize..virtual_log_n {
-            let virtual_round_univariate = SumcheckProverRound::compute_virtual_contribution_zk::<P>(
+            let mut round_univariate = SumcheckProverRound::compute_virtual_contribution_zk::<P>(
                 &partially_evaluated_polys,
                 &self.memory.relation_parameters,
                 &virtual_gate_separator,
@@ -334,7 +331,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             );
             let libra_round_univariate =
                 SumcheckProverRound::compute_libra_round_univariate(zk_sumcheck_data, idx);
-            let round_univariate = virtual_round_univariate + libra_round_univariate;
+            round_univariate += libra_round_univariate;
 
             transcript.send_fr_iter_to_verifier::<P, _>(
                 format!("Sumcheck:univariate_{idx}"),
@@ -343,7 +340,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             let round_challenge = transcript.get_challenge::<P>(format!("Sumcheck:u_{idx}"));
             multivariate_challenge.push(round_challenge);
 
-            zero_extension_factor *= P::ScalarField::one() - round_challenge;
+            // Fold the partially evaluated polynomials for zero-extension: PE[0] *= (1 - u_k)
             for poly in partially_evaluated_polys.iter_mut() {
                 if !poly.is_empty() {
                     poly[0] *= P::ScalarField::one() - round_challenge;
@@ -362,16 +359,14 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             .gemini_masking_poly
             .as_ref()
             .expect("Gemini masking polynomial must be prepared in Oink")
-            .evaluate_mle(&multivariate_challenge[0..multivariate_d as usize])
-            * zero_extension_factor;
+            .evaluate_mle(&multivariate_challenge);
         Self::add_evals_to_transcript(
             transcript,
             &multivariate_evaluations,
             Some(gemini_masking_evaluation),
         );
 
-        // The evaluations of Libra uninvariates at \f$ g_0(u_0), \ldots, g_{d-1} (u_{d-1}) \f$ are added to the
-        // transcript.
+        // The claimed Libra evaluation covers all rounds (real + virtual).
         let mut libra_evaluation = zk_sumcheck_data.constant_term;
         for libra_eval in zk_sumcheck_data.libra_evaluations.iter() {
             libra_evaluation += libra_eval;
