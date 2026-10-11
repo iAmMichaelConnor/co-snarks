@@ -38,6 +38,7 @@ use co_noir_common::{
 };
 use mpc_core::MpcState as _;
 use mpc_net::Network;
+use rayon::prelude::*;
 use std::marker::PhantomData;
 use ultrahonk::NUM_ALPHAS;
 
@@ -270,7 +271,10 @@ impl<
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
 
-        // Compute local lookup terms in row order.
+        let timer = std::time::Instant::now();
+        // Every row is a pure, local (communication-free) computation for all drivers, so the
+        // rows are computed in parallel and collected in row order; the per-row values are
+        // exactly the ones the serial loop computed.
         let id = self.state.id();
         let challenges = &self.memory.challenges;
         let polynomials = &proving_key.polynomials;
@@ -278,6 +282,7 @@ impl<
         let lookup_read_tags = proving_key.polynomials.witness.lookup_read_tags();
         let (lookup_inverses, q_lookup_mul_read_tag): (Vec<_>, Vec<_>) =
             (0..proving_key.circuit_size as usize)
+                .into_par_iter()
                 .map(|i| {
                     // Skip the disabled head region: for ZK, the read tags there hold masking
                     // randomness, which must not contribute to the inverses (the head rows of
@@ -304,7 +309,7 @@ impl<
                     (T::mul_with_public(write_term, read_term), q_mul_read_tag)
                 })
                 .unzip();
-
+        crate::phase_timing("oink/logderiv/row_loop", timer);
         self.memory.lookup_inverses = Polynomial::new(lookup_inverses);
         // Invert before applying the secret activity bit. Inversion opens a randomly
         // scaled denominator and therefore reveals its zero positions. Including
@@ -314,20 +319,22 @@ impl<
         // Outside the publicly disabled head, d is a product of terms containing
         // gamma, so a zero denominator is a challenge collision rather than a
         // deterministic encoding of the read tag.
-
+        let timer = std::time::Instant::now();
         CoUtils::batch_invert_leaking_zeros::<T, C, N>(
             self.memory.lookup_inverses.as_mut(),
             self.net,
             self.state,
         )?;
+        crate::phase_timing("oink/logderiv/batch_invert", timer);
 
+        let timer = std::time::Instant::now();
         self.memory.lookup_inverses = Polynomial::new(T::mul_many(
             self.memory.lookup_inverses.as_ref(),
             &q_lookup_mul_read_tag,
             self.net,
             self.state,
         )?);
-
+        crate::phase_timing("oink/logderiv/mul_many", timer);
         Ok(())
     }
 
@@ -379,38 +386,50 @@ impl<
         num / denom
     }
 
+    /// Computes the (local, communication-free) linear terms
+    /// `(shared1[i] + beta*pub1[i] + gamma, shared2[i] + beta*pub2[i] + gamma)`
+    /// of one grand-product numerator/denominator factor pair and appends them
+    /// to `lhs`/`rhs`. The element-wise products `lhs[i] * rhs[i]` of several
+    /// such pairs are then computed by the caller in a single batched
+    /// `mul_many` round.
     #[expect(clippy::too_many_arguments)]
-    fn batched_grand_product_num_denom(
-        net: &N,
-        state: &mut T::State,
+    fn grand_product_num_denom_operands(
+        state: &T::State,
         shared1: &Polynomial<T::ArithmeticShare>,
         shared2: &Polynomial<T::ArithmeticShare>,
         pub1: &Polynomial<C::ScalarField>,
         pub2: &Polynomial<C::ScalarField>,
         beta: &C::ScalarField,
         gamma: &C::ScalarField,
-        output_len: usize,
         start_idx: usize,
-    ) -> HonkProofResult<Vec<T::ArithmeticShare>> {
-        debug_assert!(shared1.len() >= output_len);
-        debug_assert!(shared2.len() >= output_len);
-        debug_assert!(pub1.len() >= output_len);
-        debug_assert!(pub2.len() >= output_len);
+        output_len: usize,
+        lhs: &mut Vec<T::ArithmeticShare>,
+        rhs: &mut Vec<T::ArithmeticShare>,
+    ) {
+        debug_assert!(shared1.len() >= start_idx + output_len);
+        debug_assert!(shared2.len() >= start_idx + output_len);
+        debug_assert!(pub1.len() >= start_idx + output_len);
+        debug_assert!(pub2.len() >= start_idx + output_len);
 
         // We drop the last element since it is not needed for the grand product
-        let mut mul1 = Vec::with_capacity(output_len);
-        let mut mul2 = Vec::with_capacity(output_len);
+        lhs.reserve(output_len);
+        rhs.reserve(output_len);
 
-        for i in 0..output_len {
-            let idx = i + start_idx;
-            let id = state.id();
-            let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
-            let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
-            mul1.push(m1);
-            mul2.push(m2);
-        }
-
-        Ok(T::mul_many(&mul1, &mul2, net, state)?)
+        // Every row is a pure, local (communication-free) computation for all drivers, so the
+        // rows are computed in parallel; the indexed unzip collects them in row order, so
+        // lhs/rhs receive exactly the values (and order) the serial loop pushed.
+        let id = state.id();
+        let (m1s, m2s): (Vec<_>, Vec<_>) = (0..output_len)
+            .into_par_iter()
+            .map(|i| {
+                let idx = i + start_idx;
+                let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
+                let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
+                (m1, m2)
+            })
+            .unzip();
+        lhs.extend(m1s);
+        rhs.extend(m2s);
     }
 
     fn compute_grand_product(&mut self, proving_key: &ProvingKey<T, C>) -> HonkProofResult<()> {
@@ -422,16 +441,26 @@ impl<
         // the permutation grand product does not need to be computed beyond the index of the last active wire
         let domain_size = proving_key.final_active_wire_idx + 1;
 
+        // The grand product starts after the disabled/reserved head rows (where lagrange_first
+        // lives), preserving the ZK masking values at rows {1, 2, 3}.
         let gp_start = TRACE_OFFSET;
-        let active_domain_size = domain_size - gp_start;
+        let active_size = domain_size - gp_start;
 
         // In Barretenberg circuit size is taken from the q_c polynomial
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
 
-        // TACEO TODO could batch those 4 as well
-        let denom1 = Self::batched_grand_product_num_denom(
-            self.net,
+        // The four num/denom factor pairs (denom1, denom2, num1, num2) are
+        // independent of each other, so their element-wise multiplications are
+        // batched into a single mul_many round: the operands are concatenated,
+        // multiplied in one round and the result is split up again. This only
+        // changes the communication schedule (4 rounds -> 1); the computed
+        // values are identical.
+        let out_len = active_size - 1;
+        let timer = std::time::Instant::now();
+        let mut lhs = Vec::with_capacity(4 * out_len);
+        let mut rhs = Vec::with_capacity(4 * out_len);
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_l(),
             proving_key.polynomials.witness.w_r(),
@@ -439,11 +468,12 @@ impl<
             proving_key.polynomials.precomputed.sigma_2(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
             gp_start,
-        )?;
-        let denom2 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_o(),
             &self.memory.w_4,
@@ -451,11 +481,12 @@ impl<
             proving_key.polynomials.precomputed.sigma_4(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
             gp_start,
-        )?;
-        let num1 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_l(),
             proving_key.polynomials.witness.w_r(),
@@ -463,11 +494,12 @@ impl<
             proving_key.polynomials.precomputed.id_2(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
             gp_start,
-        )?;
-        let num2 = Self::batched_grand_product_num_denom(
-            self.net,
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
+        Self::grand_product_num_denom_operands(
             self.state,
             proving_key.polynomials.witness.w_o(),
             &self.memory.w_4,
@@ -475,37 +507,80 @@ impl<
             proving_key.polynomials.precomputed.id_4(),
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
-            active_domain_size - 1,
             gp_start,
-        )?;
+            out_len,
+            &mut lhs,
+            &mut rhs,
+        );
 
-        // TACEO TODO could batch here as well
-        let numerator = T::mul_many(&num1, &num2, self.net, self.state)?;
-        let denominator = T::mul_many(&denom1, &denom2, self.net, self.state)?;
+        crate::phase_timing("oink/gp/operands", timer);
+
+        let timer = std::time::Instant::now();
+        let mut products = T::mul_many(&lhs, &rhs, self.net, self.state)?;
+        crate::phase_timing("oink/gp/mul_many_pairs", timer);
+        debug_assert_eq!(products.len(), 4 * out_len);
+        let num2 = products.split_off(3 * out_len);
+        let num1 = products.split_off(2 * out_len);
+        let denom2 = products.split_off(out_len);
+        let denom1 = products;
+
+        // numerator = num1 * num2 and denominator = denom1 * denom2 are
+        // independent, so they are batched into a single mul_many round as well
+        // (2 rounds -> 1).
+        let timer = std::time::Instant::now();
+        let mut lhs = num1;
+        lhs.extend(denom1);
+        let mut rhs = num2;
+        rhs.extend(denom2);
+        let mut products = T::mul_many(&lhs, &rhs, self.net, self.state)?;
+        let denominator = products.split_off(out_len);
+        let numerator = products;
+        crate::phase_timing("oink/gp/mul_many_numden", timer);
 
         // Step (2)
         // Compute the accumulating product of the numerator and denominator terms.
 
-        // TACEO TODO could batch here as well
-        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds
-        let numerator = CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?;
-        let mut denominator =
-            CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &denominator)?;
+        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds.
+        // The two prefix products are independent, so they share the rounds of a
+        // single batched invocation instead of running sequentially.
+        let timer = std::time::Instant::now();
+        let mut prefix_products = CoUtils::array_prod_inner_mul_many::<T, C, N>(
+            self.net,
+            self.state,
+            &[numerator, denominator],
+        )?
+        .into_iter();
+        let numerator = prefix_products
+            .next()
+            .expect("two prefix products were requested");
+        let mut denominator = prefix_products
+            .next()
+            .expect("two prefix products were requested");
+        crate::phase_timing("oink/gp/array_prod", timer);
 
         // invert denominator
+        let timer = std::time::Instant::now();
         CoUtils::batch_invert::<T, C, N>(&mut denominator, self.net, self.state)?;
+        crate::phase_timing("oink/gp/batch_invert", timer);
 
         // Step (3) Compute z_perm[i] = numerator[i] / denominator[i]
+        let timer = std::time::Instant::now();
         let mul = T::mul_many(&numerator, &denominator, self.net, self.state)?;
+        crate::phase_timing("oink/gp/final_mul", timer);
 
+        // z_perm remains 0 at rows 0..=gp_start (row gp_start hosts lagrange_first, where the
+        // permutation relation reads z_perm + lagrange_first); for ZK, the masking values at rows
+        // {1, 2, 3} are added later when committing.
+        let timer = std::time::Instant::now();
         self.memory.z_perm.resize(
             proving_key.circuit_size as usize,
             T::ArithmeticShare::default(),
         );
-        // v6 reserves the head rows and starts the grand product at TRACE_OFFSET.
+
         for (i, mul) in mul.into_iter().enumerate() {
-            self.memory.z_perm[gp_start + i + 1] = mul;
+            self.memory.z_perm[gp_start + i + 1] = mul
         }
+        crate::phase_timing("oink/gp/z_perm_writeback", timer);
 
         Ok(())
     }
@@ -608,14 +683,19 @@ impl<
         }
 
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = if let Some(blinding) = self.zk_blinding {
-            // TESTING ONLY: promote deterministic values in coefficient order.
+        let support = co_noir_common::zk_masking::gemini_masking_support(polynomial_size);
+        let random_values = if let Some(blinding) = self.zk_blinding {
+            // TESTING ONLY: promote deterministic values in public support order.
             let values = blinding
-                .site_fields::<C::ScalarField>(zk_site::OINK_GEMINI_MASKING_POLY, polynomial_size);
+                .site_fields::<C::ScalarField>(zk_site::OINK_GEMINI_MASKING_POLY, support.len());
             SharedPolynomial::new(T::promote_to_trivial_shares(self.state.id(), &values))
         } else {
-            SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?
+            SharedPolynomial::<T, C>::random(support.len(), self.net, self.state)?
         };
+        let mut masking_poly = SharedPolynomial::<T, C>::new_zero(polynomial_size);
+        for (index, value) in support.into_iter().zip(random_values.as_ref()) {
+            masking_poly[index] = *value;
+        }
         let masking_poly_commitment =
             CoUtils::commit_and_open::<T, C, N>(masking_poly.as_ref(), crs, self.net, self.state)?;
         transcript.send_point_to_verifier::<C>(
@@ -778,7 +858,7 @@ impl<
         };
 
         // This is from the previous round, but we open it here with z_perm
-
+        let timer = std::time::Instant::now();
         let open = CoUtils::commit_and_open_many::<T, C, N>(
             &[
                 self.memory.lookup_inverses.as_ref(),
@@ -788,6 +868,7 @@ impl<
             self.net,
             self.state,
         )?;
+        crate::phase_timing("oink/z_perm/commit_open", timer);
 
         let lookup_inverses: C::Affine = open[0].into();
         let z_perm: C::Affine = open[1].into();
@@ -806,26 +887,29 @@ impl<
         tracing::trace!("Oink prove");
 
         // Add circuit size public input size and public inputs to transcript
-
+        let timer = std::time::Instant::now();
         Self::send_vk_hash_and_public_inputs(transcript, proving_key, verifying_key)?;
-
+        crate::phase_timing("oink/vk_and_public_inputs", timer);
+        let timer = std::time::Instant::now();
         self.commit_to_masking_poly(transcript, proving_key, crs)?;
-
+        crate::phase_timing("oink/masking_poly", timer);
         // Compute first three wire commitments
-
+        let timer = std::time::Instant::now();
         self.commit_to_wires(transcript, proving_key, crs)?;
-
+        crate::phase_timing("oink/wires_commit", timer);
         // Compute sorted list accumulator and commitment
-
+        let timer = std::time::Instant::now();
         self.commit_to_lookup_counts_and_w4(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/lookup_w4_commit", timer);
 
         // Fiat-Shamir: beta & gamma
-
+        let timer = std::time::Instant::now();
         self.commit_to_logderiv_inverses(transcript, proving_key)?;
-
+        crate::phase_timing("oink/logderiv_round_total", timer);
         // Compute grand product(s) and commitments.
-
+        let timer = std::time::Instant::now();
         self.commit_to_z_perm(transcript, proving_key, crs)?;
+        crate::phase_timing("oink/z_perm_round_total", timer);
 
         // Generate relation separators alphas for sumcheck/combiner computation
         self.generate_alphas_round(transcript);

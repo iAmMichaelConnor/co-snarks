@@ -42,7 +42,7 @@ pub mod site {
     pub const OINK_MASK_W_4: &str = "oink/mask/W_4";
     pub const OINK_MASK_LOOKUP_INVERSES: &str = "oink/mask/LOOKUP_INVERSES";
     pub const OINK_MASK_Z_PERM: &str = "oink/mask/Z_PERM";
-    /// Oink: Gemini mask values in coefficient order (`commit_to_masking_poly`).
+    /// Oink: Gemini mask values in `gemini_masking_support` order (`commit_to_masking_poly`).
     pub const OINK_GEMINI_MASKING_POLY: &str = "oink/gemini_masking_poly";
     /// Decider/sumcheck: Libra constant term (`ZKSumcheckData`).
     pub const LIBRA_CONSTANT_TERM: &str = "decider/libra/constant_term";
@@ -53,6 +53,26 @@ pub mod site {
     pub const LIBRA_CONCAT_MASKING: &str = "decider/libra/concat_masking";
     /// Decider/PCS: degree-2 masking term of the SmallSubgroupIPA grand-sum polynomial.
     pub const IPA_GRAND_SUM_MASKING: &str = "decider/ipa/grand_sum_masking";
+}
+
+/// Public support for the v6 Gemini mask. Every supported coefficient receives an
+/// independent uniform field element. This is BB's tail-halving construction with
+/// extent equal to the dyadic size: our polynomial storage backs the full domain.
+/// For d >= 4 the 2d positions give the hiding rank required by Shplemini; smaller
+/// domains use the dense fallback. Never choose this support from witness values.
+pub fn gemini_masking_support(polynomial_size: usize) -> Vec<usize> {
+    assert!(polynomial_size.is_power_of_two());
+    let d = polynomial_size.ilog2() as usize;
+    if d < 4 {
+        return (0..polynomial_size).collect();
+    }
+    let mut support = Vec::with_capacity(2 * d);
+    support.extend([polynomial_size - 1, polynomial_size - 2]);
+    for level in 1..d {
+        let base = polynomial_size >> level;
+        support.extend([base, base - 1]);
+    }
+    support
 }
 
 /// A seedable source of ZK masking values. See the module docs: **testing only**, never
@@ -154,5 +174,71 @@ mod tests {
         // And a different master seed must give different streams.
         let other = SeededZkBlinding::from_u64(43);
         assert_ne!(firsts[0], other.site_rng(ALL_SITES[0]).next_u64());
+    }
+}
+
+#[cfg(test)]
+mod sparse_rank_tests {
+    use super::gemini_masking_support;
+    use crate::honk_proof::TranscriptFieldType as Fr;
+    use ark_ff::{Field, One, Zero};
+
+    #[test]
+    fn sparse_support_spans_gemini_leakage_at_regular_challenges() {
+        // The relevant map sends X^s to L_(s mod 2^t)(u_<t) times
+        // (tau^(s >> t), (-r^(2^t))^(s >> t)), for each fold t. This
+        // tests the hiding rank, not merely the number of mask coefficients.
+        // These regular challenge samples are regression evidence; the general
+        // rank argument remains the pinned BB SHPLEMINI_ZK_MASKING.md theorem.
+        for d in 4..=10 {
+            let support = gemini_masking_support(1 << d);
+            assert_eq!(support.len(), 2 * d);
+            for seed in [101u64, 211u64] {
+                let tau = Fr::from(seed);
+                let r = Fr::from(seed + 2);
+                let u: Vec<_> = (0..d).map(|i| Fr::from(seed + 6 + 2 * i as u64)).collect();
+                let mut matrix = Vec::new();
+                for t in 0..d {
+                    for point in [tau, -r.pow([1u64 << t])] {
+                        matrix.push(
+                            support
+                                .iter()
+                                .map(|s| {
+                                    let mut lagrange = Fr::one();
+                                    for (k, challenge) in u.iter().enumerate().take(t) {
+                                        lagrange *= if (s >> k) & 1 == 1 {
+                                            *challenge
+                                        } else {
+                                            Fr::one() - challenge
+                                        };
+                                    }
+                                    lagrange * point.pow([(s >> t) as u64])
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                for col in 0..2 * d {
+                    let pivot = (col..2 * d)
+                        .find(|row| !matrix[*row][col].is_zero())
+                        .expect("sparse Gemini masking map lost rank");
+                    matrix.swap(col, pivot);
+                    let inverse = matrix[col][col].inverse().unwrap();
+                    for value in &mut matrix[col] {
+                        *value *= inverse;
+                    }
+                    let pivot_row = matrix[col].clone();
+                    for row in matrix.iter_mut().skip(col + 1) {
+                        let factor = row[col];
+                        for (value, pivot) in row.iter_mut().zip(&pivot_row) {
+                            *value -= factor * pivot;
+                        }
+                    }
+                }
+            }
+        }
+        for n in [1, 2, 4, 8] {
+            assert_eq!(gemini_masking_support(n), (0..n).collect::<Vec<_>>());
+        }
     }
 }

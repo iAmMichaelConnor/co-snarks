@@ -1,7 +1,7 @@
 use acir::{
     acir_field::GenericFieldElement,
     circuit::{Circuit, Opcode},
-    native_types::{Witness, WitnessMap, WitnessStack},
+    native_types::{Expression, Witness, WitnessMap, WitnessStack},
 };
 use ark_ff::PrimeField;
 use co_brillig::CoBrilligVM;
@@ -29,6 +29,7 @@ use crate::{
 mod assert_zero_solver;
 mod blackbox_solver;
 mod brillig_call_solver;
+pub mod level_schedule;
 mod memory_solver;
 
 pub type PlainCoSolver<F> = CoSolver<PlainAcvmSolver<F>, F>;
@@ -371,29 +372,71 @@ where
         Ok(result)
     }
 
+    /// Dispatch a single opcode to its solver. Shared by the serial solve loop
+    /// and the level-ordered solve used by the equivalence referee, so both walk
+    /// the opcodes through identical per-opcode logic.
+    fn solve_single_opcode(&mut self, opcode: &Opcode<GenericFieldElement<F>>) -> CoAcvmResult<()> {
+        match opcode {
+            Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
+            Opcode::MemoryInit {
+                block_id,
+                init,
+                block_type: _, // apparently not used
+            } => self.solve_memory_init_block(*block_id, init)?,
+            Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
+            Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
+            Opcode::BrilligCall {
+                id,
+                inputs,
+                outputs,
+                predicate,
+            } => self.brillig_call(id, inputs, outputs, predicate)?,
+            _ => todo!("opcode {} detected, not supported yet", opcode),
+        }
+        Ok(())
+    }
+
+    /// If `CO_NOIR_WITEXT_LEVELS` is set in the environment, print the comms-free
+    /// level-schedule + round-attribution diagnostics for the current function.
+    /// This only reads public circuit structure and prints; it never changes the
+    /// witness that is solved.
+    fn maybe_print_witext_diagnostics(&self, function: &Circuit<GenericFieldElement<F>>) {
+        if std::env::var_os("CO_NOIR_WITEXT_LEVELS").is_none() {
+            return;
+        }
+        // Every private ABI parameter is a shared witness under the protocol;
+        // public parameters are initial but public.
+        let shared_initial: std::collections::HashSet<u32> =
+            function.private_parameters.iter().map(|w| w.0).collect();
+        let mut initial = shared_initial.clone();
+        initial.extend(function.public_parameters.0.iter().map(|w| w.0));
+        let report = level_schedule::format_report(
+            "current function",
+            &function.opcodes,
+            &initial,
+            &shared_initial,
+        );
+        eprintln!("{report}");
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn solve_with_output(
         mut self,
     ) -> CoAcvmResult<(WitnessStack<T::AcvmType>, PssStore<T, F>)> {
         let functions = std::mem::take(&mut self.functions);
 
-        for opcode in functions[self.function_index].opcodes.iter() {
-            match opcode {
-                Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
-                Opcode::MemoryInit {
-                    block_id,
-                    init,
-                    block_type: _, // apparently not used
-                } => self.solve_memory_init_block(*block_id, init)?,
-                Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
-                Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
-                Opcode::BrilligCall {
-                    id,
-                    inputs,
-                    outputs,
-                    predicate,
-                } => self.brillig_call(id, inputs, outputs, predicate)?,
-                _ => todo!("opcode {} detected, not supported yet", opcode),
+        self.maybe_print_witext_diagnostics(&functions[self.function_index]);
+
+        if self.driver.use_level_batched_witext() {
+            // Two-pass level-scheduled solve: group the opcode DAG into
+            // independence levels and batch each level's shared×shared products
+            // into a single network round (collapses the witext round count on
+            // latency-bound networks). Falls back to the serial per-opcode path
+            // for drivers that do not opt in.
+            self.solve_levels(&functions[self.function_index])?;
+        } else {
+            for opcode in functions[self.function_index].opcodes.iter() {
+                self.solve_single_opcode(opcode)?;
             }
         }
         tracing::trace!("we are done! Opening results...");
@@ -410,6 +453,122 @@ where
 
     pub fn solve(self) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
         let (witness_stack, _) = self.solve_with_output()?;
+        Ok(witness_stack)
+    }
+
+    /// Solve the current function's opcodes in an explicit order (a permutation
+    /// of `0..num_opcodes`) rather than in stream order. Used by the U1
+    /// equivalence referee to run a level-ordered solve and check the resulting
+    /// witness is bit-identical to the serial solve. `order` must be a valid
+    /// topological order (every producer before its consumers); otherwise the
+    /// solve fails or yields a different witness, which is exactly what the
+    /// red-validation check exercises.
+    pub fn solve_in_order(mut self, order: &[usize]) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
+        let functions = std::mem::take(&mut self.functions);
+        let opcodes = &functions[self.function_index].opcodes;
+
+        for &idx in order {
+            self.solve_single_opcode(&opcodes[idx])?;
+        }
+        let output = self.open_results(&functions[self.function_index])?;
+        self.value_store.set_output(output);
+
+        let mut witness_stack = WitnessStack::default();
+        for (idx, witness) in self.witness_map.into_iter().rev().enumerate() {
+            witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
+        }
+        Ok(witness_stack)
+    }
+
+    /// Set of witness indices already populated before the solve begins: the
+    /// private + public ABI parameters, which live at level 0 of the schedule.
+    fn initial_witnesses(
+        function: &Circuit<GenericFieldElement<F>>,
+    ) -> std::collections::HashSet<u32> {
+        let mut initial: std::collections::HashSet<u32> =
+            function.private_parameters.iter().map(|w| w.0).collect();
+        initial.extend(function.public_parameters.0.iter().map(|w| w.0));
+        initial
+    }
+
+    /// Pass-1 + Pass-2 of the level-scheduled solve: compute the comms-free
+    /// dependency levels of the opcode stream, then solve level by level,
+    /// batching each level's independent shared×shared products into one
+    /// network round via [`NoirWitnessExtensionProtocol::solve_mul_terms`].
+    fn solve_levels(&mut self, function: &Circuit<GenericFieldElement<F>>) -> CoAcvmResult<()> {
+        let opcodes = &function.opcodes;
+        let initial = Self::initial_witnesses(function);
+        let schedule = level_schedule::schedule_levels(opcodes, &initial);
+        for level in &schedule.levels {
+            self.solve_level(opcodes, level)?;
+        }
+        Ok(())
+    }
+
+    /// Solve one independence level. Non-`AssertZero` opcodes are solved via the
+    /// serial per-opcode path (they carry their own communication and the level
+    /// guarantees they are mutually independent, so order within the level does
+    /// not matter). All `AssertZero` opcodes are pre-simplified with their
+    /// shared×shared products deferred, then a single batched round resolves
+    /// every deferred product at once before each opcode is finished.
+    fn solve_level(
+        &mut self,
+        opcodes: &[Opcode<GenericFieldElement<F>>],
+        level: &[usize],
+    ) -> CoAcvmResult<()> {
+        // Pre-simplify the AssertZero opcodes, collecting deferred products;
+        // solve every other opcode kind on the serial path.
+        let mut accs: Vec<Expression<T::AcvmType>> = Vec::new();
+        let mut counts: Vec<usize> = Vec::new();
+        let mut pending: Vec<(F, T::AcvmType, T::AcvmType)> = Vec::new();
+        for &idx in level {
+            match &opcodes[idx] {
+                Opcode::AssertZero(expr) => {
+                    let (acc, deferred) = self.presimplify_expression(expr, &mut pending)?;
+                    accs.push(acc);
+                    counts.push(deferred);
+                }
+                other => self.solve_single_opcode(other)?,
+            }
+        }
+
+        if accs.is_empty() {
+            return Ok(());
+        }
+
+        // One batched round for every independent shared×shared product.
+        let products = self.driver.solve_mul_terms(pending)?;
+
+        // Scatter the batched products back into each opcode's accumulator, then
+        // finish each opcode (solve its single remaining unknown, if any).
+        let mut off = 0usize;
+        for (mut acc, count) in accs.into_iter().zip(counts) {
+            for _ in 0..count {
+                let prod = products[off].clone();
+                off += 1;
+                self.driver.add_assign(&mut acc.q_c, prod);
+            }
+            self.finish_assert_zero(acc)?;
+        }
+        debug_assert_eq!(off, products.len());
+        Ok(())
+    }
+
+    /// Solve the current function using the level-scheduled batched path
+    /// unconditionally (i.e. regardless of the driver's
+    /// [`NoirWitnessExtensionProtocol::use_level_batched_witext`] flag). Used by
+    /// the plain-driver equivalence referee to check the batched grouping yields
+    /// a witness bit-identical to the serial solve.
+    pub fn solve_via_levels(mut self) -> CoAcvmResult<WitnessStack<T::AcvmType>> {
+        let functions = std::mem::take(&mut self.functions);
+        self.solve_levels(&functions[self.function_index])?;
+        let output = self.open_results(&functions[self.function_index])?;
+        self.value_store.set_output(output);
+
+        let mut witness_stack = WitnessStack::default();
+        for (idx, witness) in self.witness_map.into_iter().rev().enumerate() {
+            witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
+        }
         Ok(witness_stack)
     }
 
@@ -502,5 +661,66 @@ where
             witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
         }
         Ok(witness_stack)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use acir::FieldElement;
+    use acir::native_types::{Witness, WitnessMap};
+    use noirc_abi::{Abi, AbiParameter, AbiType, AbiVisibility, Sign};
+    use std::collections::BTreeMap;
+
+    fn abi_with_single_param(typ: AbiType) -> Abi {
+        Abi {
+            abi_version: noirc_abi::ABI_VERSION,
+            parameters: vec![AbiParameter {
+                name: "x".to_string(),
+                typ,
+                visibility: AbiVisibility::Private,
+            }],
+            return_type: None,
+            error_types: BTreeMap::new(),
+        }
+    }
+
+    fn witness_map_with_single_value(value: u128) -> WitnessMap<FieldElement> {
+        WitnessMap::from(BTreeMap::from([(Witness(0), FieldElement::from(value))]))
+    }
+
+    /// Regression test for noir-claude #932 ("ABI decode canonicality"): under beta.20,
+    /// `Abi::decode` skipped the range/canonicality checks that `encode` enforces, so a
+    /// `bool` witness value of `2` (or a `u8` witness of `256`) would decode without
+    /// error, silently corrupting the witness->input mapping. co-noir consumes
+    /// `noirc_abi::Abi` directly (`co-noir/noir-types/src/lib.rs`,
+    /// `co-noir/co-acvm/src/solver.rs::solve_and_print_output`) and is pinned to the
+    /// noir beta.22 tag, which fixed this in `noirc_abi/src/lib.rs` (`decode_value`
+    /// calling `find_type_mismatch`). This test proves the fix is actually inherited by
+    /// co-noir's dependency pin rather than merely assumed.
+    #[test]
+    fn abi_decode_rejects_out_of_range_boolean() {
+        let abi = abi_with_single_param(AbiType::Boolean);
+        assert!(abi.decode(&witness_map_with_single_value(2)).is_err());
+    }
+
+    #[test]
+    fn abi_decode_rejects_out_of_range_u8() {
+        let abi = abi_with_single_param(AbiType::Integer {
+            sign: Sign::Unsigned,
+            width: 8,
+        });
+        assert!(abi.decode(&witness_map_with_single_value(256)).is_err());
+    }
+
+    #[test]
+    fn abi_decode_accepts_in_range_values() {
+        let bool_abi = abi_with_single_param(AbiType::Boolean);
+        assert!(bool_abi.decode(&witness_map_with_single_value(1)).is_ok());
+
+        let u8_abi = abi_with_single_param(AbiType::Integer {
+            sign: Sign::Unsigned,
+            width: 8,
+        });
+        assert!(u8_abi.decode(&witness_map_with_single_value(255)).is_ok());
     }
 }

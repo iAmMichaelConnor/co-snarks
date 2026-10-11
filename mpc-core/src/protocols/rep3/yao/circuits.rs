@@ -7,7 +7,7 @@ use crate::protocols::rep3::yao::{GCUtils, bristol_fashion::BristolFashionCircui
 use crate::uint::FieldUint;
 use ark_ff::One;
 use core::panic;
-use fancy_garbling::{BinaryBundle, FancyBinary, FancyError};
+use fancy_garbling::{BinaryBundle, Fancy, FancyBinary, FancyError, HasModulus};
 use itertools::izip;
 use num_traits::WrappingSub;
 use std::ops::Not;
@@ -501,6 +501,43 @@ impl GarbledCircuits {
         }
         qs.reverse(); // Switch back to little-endian
         Ok(qs)
+    }
+
+    /// Exact division by a positive public integer, retaining the remainder.
+    ///
+    /// All dividend bits are processed. Only the public divisor determines the
+    /// accumulator width: if its bit length is d, the invariant r < divisor
+    /// implies 2*r + next_bit < 2*divisor < 2^(d+1). The extra bit is necessary
+    /// even when the divisor occupies the full input width. Neither this width
+    /// nor the circuit shape depends on secret values or their expected ranges.
+    #[expect(clippy::type_complexity)]
+    fn bin_div_rem_by_public<G: FancyBinary + FancyBinaryConstant>(
+        g: &mut G,
+        dividend: &[G::Item],
+        divisor: &[bool],
+    ) -> Result<(Vec<G::Item>, Vec<G::Item>), G::Error> {
+        let divisor_bits = divisor
+            .iter()
+            .rposition(|bit| *bit)
+            .map(|index| index + 1)
+            .ok_or_else(|| FancyError::InvalidArg("Public divisor must be nonzero".into()))?;
+        let width = divisor_bits + 1;
+        let mut bounded_divisor = divisor[..divisor_bits].to_vec();
+        bounded_divisor.push(false);
+        let zero = g.const_zero()?;
+        let mut remainder = vec![zero; width];
+        let mut quotient = Vec::with_capacity(dividend.len());
+        for bit in dividend.iter().rev() {
+            // The discarded high bit is zero by r < divisor < 2^divisor_bits.
+            remainder.rotate_right(1);
+            remainder[0] = bit.clone();
+            let (difference, no_borrow) =
+                Self::bin_subtraction_partial_by_constant(g, &remainder, &bounded_divisor)?;
+            remainder = Self::bin_multiplex(g, &no_borrow, &remainder, &difference)?;
+            quotient.push(no_borrow);
+        }
+        quotient.reverse();
+        Ok((quotient, remainder))
     }
 
     // From swanky:
@@ -1888,9 +1925,7 @@ impl GarbledCircuits {
             wires_c.len(),
             F::MODULUS_BIT_SIZE as usize * limbs_per_field + K::MODULUS_BIT_SIZE as usize
         );
-        let quotient = Self::bin_div_by_public(g, &dividend, divisor)?;
-        let km = Self::bin_mul_with_public(g, &quotient, divisor)?;
-        let mut remainder = Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
+        let (quotient, mut remainder) = Self::bin_div_rem_by_public(g, &dividend, divisor)?;
         // Preserve the low-K-bits convention, then canonicalize before adding
         // the field mask. For n=bitlen(K::MODULUS), x<2^n<=2*K::MODULUS, so one
         // conditional subtraction suffices. Without it, a wider public divisor
@@ -3377,6 +3412,364 @@ impl GarbledCircuits {
         Ok([x0_xor_x2, x0_and_x2].to_vec())
     }
 
+    /// The sha256 round constants, used by [`Self::sha256_block_sparse_trace`].
+    const SHA256_ROUND_CONSTANTS: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    /// Number of output bits produced by [`Self::sha256_block_sparse_trace`]:
+    /// 193 rotation reads x 32 key bits + 64 ChOutput reads x 32 x (5 + 2) bits
+    /// + 64 MajOutput reads x 32 x (4 + 2) bits + 48 WitnessOutput reads x 32 x (4 + 2) bits.
+    pub const SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS: usize = 42_016;
+
+    /// Multiplies a 2-bit value s = lo + 2 * hi (s <= 3) by the public constant 7, returning the
+    /// 5-bit result 7 * s <= 21. Used for the choose-digit weighting in
+    /// [`Self::sha256_block_sparse_trace`]. Costs 1 AND gate.
+    fn sha256_mul7_2bit<G: FancyBinary>(
+        g: &mut G,
+        lo: &G::Item,
+        hi: &G::Item,
+    ) -> Result<Vec<G::Item>, G::Error> {
+        let both = g.and(lo, hi)?;
+        let m1 = g.xor(lo, hi)?;
+        // lo | hi == (lo ^ hi) ^ (lo & hi)
+        let m2 = g.xor(&m1, &both)?;
+        // hi & !lo == hi ^ (lo & hi)
+        let m3 = g.xor(hi, &both)?;
+        // 7 * 0 = 00000, 7 * 1 = 00111, 7 * 2 = 01110, 7 * 3 = 10101 (LSB first below)
+        Ok(vec![lo.to_owned(), m1, m2, m3, both])
+    }
+
+    /// Computes e + 2f + 3g (<= 6) of three input bits as 3 output bits (LSB first).
+    /// Costs 3 AND gates.
+    fn sha256_e_plus_2f_plus_3g<G: FancyBinary>(
+        g: &mut G,
+        e: &G::Item,
+        f: &G::Item,
+        gg: &G::Item,
+    ) -> Result<Vec<G::Item>, G::Error> {
+        // e + 2f + 3g = (e + g) + 2 * (f + g)
+        let (u0, u1) = Self::half_adder(g, e, gg)?;
+        let (v0, v1) = Self::half_adder(g, f, gg)?;
+        // No carry out of bit 2: v1 = 1 forces f = g = 1, hence v0 = 0 and the bit-1 carry c = 0.
+        let (r1, c) = Self::half_adder(g, &u1, &v0)?;
+        let r2 = g.xor(&v1, &c)?;
+        Ok(vec![u0, r1, r2])
+    }
+
+    /// Adds a 5-bit value (<= 21) and a 3-bit value (<= 6). The sum is < 32, so the result is 5
+    /// bits with no output carry. Costs 4 AND gates.
+    fn sha256_add_5bit_3bit<G: FancyBinary>(
+        g: &mut G,
+        m: &[G::Item],
+        r: &[G::Item],
+    ) -> Result<Vec<G::Item>, G::Error> {
+        debug_assert_eq!(m.len(), 5);
+        debug_assert_eq!(r.len(), 3);
+        let (d0, c) = Self::half_adder(g, &m[0], &r[0])?;
+        let (d1, c) = Self::full_adder(g, &m[1], &r[1], &c)?;
+        let (d2, c) = Self::full_adder(g, &m[2], &r[2], &c)?;
+        let (d3, c) = Self::half_adder(g, &m[3], &c)?;
+        let d4 = g.xor(&m[4], &c)?;
+        Ok(vec![d0, d1, d2, d3, d4])
+    }
+
+    /// Adds the public 32-bit constant `c` to the 32-bit value `xs`, mod 2^32.
+    ///
+    /// NOTE: [`Self::bin_addition_constant_no_carry`] is NOT used here because its underlying
+    /// [`Self::half_adder_const`] returns carry = a even for b = false (wrong: the carry of
+    /// a + 0 is 0). All existing callers pass constants with LSB 1, so that path is unreached
+    /// today; this function handles arbitrary constants by skipping the low zero run of `c`.
+    /// Costs at most 30 AND gates.
+    fn sha256_add_constant_low32<G: FancyBinary>(
+        g: &mut G,
+        xs: &[G::Item],
+        c: u32,
+    ) -> Result<Vec<G::Item>, G::Error> {
+        debug_assert_eq!(xs.len(), 32);
+        if c == 0 {
+            return Ok(xs.to_vec());
+        }
+        let lowest = c.trailing_zeros() as usize;
+        let mut result = Vec::with_capacity(32);
+        // below the lowest set bit of c no carries can occur
+        for x in xs.iter().take(lowest) {
+            result.push(x.to_owned());
+        }
+        // at the lowest set bit: x + 1 has sum !x and carry x (the b = true half-adder path)
+        let (s, mut carry) = Self::half_adder_const(g, &xs[lowest], true)?;
+        result.push(s);
+        for (i, x) in xs.iter().enumerate().take(31).skip(lowest + 1) {
+            let (s, c_) = Self::full_adder_const(g, x, (c >> i) & 1 == 1, &carry)?;
+            carry = c_;
+            result.push(s);
+        }
+        if lowest < 31 {
+            // top bit: sum only, no carry out needed
+            let z = if (c >> 31) & 1 == 1 {
+                g.negate(&xs[31])?
+            } else {
+                xs[31].to_owned()
+            };
+            result.push(g.xor(&z, &carry)?);
+        }
+        debug_assert_eq!(result.len(), 32);
+        Ok(result)
+    }
+
+    /// Given the per-digit Moebius output bits f1, f2 (with table[d_i] = f1_i + 2 * f2_i) of all
+    /// 32 digits of a sha256 normalization read, computes the normalized value
+    /// sum_i table[d_i] * 2^i mod 2^32, i.e. the low 32 bits of f1 + 2 * f2 over the integers.
+    /// Costs 30 AND gates.
+    fn sha256_normalization_value_low32<G: FancyBinary>(
+        g: &mut G,
+        f1: &[G::Item],
+        f2: &[G::Item],
+    ) -> Result<Vec<G::Item>, G::Error> {
+        debug_assert_eq!(f1.len(), 32);
+        debug_assert_eq!(f2.len(), 32);
+        let mut result = Vec::with_capacity(32);
+        result.push(f1[0].to_owned());
+        let (s, mut c) = Self::half_adder(g, &f1[1], &f2[0])?;
+        result.push(s);
+        for i in 2..31 {
+            let (s, c_) = Self::full_adder(g, &f1[i], &f2[i - 1], &c)?;
+            c = c_;
+            result.push(s);
+        }
+        let z = g.xor(&f1[31], &f2[30])?;
+        result.push(g.xor(&z, &c)?);
+        Ok(result)
+    }
+
+    /// Computes, in ONE circuit, the bits underlying ALL 369 sha256 plookup reads that the
+    /// builder gadget `sha256_block` (co-builder sha_compression.rs) performs for one compression
+    /// call with shared state and message. Every witness value the gadget needs (key slices,
+    /// sparse forms, rotated sparse forms, normalized values) is a public-weight linear
+    /// combination of these bits, so a driver can serve all 369 reads from a single invocation.
+    ///
+    /// Inputs: `wires_x1`/`wires_x2` are the bit decompositions of two field-share summands per
+    /// input (added mod p inside the circuit, exactly as in [`Self::sha256_compression`]) for the
+    /// 24 inputs `h_init[0..8] || w_in[0..16]`; each input is taken mod 2^32.
+    ///
+    /// Output layout (one group per plookup read, in the gadget's exact read order; all bit
+    /// vectors LSB first):
+    /// 1. The 4 init sparse-form reads (sha_compression.rs:133-138): Sha256MajInput keyed on
+    ///    h_init[1], MajInput on h_init[2], Sha256ChInput on h_init[5], ChInput on h_init[6];
+    ///    32 key bits each.
+    /// 2. The message schedule (extend_witness, sha_compression.rs:200-336), iterations
+    ///    i = 16..64. Per iteration, in order: a Sha256WitnessInput read of w[i-15] and/or of
+    ///    w[i-2] (32 key bits each) if not yet converted (lazy `has_sparse_limbs` order; 61 reads
+    ///    total), then the Sha256WitnessOutput read: 32 digit groups `[d0, d1, d2, d3, f1, f2]`
+    ///    where d is the base-16 digit of the read key (d = sigma1_popcount + 4 * sigma0_popcount,
+    ///    always <= 15) and table[d] = f1 + 2 * f2 is its
+    ///    WITNESS_EXTENSION_NORMALIZATION_TABLE value; 192 bits per read.
+    /// 3. The round loop (sha_compression.rs:144-158), rounds i = 0..64. Per round, in order: the
+    ///    Sha256ChInput read (32 bits of register e); the Sha256ChOutput read: 32 digit groups
+    ///    `[d0..d4, f1, f2]` with d = e + 2f + 3g + 7 * Sigma1_popcount <= 27 the base-28 digit
+    ///    and table[d] = f1 + 2 * f2 its CHOOSE_NORMALIZATION_TABLE value (224 bits); the
+    ///    Sha256MajInput read (32 bits of register a); the Sha256MajOutput read: 32 digit groups
+    ///    `[d0..d3, f1, f2]` with d = a + b + c + 4 * Sigma0_popcount <= 15 the base-16 digit and
+    ///    table[d] = f1 + 2 * f2 its MAJORITY_NORMALIZATION_TABLE value (192 bits).
+    ///
+    /// Totals [`Self::SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS`] = 42,016 bits.
+    ///
+    /// Carry-freeness of the digit forms is structural (the bb plookup encoding sizes the
+    /// normalization tables so that no base digit ever carries); it is re-verified exhaustively
+    /// against the carry-generic plain accumulation in the co-builder unit tests
+    /// (sha_compression_sparse_trace_tests.rs).
+    pub fn sha256_block_sparse_trace<G: FancyBinary + FancyBinaryConstant, F: FieldUint>(
+        g: &mut G,
+        wires_x1: &BinaryBundle<G::Item>,
+        wires_x2: &BinaryBundle<G::Item>,
+    ) -> Result<BinaryBundle<G::Item>, G::Error> {
+        let input_bitlen = F::MODULUS_BIT_SIZE as usize;
+        debug_assert_eq!(wires_x1.size(), 24 * input_bitlen);
+        debug_assert_eq!(wires_x2.size(), 24 * input_bitlen);
+
+        // Input stage: recombine the two share summands of each input mod p, keep the low 32 bits
+        let mut words = Vec::with_capacity(24);
+        for (chunk_x1, chunk_x2) in izip!(
+            wires_x1.wires().chunks(input_bitlen),
+            wires_x2.wires().chunks(input_bitlen)
+        ) {
+            words.push(Self::adder_mod_p_with_output_size::<_, F>(
+                g, chunk_x1, chunk_x2, 32,
+            )?);
+        }
+        // regs = [a, b, c, d, e, f, g, h] (sha_compression.rs:132-139), w = message schedule
+        let mut w: Vec<Vec<G::Item>> = words.split_off(8);
+        let mut regs = words;
+
+        let mut outputs: Vec<G::Item> =
+            Vec::with_capacity(Self::SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS);
+
+        // 1. Init sparse-form reads: MajInput(b), MajInput(c), ChInput(f), ChInput(g)
+        outputs.extend_from_slice(&regs[1]);
+        outputs.extend_from_slice(&regs[2]);
+        outputs.extend_from_slice(&regs[5]);
+        outputs.extend_from_slice(&regs[6]);
+
+        // 2. Message schedule, mirroring extend_witness's value flow
+        let mut converted = [false; 64];
+        for i in 16..64 {
+            // lazy WitnessInput conversion reads (sha_compression.rs:201-208)
+            for j in [i - 15, i - 2] {
+                if !converted[j] {
+                    outputs.extend_from_slice(&w[j]);
+                    converted[j] = true;
+                }
+            }
+            let mut f1 = Vec::with_capacity(32);
+            let mut f2 = Vec::with_capacity(32);
+            {
+                let (wl, wr) = (&w[i - 15], &w[i - 2]);
+                for k in 0..32 {
+                    // WitnessOutput key digit_k = right_k + 4 * left_k with
+                    // left_k  = wl[(k+7)%32] + wl[(k+18)%32] + wl[k+3]   (sigma0; shr-3 term
+                    //           absent for k > 28)
+                    // right_k = wr[(k+17)%32] + wr[(k+19)%32] + wr[k+10] (sigma1; shr-10 term
+                    //           absent for k > 21)
+                    let left = if k + 3 < 32 {
+                        Self::full_adder(g, &wl[(k + 7) % 32], &wl[(k + 18) % 32], &wl[k + 3])?
+                    } else {
+                        Self::half_adder(g, &wl[(k + 7) % 32], &wl[(k + 18) % 32])?
+                    };
+                    let right = if k + 10 < 32 {
+                        Self::full_adder(g, &wr[(k + 17) % 32], &wr[(k + 19) % 32], &wr[k + 10])?
+                    } else {
+                        Self::half_adder(g, &wr[(k + 17) % 32], &wr[(k + 19) % 32])?
+                    };
+                    let digit = [right.0, right.1, left.0, left.1];
+                    let moebius = Self::get_witness_extension_normalization_table_value(g, &digit)?;
+                    outputs.extend_from_slice(&digit);
+                    outputs.extend_from_slice(&moebius);
+                    f1.push(moebius[0].to_owned());
+                    f2.push(moebius[1].to_owned());
+                }
+            }
+            // xor_result = sigma0(w[i-15]) + sigma1(w[i-2]) (integer sum); the gadget's
+            // w_out = (xor_result + w[i-16] + w[i-7]) & (2^32 - 1) (sha_compression.rs:304-333)
+            let xor_result = Self::sha256_normalization_value_low32(g, &f1, &f2)?;
+            let tmp = Self::bin_addition_no_carry(g, &xor_result, &w[i - 16])?;
+            let w_out = Self::bin_addition_no_carry(g, &tmp, &w[i - 7])?;
+            w.push(w_out);
+        }
+
+        // 3. Round loop
+        for (i, k_const) in Self::SHA256_ROUND_CONSTANTS.iter().enumerate() {
+            // choose: ChInput read on e, then the ChOutput read digits
+            outputs.extend_from_slice(&regs[4]);
+            let mut ch_f1 = Vec::with_capacity(32);
+            let mut ch_f2 = Vec::with_capacity(32);
+            {
+                let (e_reg, f_reg, g_reg) = (&regs[4], &regs[5], &regs[6]);
+                for k in 0..32 {
+                    let rot = Self::full_adder(
+                        g,
+                        &e_reg[(k + 6) % 32],
+                        &e_reg[(k + 11) % 32],
+                        &e_reg[(k + 25) % 32],
+                    )?;
+                    let m = Self::sha256_mul7_2bit(g, &rot.0, &rot.1)?;
+                    let r = Self::sha256_e_plus_2f_plus_3g(g, &e_reg[k], &f_reg[k], &g_reg[k])?;
+                    // digit = e + 2f + 3g + 7 * (rot6 + rot11 + rot25) <= 27
+                    let digit = Self::sha256_add_5bit_3bit(g, &m, &r)?;
+                    let moebius = Self::get_choose_normalization_table_value(g, &digit)?;
+                    outputs.extend_from_slice(&digit);
+                    outputs.extend_from_slice(&moebius);
+                    ch_f1.push(moebius[0].to_owned());
+                    ch_f2.push(moebius[1].to_owned());
+                }
+            }
+            // ch = Sigma1(e) + Ch(e, f, g) (integer sum), reduced mod 2^32
+            let ch = Self::sha256_normalization_value_low32(g, &ch_f1, &ch_f2)?;
+
+            // majority: MajInput read on a, then the MajOutput read digits
+            outputs.extend_from_slice(&regs[0]);
+            let mut maj_f1 = Vec::with_capacity(32);
+            let mut maj_f2 = Vec::with_capacity(32);
+            {
+                let (a_reg, b_reg, c_reg) = (&regs[0], &regs[1], &regs[2]);
+                for k in 0..32 {
+                    let sum = Self::full_adder(g, &a_reg[k], &b_reg[k], &c_reg[k])?;
+                    let rot = Self::full_adder(
+                        g,
+                        &a_reg[(k + 2) % 32],
+                        &a_reg[(k + 13) % 32],
+                        &a_reg[(k + 22) % 32],
+                    )?;
+                    // digit = (a + b + c) + 4 * (rot2 + rot13 + rot22) <= 15: a free concat
+                    let digit = [sum.0, sum.1, rot.0, rot.1];
+                    let moebius = Self::get_majority_normalization_table_value(g, &digit)?;
+                    outputs.extend_from_slice(&digit);
+                    outputs.extend_from_slice(&moebius);
+                    maj_f1.push(moebius[0].to_owned());
+                    maj_f2.push(moebius[1].to_owned());
+                }
+            }
+            // maj = Sigma0(a) + Maj(a, b, c) (integer sum), reduced mod 2^32
+            let maj = Self::sha256_normalization_value_low32(g, &maj_f1, &maj_f2)?;
+
+            // temp1 = ch + h + w[i] + K[i]; e' = d + temp1; a' = temp1 + maj, all mod 2^32
+            // (add_normalize_unsafe reduces mod 2^32, field_ct.rs:1944-1993)
+            let wk = Self::sha256_add_constant_low32(g, &w[i], *k_const)?;
+            let tmp = Self::bin_addition_no_carry(g, &ch, &regs[7])?;
+            let temp1 = Self::bin_addition_no_carry(g, &tmp, &wk)?;
+            let e_new = Self::bin_addition_no_carry(g, &regs[3], &temp1)?;
+            let a_new = Self::bin_addition_no_carry(g, &temp1, &maj)?;
+
+            // register shift (sha_compression.rs:150-157)
+            regs[7] = regs[6].to_owned();
+            regs[6] = regs[5].to_owned();
+            regs[5] = regs[4].to_owned();
+            regs[4] = e_new;
+            regs[3] = regs[2].to_owned();
+            regs[2] = regs[1].to_owned();
+            regs[1] = regs[0].to_owned();
+            regs[0] = a_new;
+        }
+
+        debug_assert_eq!(outputs.len(), Self::SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS);
+        Ok(BinaryBundle::new(outputs))
+    }
+
+    /// Evaluates [`Self::sha256_block_sparse_trace`] on cleartext inputs using
+    /// [`CleartextBinaryEvaluator`] (two field summands per input, added mod p inside the
+    /// circuit; order h_init[0..8] || w_in[0..16]). Returns the output bits in the documented
+    /// order together with the number of AND gates of the composed circuit. Test/KAT support: no
+    /// garbling, no networking.
+    pub fn sha256_block_sparse_trace_cleartext<F: FieldUint>(
+        x1: &[F],
+        x2: &[F],
+    ) -> Result<(Vec<bool>, usize), FancyError> {
+        assert_eq!(x1.len(), 24);
+        assert_eq!(x2.len(), 24);
+        let encode = |xs: &[F]| {
+            BinaryBundle::new(
+                xs.iter()
+                    .flat_map(|x| GCUtils::field_to_bits(*x))
+                    .map(CleartextBit)
+                    .collect(),
+            )
+        };
+        let mut g = CleartextBinaryEvaluator::default();
+        let result = Self::sha256_block_sparse_trace::<_, F>(&mut g, &encode(x1), &encode(x2))?;
+        Ok((
+            result.wires().iter().map(|bit| bit.0).collect(),
+            g.num_and_gates,
+        ))
+    }
+
     /// Computes the SHA256 compression using a Bristol fashion circuit which is first parsed from a .txt file. The field elements are represented as bitdecompositions x1s, x2s, y1s and y2s which need to be added first to get the two inputs. The output is composed using wires_c.
     pub(crate) fn sha256_compression<
         G: FancyBinary + FancyBinaryConstant + BristolFashionEvaluator<WireValue = G::Item>,
@@ -4426,10 +4819,73 @@ impl GarbledCircuits {
     }
 }
 
+/// A cleartext wire (a plain boolean) for [`CleartextBinaryEvaluator`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CleartextBit(pub bool);
+
+impl HasModulus for CleartextBit {
+    fn modulus(&self) -> u16 {
+        2
+    }
+}
+
+/// Evaluates garbled-circuit descriptions on cleartext (plain boolean) wires, counting the AND
+/// gates on the way. Intended for unit tests/KATs of the circuits in this module: it lets a
+/// reference implementation check every output wire of a circuit without any garbling or
+/// networking, and measures the circuit's cost (under free-XOR, only AND gates cost anything).
+#[derive(Default)]
+pub struct CleartextBinaryEvaluator {
+    /// Number of AND gates evaluated so far (XOR/NOT/constants are free under free-XOR).
+    pub num_and_gates: usize,
+}
+
+impl Fancy for CleartextBinaryEvaluator {
+    type Item = CleartextBit;
+    type Error = FancyError;
+
+    fn constant(&mut self, x: u16, _q: u16) -> Result<Self::Item, Self::Error> {
+        Ok(CleartextBit(x & 1 == 1))
+    }
+
+    fn output(&mut self, x: &Self::Item) -> Result<Option<u16>, Self::Error> {
+        Ok(Some(x.0 as u16))
+    }
+}
+
+impl FancyBinary for CleartextBinaryEvaluator {
+    fn xor(&mut self, x: &Self::Item, y: &Self::Item) -> Result<Self::Item, Self::Error> {
+        Ok(CleartextBit(x.0 ^ y.0))
+    }
+
+    fn and(&mut self, x: &Self::Item, y: &Self::Item) -> Result<Self::Item, Self::Error> {
+        self.num_and_gates += 1;
+        Ok(CleartextBit(x.0 & y.0))
+    }
+
+    fn negate(&mut self, x: &Self::Item) -> Result<Self::Item, Self::Error> {
+        Ok(CleartextBit(!x.0))
+    }
+}
+
+impl FancyBinaryConstant for CleartextBinaryEvaluator {
+    fn const_zero(&mut self) -> Result<Self::Item, Self::Error> {
+        Ok(CleartextBit(false))
+    }
+
+    fn const_one(&mut self) -> Result<Self::Item, Self::Error> {
+        Ok(CleartextBit(true))
+    }
+}
+
+#[cfg(test)]
+#[path = "division_tests.rs"]
+mod division_tests;
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::protocols::rep3::yao::GCInputs;
+    use ark_ff::PrimeField;
     use fancy_garbling::BinaryGadgets;
     use fancy_garbling::{Evaluator, Fancy, Garbler, WireMod2};
     use rand::{CryptoRng, Rng, SeedableRng, thread_rng};
@@ -4441,6 +4897,29 @@ mod test {
     };
 
     const TESTRUNS: usize = 5;
+
+    // The plain fancy-garbling Garbler/Evaluator do not implement FancyBinaryConstant (only the
+    // Rep3 wrappers do). These test-only impls satisfy the trait bound for circuits which, like
+    // sha256_block_sparse_trace, never actually emit constant wires.
+    impl<C: AbstractChannel, R: Rng + CryptoRng> FancyBinaryConstant for Garbler<C, R, WireMod2> {
+        fn const_zero(&mut self) -> Result<Self::Item, Self::Error> {
+            self.constant(0, 2)
+        }
+
+        fn const_one(&mut self) -> Result<Self::Item, Self::Error> {
+            self.constant(1, 2)
+        }
+    }
+
+    impl<C: AbstractChannel> FancyBinaryConstant for Evaluator<C, WireMod2> {
+        fn const_zero(&mut self) -> Result<Self::Item, Self::Error> {
+            self.constant(0, 2)
+        }
+
+        fn const_one(&mut self) -> Result<Self::Item, Self::Error> {
+            self.constant(1, 2)
+        }
+    }
 
     // This puts the X_0 values into garbler_wires and X_c values into evaluator_wires
     fn encode_field<F: FieldUint, C: AbstractChannel, R: Rng + CryptoRng>(
@@ -4600,6 +5079,106 @@ mod test {
     fn gc_test_bn254_div_int() {
         for _ in 0..TESTRUNS {
             gc_test_div_int::<ark_bn254::Fr>();
+        }
+    }
+
+    /// Referee for [`CleartextBinaryEvaluator`]: the sha256_block_sparse_trace circuit evaluated
+    /// on cleartext wires must agree bit-for-bit with a real garbled execution (WireMod2
+    /// garbler/evaluator pair) of the same circuit on the same inputs. The value-level referee
+    /// against the plain plookup table functions lives in co-builder
+    /// (sha_compression_sparse_trace_tests.rs).
+    #[test]
+    fn gc_sha256_block_sparse_trace_matches_cleartext() {
+        use ark_ff::UniformRand;
+        type F = ark_bn254::Fr;
+        let mut rng = thread_rng();
+
+        // 24 random 32-bit inputs (h_init[0..8] || w_in[0..16]), split into two field summands
+        let values: Vec<u32> = (0..24).map(|_| rng.r#gen()).collect();
+        let x1: Vec<F> = (0..24).map(|_| F::rand(&mut rng)).collect();
+        let x2: Vec<F> = values
+            .iter()
+            .zip(x1.iter())
+            .map(|(v, x1)| F::from(*v) - x1)
+            .collect();
+
+        let (clear_bits, num_ands) =
+            GarbledCircuits::sha256_block_sparse_trace_cleartext::<F>(&x1, &x2).unwrap();
+        assert_eq!(
+            clear_bits.len(),
+            GarbledCircuits::SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS
+        );
+        assert!(num_ands > 0);
+
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        let x1_garbler = x1.clone();
+        let x2_garbler = x2.clone();
+
+        std::thread::spawn(move || {
+            let rng = ChaCha12Rng::from_entropy();
+            let reader = BufReader::new(sender.try_clone().unwrap());
+            let writer = BufWriter::new(sender);
+            let channel_sender = Channel::new(reader, writer);
+
+            let mut garbler = Garbler::<_, _, WireMod2>::new(channel_sender, rng);
+
+            // This is without OT, just a simulation
+            let mut x1_garbler_wires = Vec::new();
+            let mut x2_garbler_wires = Vec::new();
+            for (x1, x2) in x1_garbler.iter().zip(x2_garbler.iter()) {
+                let x1 = encode_field(*x1, &mut garbler);
+                let x2 = encode_field(*x2, &mut garbler);
+                for wire in x1.evaluator_wires.wires().iter() {
+                    garbler.send_wire(wire).unwrap();
+                }
+                for wire in x2.evaluator_wires.wires().iter() {
+                    garbler.send_wire(wire).unwrap();
+                }
+                x1_garbler_wires.extend_from_slice(x1.garbler_wires.wires());
+                x2_garbler_wires.extend_from_slice(x2.garbler_wires.wires());
+            }
+
+            let garble_result = GarbledCircuits::sha256_block_sparse_trace::<_, F>(
+                &mut garbler,
+                &BinaryBundle::new(x1_garbler_wires),
+                &BinaryBundle::new(x2_garbler_wires),
+            )
+            .unwrap();
+
+            // Output
+            garbler.outputs(garble_result.wires()).unwrap();
+        });
+
+        let reader = BufReader::new(receiver.try_clone().unwrap());
+        let writer = BufWriter::new(receiver);
+        let channel_rcv = Channel::new(reader, writer);
+
+        let mut evaluator = Evaluator::<_, WireMod2>::new(channel_rcv);
+
+        // This is without OT, just a simulation
+        let n_bits = F::MODULUS_BIT_SIZE as usize;
+        let mut x1_wires = Vec::with_capacity(24 * n_bits);
+        let mut x2_wires = Vec::with_capacity(24 * n_bits);
+        for _ in 0..24 {
+            for _ in 0..n_bits {
+                x1_wires.push(evaluator.read_wire(2).unwrap());
+            }
+            for _ in 0..n_bits {
+                x2_wires.push(evaluator.read_wire(2).unwrap());
+            }
+        }
+
+        let eval_result = GarbledCircuits::sha256_block_sparse_trace::<_, F>(
+            &mut evaluator,
+            &BinaryBundle::new(x1_wires),
+            &BinaryBundle::new(x2_wires),
+        )
+        .unwrap();
+
+        let result = evaluator.outputs(eval_result.wires()).unwrap().unwrap();
+        assert_eq!(result.len(), clear_bits.len());
+        for (i, (gc_bit, clear_bit)) in result.iter().zip(clear_bits.iter()).enumerate() {
+            assert_eq!(*gc_bit == 1, *clear_bit, "output bit {i} differs");
         }
     }
 }
