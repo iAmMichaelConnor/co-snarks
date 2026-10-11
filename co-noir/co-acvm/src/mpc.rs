@@ -16,12 +16,61 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
-/// Maximum default number of shared lookup indices per batch.
+/// Agree only public configuration before any recursive input can be opened.
+fn agree_recursion_visibility<N: mpc_net::Network>(
+    net: &N,
+    num_parties: usize,
+    reveal: bool,
+) -> eyre::Result<()> {
+    let mut message = b"co-noir-recursion-visibility-v1".to_vec();
+    message.push(u8::from(reveal));
+    for party in 0..num_parties {
+        if party != net.id() {
+            net.send(party, message.clone().into())?;
+        }
+    }
+    let mut all_agree = true;
+    for party in 0..num_parties {
+        if party != net.id() {
+            let received = net.recv(party)?;
+            all_agree &= received.as_ref() == message.as_slice();
+        }
+    }
+    eyre::ensure!(
+        all_agree,
+        "MPC participants disagree on recursive input visibility; no recursive inputs were opened"
+    );
+    Ok(())
+}
+
+/// Default chunk size for the batched lookup read-count construction (shared-index
+/// lookup gates per one-hot-vector batch); see
+/// [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`]. ~1 MB/gate/party
+/// of transient one-hot-vector state was measured on sha256 under REP3, so 4096
+/// caps the pk-gen read-count peak at ~4 GB/party regardless of circuit size —
+/// safe on any host — while any circuit with < 4096 shared lookup gates still runs
+/// in a single batch (identical to the unbounded path). Every comms-bearing driver
+/// (REP3, Shamir) overrides the trait default to this value; single-prover/plain
+/// has no reshares, so batching is irrelevant there and it keeps `None`.
 pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
 
 /// A trait representing the MPC operations required for extending the secret-shared Noir witness in MPC.
 /// The operations are generic over public and private (i.e., secret-shared) inputs.
 pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
+    /// Whether this driver implements the private recursive circuit profile.
+    /// This includes secret accumulator blinding even for public inner inputs.
+    /// Unsupported drivers reject this profile before processing secret values.
+    fn supports_private_recursion() -> bool {
+        false
+    }
+
+    /// Agree the public disclosure policy before examining or opening recursive
+    /// inputs. Custom drivers must implement this explicitly; there is no silent
+    /// success default. This method must never encode any witness-dependent data.
+    fn agree_recursion_input_visibility(&mut self, _reveal: bool) -> eyre::Result<()> {
+        eyre::bail!("This driver does not implement recursive-input visibility agreement")
+    }
+
     type Lookup: LookupTableProvider<F>;
     type ArithmeticShare: Clone;
     type OtherArithmeticShare<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>: Clone;

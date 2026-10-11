@@ -49,6 +49,11 @@ pub fn create_prover_instance<P: CurveGroup>(
         crs,
         polynomials: Polynomials::new(dyadic_circuit_size),
         public_inputs: Vec::with_capacity(circuit.public_inputs.len()),
+        proof_privacy: if circuit.recursion_public_output_indices.is_empty() {
+            co_noir_common::keys::proof_privacy::ProofPrivacy::Standard
+        } else {
+            co_noir_common::keys::proof_privacy::ProofPrivacy::PrivateRecursion
+        },
         circuit_size: dyadic_circuit_size as u32,
         final_active_wire_idx,
         ..Default::default()

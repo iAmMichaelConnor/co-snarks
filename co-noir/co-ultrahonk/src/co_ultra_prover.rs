@@ -71,6 +71,9 @@ impl<
         verifying_key: &VerifyingKeyBarretenberg<C>,
         zk_blinding: Option<&SeededZkBlinding>,
     ) -> HonkProofResult<HonkProof<H::DataType>> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, zk_blinding.is_some())?;
         tracing::trace!("CoUltraHonk prove");
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
@@ -116,6 +119,9 @@ where
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, false)?;
         let mut state = Rep3State::new(net, A2BType::default())?;
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
         let proof = Self::prove_inner(
@@ -149,6 +155,9 @@ where
         verifying_key: &VerifyingKeyBarretenberg<C>,
         zk_blinding: &SeededZkBlinding,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, true)?;
         let mut state = Rep3State::new(net, A2BType::default())?;
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
         let proof = Self::prove_inner(
@@ -179,6 +188,9 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, false)?;
         // init MPC protocol
         let virtual_log_n = if H::USE_PADDING {
             CONST_PROOF_SIZE_LOG_N
@@ -218,6 +230,9 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, false)?;
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
         let proof = Self::prove_inner(
             &(),
@@ -247,6 +262,9 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         verifying_key: &VerifyingKeyBarretenberg<C>,
         zk_blinding: &SeededZkBlinding,
     ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, true)?;
         let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
         let proof = Self::prove_inner(
             &(),
@@ -316,3 +334,7 @@ where
         + num_pairs_sumcheck_virtual_rounds
         + num_zk_randomness
 }
+
+#[cfg(test)]
+#[path = "proof_privacy_tests.rs"]
+mod proof_privacy_tests;
