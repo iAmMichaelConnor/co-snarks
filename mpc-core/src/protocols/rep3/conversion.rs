@@ -942,8 +942,16 @@ where
     let mut x2_x = Vec::with_capacity(input_len);
     let mut x2_y = Vec::with_capacity(input_len);
 
-    let r_x = vec![state.rngs.rand.masking_field_element::<C::BaseField>(); input_len];
-    let r_y = vec![state.rngs.rand.masking_field_element::<C::BaseField>(); input_len];
+    // Each coordinate needs its own mask. Reusing a batch mask lets a party
+    // recover every private point from its messages and one known batch point.
+    let r_x = state
+        .rngs
+        .rand
+        .masking_field_elements_vec::<C::BaseField>(input_len);
+    let r_y = state
+        .rngs
+        .rand
+        .masking_field_elements_vec::<C::BaseField>(input_len);
 
     for (x, r_x, r_y) in izip!(x.iter(), r_x.iter(), r_y.iter()) {
         match state.id {
@@ -1322,3 +1330,7 @@ where
 
     Ok(res)
 }
+
+#[cfg(test)]
+#[path = "point_conversion_mask_tests.rs"]
+mod point_conversion_mask_tests;
