@@ -1,3 +1,4 @@
+use crate::constants::CONST_PROOF_SIZE_LOG_N;
 use crate::polynomials::entities::PRECOMPUTED_ENTITIES_SIZE;
 use ark_ec::AffineRepr;
 use ark_ec::{CurveGroup, pairing::Pairing};
@@ -87,6 +88,57 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
     const SER_FULL_SIZE: usize = 3 * Self::FIELDSIZE_BYTES as usize
         + PRECOMPUTED_ENTITIES_SIZE * 2 * 2 * Self::FIELDSIZE_BYTES as usize; // all elements are serialized as ScalarField elements
     const SER_FULL_SIZE_KECCAK: usize = 3 * 32 + PRECOMPUTED_ENTITIES_SIZE * 2 * 32; // all elements are serialized as U256 elements
+
+    /// Validate an untrusted VK's `log_circuit_size`. It must be at least 1 (no circuit has zero
+    /// rows) and at most `CONST_PROOF_SIZE_LOG_N` (the max the constant-size proof format supports).
+    /// A zero would drive the verifier's sumcheck round count to 0 and underflow the Gemini
+    /// fold-commitment loop; an over-large value would mis-size the transcript reads. Mirrors bb
+    /// `1391c49546`, which added the equivalent reject in the UltraKeccak verifier.
+    fn check_log_circuit_size(log_circuit_size: u64) -> HonkProofResult<()> {
+        if log_circuit_size == 0 || log_circuit_size > CONST_PROOF_SIZE_LOG_N as u64 {
+            return Err(HonkProofError::CorruptedKey);
+        }
+        Ok(())
+    }
+
+    /// Validate an untrusted VK's `num_public_inputs` and `pub_inputs_offset`
+    /// against the circuit size implied by the (already-validated)
+    /// `log_circuit_size`. The entire public-input interval must fit within
+    /// the circuit's `2^log_circuit_size` physical rows.
+    /// Left unchecked, a huge `num_public_inputs` drives the oink verifier's
+    /// `Vec::with_capacity(num_public_inputs)` preamble allocation past the
+    /// allocator's capacity-overflow abort, and a huge `pub_inputs_offset`
+    /// overflows the `1 + pub_inputs_offset` addition in
+    /// `compute_public_input_delta` (debug-panics, wraps in release). Call only
+    /// after `check_log_circuit_size` has bounded `log_circuit_size` to
+    /// `[1, CONST_PROOF_SIZE_LOG_N]`, so the shift below cannot overflow.
+    fn check_public_input_bounds(
+        log_circuit_size: u64,
+        num_public_inputs: u64,
+        pub_inputs_offset: u64,
+    ) -> HonkProofResult<()> {
+        let circuit_size = 1u64 << log_circuit_size;
+        // Public inputs occupy [offset, offset + count) in the physical trace.
+        // The disabled rows are already included in both the trace offset and
+        // dyadic size (BB ProverInstance_::compute_dyadic_size). Subtract after
+        // checking the offset, so malformed metadata cannot overflow addition.
+        if pub_inputs_offset > circuit_size || num_public_inputs > circuit_size - pub_inputs_offset
+        {
+            return Err(HonkProofError::CorruptedKey);
+        }
+        Ok(())
+    }
+
+    /// Validate circuit and public-input bounds, including for keys constructed
+    /// directly through the public fields rather than a byte decoder.
+    pub fn validate_metadata(&self) -> HonkProofResult<()> {
+        Self::check_log_circuit_size(self.log_circuit_size)?;
+        Self::check_public_input_bounds(
+            self.log_circuit_size,
+            self.num_public_inputs,
+            self.pub_inputs_offset,
+        )
+    }
 
     pub fn to_field_elements(&self) -> Vec<C::ScalarField> {
         let len = 3 + self.commitments.elements.len() * 2 * C::NUM_BASEFIELD_ELEMENTS;
@@ -217,6 +269,15 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             .copied()
             .unwrap_or(0);
 
+        // Untrusted input: a VK with log_circuit_size = 0 (or out of range) is invalid for any
+        // circuit and, if accepted, drives the verifier's round count to 0 — reject it cleanly
+        // rather than letting a zero round count underflow downstream (mirrors bb `1391c49546`).
+        Self::check_log_circuit_size(log_circuit_size)?;
+        // Untrusted input: bound num_public_inputs / pub_inputs_offset against the
+        // circuit size before they can reach the oink verifier's preamble
+        // allocation or its public-input-delta offset arithmetic.
+        Self::check_public_input_bounds(log_circuit_size, num_public_inputs, pub_inputs_offset)?;
+
         let mut commitments = PrecomputedEntities::default();
 
         for el in commitments.iter_mut() {
@@ -260,14 +321,30 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         // above), so `U256::from_buffer` can never return its length-mismatch
         // `Err` here; `expect` documents that as an invariant, not a fallible
         // parse of attacker-controlled length.
-        let log_circuit_size: u64 = U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let log_circuit_size: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
-        let num_public_inputs: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let num_public_inputs: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
-        let pub_inputs_offset: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let pub_inputs_offset: u64 = U256::from_buffer(&buf[offset..offset + 32])
+            .expect("slice is exactly 32 bytes by construction")[0]
+            .0
+            .as_limbs()[0];
         offset += 32;
+
+        // Untrusted input: reject log_circuit_size = 0 / out of range (mirrors bb `1391c49546`).
+        // The Keccak path did not panic like the field path, but silently accepting a zero round
+        // count is the same soundness/robustness gap.
+        Self::check_log_circuit_size(log_circuit_size)?;
+        // Untrusted input: bound num_public_inputs / pub_inputs_offset against the
+        // circuit size before they can reach the oink verifier's preamble
+        // allocation or its public-input-delta offset arithmetic.
+        Self::check_public_input_bounds(log_circuit_size, num_public_inputs, pub_inputs_offset)?;
 
         let mut commitments = PrecomputedEntities::default();
 
@@ -336,6 +413,7 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
 mod encoding_tests {
     use super::*;
     use ark_bn254::G1Projective;
+    use ark_ff::Field;
 
     #[test]
     fn infinity_commitments_round_trip() {
@@ -364,6 +442,154 @@ mod encoding_tests {
             .expect("serialized infinity commitments must parse");
         assert_eq!(parsed.to_buffer_keccak(), bytes);
     }
+    fn sample_vk() -> VerifyingKeyBarretenberg<G1Projective> {
+        VerifyingKeyBarretenberg {
+            log_circuit_size: 4,
+            num_public_inputs: 8,
+            pub_inputs_offset: 1,
+            commitments: PrecomputedEntities::default(),
+        }
+    }
+
+    fn write_word(bytes: &mut [u8], word: usize, value: &BigUint) {
+        let encoded = value.to_bytes_be();
+        assert!(encoded.len() <= 32);
+        bytes[word * 32..(word + 1) * 32].fill(0);
+        bytes[(word + 1) * 32 - encoded.len()..(word + 1) * 32].copy_from_slice(&encoded);
+    }
+
+    #[test]
+    fn keccak_vk_rejects_noncanonical_coordinate_aliases() {
+        let modulus: BigUint = ark_bn254::Fq::MODULUS.into();
+        // x = q - 1 is a valid boundary coordinate: x^3 + 3 = 2.
+        let boundary = ark_bn254::G1Affine::new_unchecked(
+            -ark_bn254::Fq::from(1u64),
+            ark_bn254::Fq::from(2u64).sqrt().unwrap(),
+        );
+        assert!(boundary.is_on_curve());
+        for point in [
+            ark_bn254::G1Affine::zero(),
+            ark_bn254::G1Affine::generator(),
+            boundary,
+        ] {
+            let mut vk = sample_vk();
+            vk.commitments.elements[0] = point;
+            let canonical = vk.to_buffer_keccak();
+            assert_eq!(
+                VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(&canonical)
+                    .unwrap()
+                    .to_buffer_keccak(),
+                canonical,
+            );
+            for coordinate in 0..2 {
+                let mut alias = canonical.clone();
+                let word = 3 + coordinate;
+                let value = BigUint::from_bytes_be(&alias[word * 32..(word + 1) * 32]);
+                write_word(&mut alias, word, &(value + &modulus));
+                assert!(
+                    matches!(
+                        VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(&alias),
+                        Err(HonkProofError::NonCanonicalFieldEncoding)
+                    ),
+                    "accepted coordinate {coordinate} + fq for point {point:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vk_metadata_normalization_matches_v6_codecs() {
+        // BB FrCodec and U256Codec cast metadata to uint64_t: high limbs are
+        // deliberately normalized away. An exact-v6 CLI differential confirms
+        // that these aliases verify the same unchanged proof in both modes.
+        let vk = sample_vk();
+        for keccak in [false, true] {
+            let canonical = if keccak {
+                vk.to_buffer_keccak()
+            } else {
+                vk.to_buffer()
+            };
+            for header in 0..3 {
+                let mut alias = canonical.clone();
+                let value = BigUint::from_bytes_be(&alias[header * 32..(header + 1) * 32]);
+                write_word(&mut alias, header, &(value + (BigUint::from(1u8) << 64)));
+                let parsed = if keccak {
+                    VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(&alias)
+                } else {
+                    VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&alias)
+                }
+                .unwrap();
+                assert_eq!(parsed.log_circuit_size, vk.log_circuit_size);
+                assert_eq!(parsed.num_public_inputs, vk.num_public_inputs);
+                assert_eq!(parsed.pub_inputs_offset, vk.pub_inputs_offset);
+                let normalized = if keccak {
+                    parsed.to_buffer_keccak()
+                } else {
+                    parsed.to_buffer()
+                };
+                assert_eq!(normalized, canonical);
+            }
+        }
+    }
+
+    #[test]
+    fn vk_public_input_interval_fits_circuit_rows() {
+        // Metadata addresses a contiguous physical block in the trace. The
+        // disabled rows are already included in its offset and dyadic size.
+        for (count, offset, valid) in [
+            (0, 0, true),
+            (0, 16, true),
+            (16, 0, true),
+            (15, 1, true),
+            (1, 15, true),
+            (1, 16, false),
+            (16, 1, false),
+            (9, 8, false),
+            (17, 0, false),
+            (0, 17, false),
+            (u64::MAX, 0, false),
+            (0, u64::MAX, false),
+        ] {
+            let mut vk = sample_vk();
+            vk.num_public_inputs = count;
+            vk.pub_inputs_offset = offset;
+            assert_eq!(
+                vk.validate_metadata().is_ok(),
+                valid,
+                "direct: {count}, {offset}"
+            );
+            assert_eq!(
+                VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&vk.to_buffer()).is_ok(),
+                valid,
+                "Poseidon: {count}, {offset}",
+            );
+            assert_eq!(
+                VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(
+                    &vk.to_buffer_keccak()
+                )
+                .is_ok(),
+                valid,
+                "Keccak: {count}, {offset}",
+            );
+        }
+    }
+    #[test]
+    fn poseidon_vk_outer_field_normalization_matches_v6() {
+        // BB's VK byte reader reduces outer Fr words before FrCodec handles
+        // metadata or coordinate limbs. Its proof/PI byte boundary is stricter;
+        // do not silently apply that different rule to VKs.
+        let modulus: BigUint = ark_bn254::Fr::MODULUS.into();
+        let mut vk = sample_vk();
+        vk.commitments.elements[0] = ark_bn254::G1Affine::generator();
+        let canonical = vk.to_buffer();
+        for word in 0..7 {
+            let mut alias = canonical.clone();
+            let value = BigUint::from_bytes_be(&alias[word * 32..(word + 1) * 32]);
+            write_word(&mut alias, word, &(value + &modulus));
+            let parsed = VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&alias).unwrap();
+            assert_eq!(parsed.to_buffer(), canonical, "outer Fr word {word}");
+        }
+    }
 
     #[test]
     fn exact_v6_vk_fixtures_round_trip() {
@@ -386,6 +612,7 @@ mod encoding_tests {
                 VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&bytes)
             }
             .unwrap_or_else(|error| panic!("{path}: {error}"));
+            parsed.validate_metadata().unwrap();
             let normalized = if keccak {
                 parsed.to_buffer_keccak()
             } else {

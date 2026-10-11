@@ -3146,7 +3146,7 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 }
                 let slices = driver.decompose_arithmetic(
                     T::get_shared(&limb).expect("Checked it is shared"),
-                    56,
+                    70, // five 14-bit chunks, including the high bits of a 68-bit limb
                     14,
                 )?;
                 for (val, (i, mask)) in slices.into_iter().zip(sublimb_masks.iter().enumerate()) {
@@ -5366,3 +5366,7 @@ mod plookup_table_regression_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "private_range_tests.rs"]
+pub(crate) mod private_range_tests;
