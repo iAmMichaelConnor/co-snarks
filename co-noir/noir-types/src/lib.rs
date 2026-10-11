@@ -577,8 +577,14 @@ pub fn witness_from_reader(reader: impl io::Read) -> io::Result<Vec<ark_bn254::F
     Ok(witness)
 }
 
-pub fn program_artifact_from_reader(reader: impl io::Read) -> io::Result<ProgramArtifact> {
-    Ok(serde_json::from_reader::<_, ProgramArtifact>(reader)?)
+pub fn program_artifact_from_reader(mut reader: impl io::Read) -> io::Result<ProgramArtifact> {
+    // Buffer the whole artifact before parsing: `serde_json::from_reader` pulls bytes one at a
+    // time from the reader, so an unbuffered reader (e.g. a bare `File`, as passed by the CLI
+    // binaries) costs one read syscall per byte (~1 MB/s). Reading to a Vec first and parsing
+    // with `from_slice` yields the identical result at memory speed.
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(serde_json::from_slice::<ProgramArtifact>(&bytes)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
