@@ -96,6 +96,7 @@ impl<F: PrimeField> FieldCT<F> {
             let right = T::get_public(&other.get_value(builder, driver))
                 .expect("Constant should be public");
             builder.assert_if_has_witness(left == right);
+            return;
         }
         if self.is_constant() {
             let left =

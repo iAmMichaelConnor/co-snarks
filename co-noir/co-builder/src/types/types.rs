@@ -7,11 +7,10 @@ use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
 use co_noir_common::constants::{
-    NUM_SELECTORS, NUM_WIRES, NUM_ZERO_ROWS, PAIRING_POINT_ACCUMULATOR_SIZE,
+    NUM_SELECTORS, NUM_WIRES, NUM_ZERO_ROWS, PAIRING_POINT_ACCUMULATOR_SIZE, TRACE_OFFSET,
 };
 use co_noir_common::honk_curve::HonkCurve;
-use co_noir_common::polynomials::entities::{PrecomputedEntities, ProverWitnessEntities};
-use co_noir_common::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK;
+use co_noir_common::polynomials::entities::ProverWitnessEntities;
 use num_bigint::BigUint;
 use std::array;
 use std::cmp::Ordering;
@@ -248,18 +247,32 @@ impl<F: PrimeField> Default for UltraTraceBlocks<UltraTraceBlock<F>> {
 
 impl<F: PrimeField> UltraTraceBlocks<UltraTraceBlock<F>> {
     pub fn compute_offsets(&mut self) {
-        // Rows [0, NUM_DISABLED_ROWS_IN_SUMCHECK) are disabled in Sumcheck (ZK masking/shift
-        // compatibility), and row 0 is additionally the unused zero row, so the trace proper
-        // starts at NUM_DISABLED_ROWS_IN_SUMCHECK + NUM_ZERO_ROWS. This is unconditional, even
-        // without ZK, to keep the row layout identical across flavors.
-        let mut offset = NUM_DISABLED_ROWS_IN_SUMCHECK + NUM_ZERO_ROWS as u32;
+        // The trace content starts after the disabled/masking head rows (TRACE_OFFSET) and the zero
+        // row that enables shifts.
+        let mut offset = (TRACE_OFFSET + NUM_ZERO_ROWS) as u32;
         for block in self.get_mut() {
             block.trace_offset = offset;
             offset += block.len() as u32;
         }
     }
 
-    pub(crate) fn get_total_content_size(&self) -> usize {
+    /// The trace offset of the lookup block, i.e. the row at which the lookup table data is placed.
+    /// Computed from the block sizes alone so that it is correct even before `compute_offsets` has
+    /// been called (must stay consistent with the block order in `compute_offsets`).
+    pub fn get_lookup_block_offset(&self) -> usize {
+        let mut offset = TRACE_OFFSET + NUM_ZERO_ROWS;
+        for block in self.get() {
+            if std::ptr::eq(block, &self.lookup) {
+                break;
+            }
+            offset += block.len();
+        }
+        offset
+    }
+
+    /// Total number of populated trace rows across all blocks (excludes the trace
+    /// offset head rows and the zero row).
+    pub fn get_total_content_size(&self) -> usize {
         let mut total_size = 0;
         for block in self.get() {
             total_size += block.len();
@@ -273,20 +286,23 @@ impl<F: PrimeField> UltraTraceBlock<F> {
     const W_R: usize = ProverWitnessEntities::<F>::W_R;
     const W_O: usize = ProverWitnessEntities::<F>::W_O;
     const W_4: usize = ProverWitnessEntities::<F>::W_4;
-    const Q_M: usize = PrecomputedEntities::<F>::Q_M;
-    const Q_C: usize = PrecomputedEntities::<F>::Q_C;
-    const Q_1: usize = PrecomputedEntities::<F>::Q_L;
-    const Q_2: usize = PrecomputedEntities::<F>::Q_R;
-    const Q_3: usize = PrecomputedEntities::<F>::Q_O;
-    const Q_4: usize = PrecomputedEntities::<F>::Q_4;
-    const Q_ARITH: usize = PrecomputedEntities::<F>::Q_ARITH;
-    const Q_DELTA_RANGE: usize = PrecomputedEntities::<F>::Q_DELTA_RANGE;
-    const Q_ELLIPTIC: usize = PrecomputedEntities::<F>::Q_ELLIPTIC;
-    const Q_MEMORY: usize = PrecomputedEntities::<F>::Q_MEMORY;
-    const Q_NNF: usize = PrecomputedEntities::<F>::Q_NNF;
-    const Q_LOOKUP_TYPE: usize = PrecomputedEntities::<F>::Q_LOOKUP;
-    const Q_POSEIDON2_EXTERNAL: usize = PrecomputedEntities::<F>::Q_POSEIDON2_EXTERNAL;
-    const Q_POSEIDON2_INTERNAL: usize = PrecomputedEntities::<F>::Q_POSEIDON2_INTERNAL;
+    // Block-local selector column indices. This order must match the order of the mutable
+    // references returned by `PrecomputedEntities::get_selectors_mut`, which is how the
+    // block selectors are copied into the precomputed polynomials of the proving key.
+    const Q_M: usize = 0;
+    const Q_C: usize = 1;
+    const Q_1: usize = 2;
+    const Q_2: usize = 3;
+    const Q_3: usize = 4;
+    const Q_4: usize = 5;
+    const Q_LOOKUP_TYPE: usize = 6;
+    const Q_ARITH: usize = 7;
+    const Q_DELTA_RANGE: usize = 8;
+    const Q_ELLIPTIC: usize = 9;
+    const Q_MEMORY: usize = 10;
+    const Q_NNF: usize = 11;
+    const Q_POSEIDON2_EXTERNAL: usize = 12;
+    const Q_POSEIDON2_INTERNAL: usize = 13;
 
     pub(crate) fn w_l(&mut self) -> &mut Vec<u32> {
         &mut self.wires[Self::W_L]
@@ -588,7 +604,7 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
             driver,
         )?;
         let recursion_separator =
-            transcript.get_challenge("recursion_separator".to_string(), builder, driver)?;
+            transcript.get_short_challenge("recursion_separator".to_string(), builder, driver)?;
         // Save gates using short scalars. We don't apply `bn254_endo_batch_mul` to the vector {1,
         // recursion_separator} directly to avoid edge cases.
         let mut point_to_aggregate =

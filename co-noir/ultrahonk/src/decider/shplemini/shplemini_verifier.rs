@@ -1,6 +1,7 @@
 use super::types::{PolyF, PolyG, PolyGShift};
 use crate::{
     CONST_PROOF_SIZE_LOG_N, NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_EVALUATIONS,
+    NUM_SMALL_IPA_OPENING_CLAIMS,
     decider::{
         decider_verifier::DeciderVerifier,
         types::{ClaimedEvaluations, VerifierCommitments},
@@ -61,7 +62,10 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         virtual_log_n: u32,
         transcript: &mut Transcript<TranscriptFieldType, H>,
     ) -> HonkVerifyResult<Vec<P::Affine>> {
-        let fold_commitments: Vec<_> = (0..virtual_log_n - 1)
+        // saturating_sub: virtual_log_n is >= 1 in practice (the VK loader rejects
+        // log_circuit_size = 0), but guard the subtraction so a stray 0 yields an empty range
+        // rather than an unsigned underflow to u32::MAX.
+        let fold_commitments: Vec<_> = (0..virtual_log_n.saturating_sub(1))
             .map(|i| transcript.receive_point_from_prover::<P>(format!("Gemini:FOLD_{}", i + 1)))
             .collect::<Result<_, _>>()?;
         Ok(fold_commitments)
@@ -528,9 +532,9 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 .inverse()
                 .expect("Non-zero denominator");
 
-            // The prover now honestly computes and sends real (non-zeroed) fold constants for virtual
-            // rounds too, matching the zero-extended `batched_evaluation` seed, so the recursion must
-            // always propagate the genuinely computed value here (no indicator-based freeze).
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
             eval_pos_prev = eval_pos;
             fold_pos_evaluations.push(eval_pos_prev);
         }
@@ -575,9 +579,12 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             commitments.push(commitment);
         }
 
-        // Compute corresponding scalars and the correction to the constant term
-        let mut denominators = [P::ScalarField::zero(); NUM_SMALL_IPA_EVALUATIONS];
-        let mut batching_scalars = [P::ScalarField::zero(); NUM_SMALL_IPA_EVALUATIONS];
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
+        let mut batching_scalars = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
         let subgroup_generator = P::get_subgroup_generator();
 
         // Compute Shplonk denominators and invert them
@@ -589,22 +596,35 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             .inverse()
             .expect("non-zero");
         denominators[2] = denominators[0];
-        denominators[3] = denominators[0];
+        denominators[3] = (*shplonk_evaluation_challenge - P::ScalarField::one())
+            .inverse()
+            .expect("non-zero");
+        denominators[4] = denominators[0];
 
-        // Compute the scalars to be multiplied against the commitments [libra_concatenated], [grand_sum], [grand_sum], and
+        // The evaluations of the five claims; slot 3 is the fixed boundary value A(1) = 0.
+        let claim_evaluations = [
+            libra_evaluations[0],
+            libra_evaluations[1],
+            libra_evaluations[2],
+            P::ScalarField::zero(),
+            libra_evaluations[3],
+        ];
+
+        // Compute the scalars to be multiplied against the commitments [libra_concatenated], [grand_sum], and
         // [libra_quotient]
-        for idx in 0..NUM_SMALL_IPA_EVALUATIONS {
+        for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor =
                 denominators[idx] * shplonk_batching_challenge_powers[2 * virtual_log_n + idx];
             batching_scalars[idx] = -scaling_factor;
-            *constant_term_accumulator += scaling_factor * libra_evaluations[idx];
+            *constant_term_accumulator += scaling_factor * claim_evaluations[idx];
         }
 
-        // To save a scalar mul, add the sum of the batching scalars corresponding to the big sum evaluations
-        scalars.reserve(NUM_SMALL_IPA_EVALUATIONS - 1);
+        // To save scalar muls, group the batching scalars of the claims backed by the grand sum
+        // commitment (A(g*r), A(r), and A(1))
+        scalars.reserve(NUM_LIBRA_COMMITMENTS);
         scalars.push(batching_scalars[0]);
-        scalars.push(batching_scalars[1] + batching_scalars[2]);
-        scalars.push(batching_scalars[3]);
+        scalars.push(batching_scalars[1] + batching_scalars[2] + batching_scalars[3]);
+        scalars.push(batching_scalars[4]);
         Ok(())
     }
 
@@ -742,7 +762,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
 
         // Shplonk evaluation and batching challenges are re-used in SmallSubgroupIPA.
         if has_zk == ZeroKnowledge::Yes {
-            num_powers += NUM_SMALL_IPA_EVALUATIONS;
+            num_powers += NUM_SMALL_IPA_OPENING_CLAIMS;
         }
 
         // if committed_sumcheck {

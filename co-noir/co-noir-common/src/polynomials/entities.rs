@@ -253,62 +253,66 @@ impl<T: Default> ProverWitnessEntities<T> {
 }
 
 impl<T: Default> PrecomputedEntities<T> {
+    // The column order matches the entity order of barretenberg's generated Ultra flavor
+    // (EntityId in ultra_flavor_generated.hpp). It determines the order in which the
+    // precomputed commitments are serialized in the verification key and the order of the
+    // claimed sumcheck evaluations in the proof.
     /// column 0
-    pub const Q_M: usize = 0;
+    const SIGMA_1: usize = 0;
     /// column 1
-    pub const Q_C: usize = 1;
+    const SIGMA_2: usize = 1;
     /// column 2
-    pub const Q_L: usize = 2;
+    const SIGMA_3: usize = 2;
     /// column 3
-    pub const Q_R: usize = 3;
+    const SIGMA_4: usize = 3;
     /// column 4
-    pub const Q_O: usize = 4;
+    const ID_1: usize = 4;
     /// column 5
-    pub const Q_4: usize = 5;
+    const ID_2: usize = 5;
     /// column 6
-    pub const Q_LOOKUP: usize = 6;
+    const ID_3: usize = 6;
     /// column 7
-    pub const Q_ARITH: usize = 7;
+    const ID_4: usize = 7;
     /// column 8
-    pub const Q_DELTA_RANGE: usize = 8;
+    const LAGRANGE_FIRST: usize = 8;
     /// column 9
-    pub const Q_ELLIPTIC: usize = 9;
+    const LAGRANGE_LAST: usize = 9;
     /// column 10
-    pub const Q_MEMORY: usize = 10;
+    pub const Q_LOOKUP: usize = 10;
     /// column 11
-    pub const Q_NNF: usize = 11;
+    const TABLE_1: usize = 11;
     /// column 12
-    pub const Q_POSEIDON2_EXTERNAL: usize = 12;
+    const TABLE_2: usize = 12;
     /// column 13
-    pub const Q_POSEIDON2_INTERNAL: usize = 13;
+    const TABLE_3: usize = 13;
     /// column 14
-    const SIGMA_1: usize = 14;
+    const TABLE_4: usize = 14;
     /// column 15
-    const SIGMA_2: usize = 15;
+    pub const Q_M: usize = 15;
     /// column 16
-    const SIGMA_3: usize = 16;
+    pub const Q_R: usize = 16;
     /// column 17
-    const SIGMA_4: usize = 17;
+    pub const Q_O: usize = 17;
     /// column 18
-    const ID_1: usize = 18;
+    pub const Q_C: usize = 18;
     /// column 19
-    const ID_2: usize = 19;
+    pub const Q_L: usize = 19;
     /// column 20
-    const ID_3: usize = 20;
+    pub const Q_4: usize = 20;
     /// column 21
-    const ID_4: usize = 21;
+    pub const Q_ARITH: usize = 21;
     /// column 22
-    const TABLE_1: usize = 22;
+    pub const Q_DELTA_RANGE: usize = 22;
     /// column 23
-    const TABLE_2: usize = 23;
+    pub const Q_ELLIPTIC: usize = 23;
     /// column 24
-    const TABLE_3: usize = 24;
+    pub const Q_MEMORY: usize = 24;
     /// column 25
-    const TABLE_4: usize = 25;
+    pub const Q_NNF: usize = 25;
     /// column 26
-    const LAGRANGE_FIRST: usize = 26;
+    pub const Q_POSEIDON2_EXTERNAL: usize = 26;
     /// column 27
-    const LAGRANGE_LAST: usize = 27;
+    pub const Q_POSEIDON2_INTERNAL: usize = 27;
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.elements.iter()
@@ -322,8 +326,30 @@ impl<T: Default> PrecomputedEntities<T> {
         &self.elements[Self::TABLE_1..=Self::TABLE_4]
     }
 
-    pub fn get_selectors_mut(&mut self) -> &mut [T] {
-        &mut self.elements[Self::Q_M..=Self::Q_POSEIDON2_INTERNAL]
+    /// Returns mutable references to the selector columns in the order in which they are
+    /// stored in the execution trace blocks (see [`UltraTraceBlock`]'s selector accessors):
+    /// q_m, q_c, q_l, q_r, q_o, q_4, q_lookup, q_arith, q_delta_range, q_elliptic, q_memory,
+    /// q_nnf, q_poseidon2_external, q_poseidon2_internal.
+    /// Note that this is *not* the entity (column) order of the selectors.
+    pub fn get_selectors_mut(&mut self) -> [&mut T; 14] {
+        self.elements
+            .get_disjoint_mut([
+                Self::Q_M,
+                Self::Q_C,
+                Self::Q_L,
+                Self::Q_R,
+                Self::Q_O,
+                Self::Q_4,
+                Self::Q_LOOKUP,
+                Self::Q_ARITH,
+                Self::Q_DELTA_RANGE,
+                Self::Q_ELLIPTIC,
+                Self::Q_MEMORY,
+                Self::Q_NNF,
+                Self::Q_POSEIDON2_EXTERNAL,
+                Self::Q_POSEIDON2_INTERNAL,
+            ])
+            .expect("selector indices are disjoint and in bounds")
     }
 
     pub fn get_sigmas_mut(&mut self) -> &mut [T] {
@@ -789,5 +815,86 @@ impl<T: Default> ShiftedWitnessEntities<T> {
 
     pub fn z_perm_mut(&mut self) -> &mut T {
         &mut self.elements[Self::Z_PERM]
+    }
+}
+
+#[cfg(test)]
+mod entity_order_lock {
+    //! Locks co-noir's entity column order against bb's `EntityId` enum,
+    //! transcribed by hand from
+    //! `barretenberg/cpp/src/barretenberg/flavor/generated/ultra_flavor_generated.hpp`
+    //! (the generated Ultra flavor, whose source of truth is
+    //! `scripts/flavor-codegen/src/flavors/ultra.ts`). This order defines the
+    //! serialization order of the VK's precomputed commitments and of the
+    //! claimed sumcheck evaluations in the proof; an accidental struct/const
+    //! reorder here silently breaks byte-parity with bb. The test fails
+    //! locally without bb installed — today only a live bb cross-check would
+    //! notice such a reorder.
+    use super::*;
+
+    // bb EntityId global layout is [precomputed(0..28) | witness(28..36) | shifted(36..41)].
+    // Each co-noir struct indexes from 0 within its own array, so the witness/shifted
+    // expectations below are bb's global index minus the struct's base offset.
+    type P<T> = PrecomputedEntities<T>;
+    type W<T> = WitnessEntities<T>;
+    type S<T> = ShiftedWitnessEntities<T>;
+
+    #[test]
+    fn precomputed_entity_order_matches_bb() {
+        // bb EntityId 0..=27
+        assert_eq!(P::<()>::SIGMA_1, 0);
+        assert_eq!(P::<()>::SIGMA_2, 1);
+        assert_eq!(P::<()>::SIGMA_3, 2);
+        assert_eq!(P::<()>::SIGMA_4, 3);
+        assert_eq!(P::<()>::ID_1, 4);
+        assert_eq!(P::<()>::ID_2, 5);
+        assert_eq!(P::<()>::ID_3, 6);
+        assert_eq!(P::<()>::ID_4, 7);
+        assert_eq!(P::<()>::LAGRANGE_FIRST, 8);
+        assert_eq!(P::<()>::LAGRANGE_LAST, 9);
+        assert_eq!(P::<()>::Q_LOOKUP, 10);
+        assert_eq!(P::<()>::TABLE_1, 11);
+        assert_eq!(P::<()>::TABLE_2, 12);
+        assert_eq!(P::<()>::TABLE_3, 13);
+        assert_eq!(P::<()>::TABLE_4, 14);
+        assert_eq!(P::<()>::Q_M, 15);
+        assert_eq!(P::<()>::Q_R, 16);
+        assert_eq!(P::<()>::Q_O, 17);
+        assert_eq!(P::<()>::Q_C, 18);
+        assert_eq!(P::<()>::Q_L, 19);
+        assert_eq!(P::<()>::Q_4, 20);
+        assert_eq!(P::<()>::Q_ARITH, 21);
+        assert_eq!(P::<()>::Q_DELTA_RANGE, 22);
+        assert_eq!(P::<()>::Q_ELLIPTIC, 23);
+        assert_eq!(P::<()>::Q_MEMORY, 24);
+        assert_eq!(P::<()>::Q_NNF, 25);
+        assert_eq!(P::<()>::Q_POSEIDON2_EXTERNAL, 26);
+        assert_eq!(P::<()>::Q_POSEIDON2_INTERNAL, 27);
+        assert_eq!(PRECOMPUTED_ENTITIES_SIZE, 28);
+    }
+
+    #[test]
+    fn witness_entity_order_matches_bb() {
+        // bb EntityId 28..=35, struct-local 0..=7
+        assert_eq!(W::<()>::W_L, 0);
+        assert_eq!(W::<()>::W_R, 1);
+        assert_eq!(W::<()>::W_O, 2);
+        assert_eq!(W::<()>::W_4, 3);
+        assert_eq!(W::<()>::Z_PERM, 4);
+        assert_eq!(W::<()>::LOOKUP_INVERSES, 5);
+        assert_eq!(W::<()>::LOOKUP_READ_COUNTS, 6);
+        assert_eq!(W::<()>::LOOKUP_READ_TAGS, 7);
+        assert_eq!(WITNESS_ENTITIES_SIZE, 8);
+    }
+
+    #[test]
+    fn shifted_entity_order_matches_bb() {
+        // bb EntityId 36..=40, struct-local 0..=4 (the shifts of w_l, w_r, w_o, w_4, z_perm)
+        assert_eq!(S::<()>::W_L, 0);
+        assert_eq!(S::<()>::W_R, 1);
+        assert_eq!(S::<()>::W_O, 2);
+        assert_eq!(S::<()>::W_4, 3);
+        assert_eq!(S::<()>::Z_PERM, 4);
+        assert_eq!(SHIFTED_WITNESS_ENTITIES_SIZE, 5);
     }
 }

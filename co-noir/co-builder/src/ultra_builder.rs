@@ -38,13 +38,13 @@ use co_acvm::Rep3AcvmSolver;
 use co_acvm::ShamirAcvmSolver;
 use co_acvm::{PlainAcvmSolver, mpc::NoirWitnessExtensionProtocol};
 use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUTS_SIZE};
+use co_noir_common::constants::{NUM_ZERO_ROWS, TRACE_OFFSET};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::honk_proof::{HonkProofResult, TranscriptFieldType};
 use co_noir_common::keys::plain_proving_key::PlainProvingKey;
 use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
 use co_noir_common::polynomials::entities::PrecomputedEntities;
-use co_noir_common::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK;
 use co_noir_common::utils::Utils;
 use itertools::izip;
 use mpc_core::gadgets::poseidon2::POSEIDON2_BN254_T4_PARAMS;
@@ -195,6 +195,8 @@ pub struct GenericUltraCircuitBuilder<
     pub(crate) memory_read_records: Vec<u32>,
     // Stores gate index of RAM writes (required by proving key)
     pub(crate) memory_write_records: Vec<u32>,
+    /// Memory-block-relative table/read rows whose w_4 is filled after ROM challenges.
+    pub rom_logup_records: Vec<u32>,
     // Stores gate index where Read/Write type is shared
     pub memory_records_shared: BTreeMap<u32, T::AcvmType>, // order does not matter
     pub is_write_vk_mode: bool,
@@ -1234,6 +1236,11 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         value_witness: u32,
     ) {
         assert!(self.rom_arrays.len() > rom_id);
+        assert!(
+            self.rom_arrays[rom_id].records.is_empty() || self.rom_arrays[rom_id].use_logup,
+            "Cannot mix single-value and pair ROM operations"
+        );
+        self.rom_arrays[rom_id].use_logup = true;
         let index_witness = if index_value == 0 {
             self.zero_idx
         } else {
@@ -1259,13 +1266,14 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             value_column1_witness: value_witness,
             value_column2_witness: self.zero_idx,
             index: P::ScalarField::from(index_value as u64).into(),
+            is_read: false,
             record_witness: 0,
             gate_index: 0,
         };
 
         self.rom_arrays[rom_id].state[index_value][0] = value_witness;
         self.rom_arrays[rom_id].state[index_value][1] = self.zero_idx;
-        self.create_rom_gate(&mut new_record);
+        self.create_rom_logup_gate(&mut new_record, rom_id);
         self.rom_arrays[rom_id].records.push(new_record);
     }
 
@@ -1276,6 +1284,10 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         value_witnesses: [u32; 2],
     ) {
         assert!(self.rom_arrays.len() > rom_id);
+        assert!(
+            !self.rom_arrays[rom_id].use_logup,
+            "Cannot mix pair and single-value ROM operations"
+        );
         let index_witness = self.put_constant_variable(P::ScalarField::from(index_value as u64));
 
         assert!(self.rom_arrays[rom_id].state.len() > index_value);
@@ -1286,6 +1298,7 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             value_column1_witness: value_witnesses[0],
             value_column2_witness: value_witnesses[1],
             index: P::ScalarField::from(index_value as u32).into(),
+            is_read: false,
             record_witness: 0,
             gate_index: 0,
         };
@@ -1362,6 +1375,31 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.num_gates += 1;
     }
 
+    fn create_rom_logup_gate(&mut self, record: &mut RomRecord<T::AcvmType>, rom_id: usize) {
+        record.record_witness = self.add_variable(T::public_zero());
+        // Initialize every selector, then enable only the v6 ROM LogUp pattern.
+        self.apply_memory_selectors(MemorySelectors::MemNone);
+        let row = self.blocks.memory.q_memory().len() - 1;
+        self.blocks.memory.q_memory()[row] = P::ScalarField::one();
+        if record.is_read {
+            self.blocks.memory.q_4()[row] = P::ScalarField::one();
+        } else {
+            self.blocks.memory.q_2()[row] = P::ScalarField::one();
+        }
+        // Array identity is committed by the VK, not supplied by the prover.
+        self.blocks.memory.q_c()[row] = P::ScalarField::from(rom_id as u64);
+        self.blocks.memory.populate_wires(
+            record.index_witness,
+            record.value_column1_witness,
+            record.value_column2_witness,
+            record.record_witness,
+        );
+        record.gate_index = row;
+        self.rom_logup_records
+            .push(u32::try_from(row).expect("ROM gate index exceeds u32"));
+        self.num_gates += 1;
+    }
+
     fn create_ram_gate<U: Clone>(&mut self, record: &mut RamRecord<U>) {
         // Record wire value can't yet be computed (uses randomnes generated during proof construction).
         // However it needs a distinct witness index,
@@ -1392,6 +1430,10 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         driver: &mut T,
     ) -> eyre::Result<u32> {
         assert!(self.rom_arrays.len() > rom_id);
+        assert!(
+            self.rom_arrays[rom_id].use_logup,
+            "Single-value ROM read requires single-value initialization"
+        );
         let val = self.get_variable(index_witness as usize);
 
         if !T::is_shared(&val) {
@@ -1404,14 +1446,33 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             assert!(self.rom_arrays[rom_id].state[index][0] != Self::UNINITIALIZED_MEMORY_RECORD);
         }
 
-        let fields = self.rom_arrays[rom_id]
-            .state
-            .iter()
-            .map(|x| self.get_variable(x[0] as usize))
-            .collect();
-
-        let lut = T::init_lut_by_acvm_type(driver, fields);
-        let value = T::read_lut_by_acvm_type(driver, val.to_owned(), &lut)?;
+        let value = if let Some(public_index) = T::get_public(&val) {
+            let index: BigUint = public_index.into();
+            let index = usize::try_from(index).expect("ROM index fits usize");
+            self.get_variable(self.rom_arrays[rom_id].state[index][0] as usize)
+        } else {
+            // All values must exist before a shared-index read; selecting an uninitialized
+            // cell cannot be handled by revealing which secret index was requested.
+            assert!(
+                self.rom_arrays[rom_id]
+                    .state
+                    .iter()
+                    .all(|cell| cell[0] != Self::UNINITIALIZED_MEMORY_RECORD)
+            );
+            let fields: Vec<_> = self.rom_arrays[rom_id]
+                .state
+                .iter()
+                .map(|x| self.get_variable(x[0] as usize))
+                .collect();
+            // The generic secret-index LUT assumes at least one index bit. A singleton
+            // has only one valid value; the LogUp relation still binds the actual index.
+            if fields.len() == 1 {
+                fields[0].clone()
+            } else {
+                let lut = T::init_lut_by_acvm_type(driver, fields);
+                T::read_lut_by_acvm_type(driver, val.to_owned(), &lut)?
+            }
+        };
 
         let value_witness = self.add_variable(value);
 
@@ -1420,10 +1481,11 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             value_column1_witness: value_witness,
             value_column2_witness: self.zero_idx,
             index: val,
+            is_read: true,
             record_witness: 0,
             gate_index: 0,
         };
-        self.create_rom_gate(&mut new_record);
+        self.create_rom_logup_gate(&mut new_record, rom_id);
         self.rom_arrays[rom_id].records.push(new_record);
 
         // create_read_gate
@@ -1437,6 +1499,10 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         driver: &mut T,
     ) -> eyre::Result<[u32; 2]> {
         assert!(self.rom_arrays.len() > rom_id);
+        assert!(
+            !self.rom_arrays[rom_id].use_logup,
+            "Cannot mix pair and single-value ROM operations"
+        );
         let val = self.get_variable(index_witness as usize);
 
         if !T::is_shared(&val) {
@@ -1475,6 +1541,7 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             value_column1_witness: value_witness1,
             value_column2_witness: value_witness2,
             index: val,
+            is_read: true,
             record_witness: 0,
             gate_index: 0,
         };
@@ -1905,7 +1972,11 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
 
     fn process_rom_arrays(&mut self, driver: &mut T) -> eyre::Result<()> {
         for i in 0..self.rom_arrays.len() {
-            self.process_rom_array(i, driver)?;
+            if self.rom_arrays[i].use_logup {
+                self.process_rom_logup_array(i, driver)?;
+            } else {
+                self.process_rom_array(i, driver)?;
+            }
         }
         Ok(())
     }
@@ -1949,16 +2020,33 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 value_column1_witness: x.value_column1_witness,
                 value_column2_witness: x.value_column2_witness,
                 index: T::get_public(&x.index).expect("Already checked it is public"),
+                is_read: false,
                 record_witness: x.record_witness,
                 gate_index: x.gate_index,
             })
             .collect();
         records.sort();
-        for record in records {
+        // The index-delta sub-relation has roots {0,-1} in the field, so a sorted chain starting
+        // at p-1 satisfies the delta=1 check when transitioning to 0. Pin the chain at both ends
+        // (first sorted index to the constant zero, last to the constant N-1) so every sorted
+        // index is symbolically bounded in [0, N-1]. put_constant_variable caches by value, so in
+        // the typical case no extra gate is emitted; the pin is enforced through the copy
+        // constraint to the cached fix_witness gate.
+        let num_records = records.len();
+        let last_index_value = self.rom_arrays[rom_id].state.len() as u64 - 1;
+        for (i, record) in records.into_iter().enumerate() {
             let index = record.index;
             let value1 = self.get_variable(record.value_column1_witness.try_into().unwrap());
             let value2 = self.get_variable(record.value_column2_witness.try_into().unwrap());
-            let index_witness = self.add_variable(T::AcvmType::from(index));
+            let index_witness = if i == 0 {
+                // Start-of-chain pin: bound to the circuit's constant zero.
+                self.zero_idx
+            } else if i == num_records - 1 {
+                // End-of-chain pin: bound to the circuit constant N-1 via copy constraint.
+                self.put_constant_variable(P::ScalarField::from(last_index_value))
+            } else {
+                self.add_variable(T::AcvmType::from(index))
+            };
             let value1_witness = self.add_variable(value1);
             let value2_witness = self.add_variable(value2);
             let mut sorted_record = RomRecord::<T::AcvmType> {
@@ -1966,6 +2054,7 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 value_column1_witness: value1_witness,
                 value_column2_witness: value2_witness,
                 index: index.into(),
+                is_read: false,
                 record_witness: 0,
                 gate_index: 0,
             };
@@ -2019,8 +2108,24 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
 
         let sorted = T::sort_vec_by(driver, &key, inputs, 32)?;
         let records = self.rom_arrays[rom_id].records.clone();
-        for (record, index, col1, col2) in izip!(records, &sorted[0], &sorted[1], &sorted[2]) {
-            let index_witness = self.add_variable(index.clone().into());
+        // Pin the sorted chain at both ends (see process_rom_array_public_inner). Every ROM cell
+        // is force-initialized before processing, so the first sorted index is structurally 0 and
+        // the last is N-1 even when the indices are shared — the pins are public constants and
+        // leak nothing.
+        let num_records = records.len();
+        let last_index_value = self.rom_arrays[rom_id].state.len() as u64 - 1;
+        for (i, (record, index, col1, col2)) in
+            izip!(records, &sorted[0], &sorted[1], &sorted[2]).enumerate()
+        {
+            let index_witness = if i == 0 {
+                // Start-of-chain pin: bound to the circuit's constant zero.
+                self.zero_idx
+            } else if i == num_records - 1 {
+                // End-of-chain pin: bound to the circuit constant N-1 via copy constraint.
+                self.put_constant_variable(P::ScalarField::from(last_index_value))
+            } else {
+                self.add_variable(index.clone().into())
+            };
             let value1_witness = self.add_variable(col1.clone().into());
             let value2_witness = self.add_variable(col2.clone().into());
             let mut sorted_record = RomRecord::<T::AcvmType> {
@@ -2028,6 +2133,7 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 value_column1_witness: value1_witness,
                 value_column2_witness: value2_witness,
                 index: index.clone().into(),
+                is_read: false,
                 record_witness: 0,
                 gate_index: 0,
             };
@@ -2038,6 +2144,58 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             self.memory_read_records
                 .push(sorted_record.gate_index as u32);
             self.memory_read_records.push(record.gate_index as u32);
+        }
+        Ok(())
+    }
+
+    fn process_rom_logup_array(&mut self, rom_id: usize, driver: &mut T) -> eyre::Result<()> {
+        let rom = &self.rom_arrays[rom_id];
+        assert!(rom.use_logup);
+        assert!(
+            rom.state
+                .iter()
+                .all(|cell| cell[0] != Self::UNINITIALIZED_MEMORY_RECORD),
+            "Every ROM cell must be initialized exactly once"
+        );
+        let len = rom.state.len();
+        let mut table_rows = vec![None; len];
+        let mut counts = vec![T::public_zero(); len];
+        let mut shared_indices = Vec::new();
+        for record in &rom.records {
+            if !record.is_read {
+                // Initialization indices are public circuit constants. Never index this
+                // host vector with a private read index.
+                let index: BigUint = T::get_public(&record.index)
+                    .expect("ROM table indices are public")
+                    .into();
+                let index = usize::try_from(index).expect("ROM table index exceeds usize");
+                assert!(
+                    table_rows[index].replace(record.gate_index).is_none(),
+                    "Duplicate ROM table row"
+                );
+            } else if let Some(index) = T::get_public(&record.index) {
+                let index: BigUint = index.into();
+                let index = usize::try_from(index).expect("ROM read index exceeds usize");
+                assert!(index < len, "ROM read out of bounds");
+                driver.add_assign_with_public(P::ScalarField::one(), &mut counts[index]);
+            } else if len == 1 {
+                // Every valid singleton read addresses index zero. The relation, rather
+                // than a secret-dependent host branch, rejects an invalid read index.
+                driver.add_assign_with_public(P::ScalarField::one(), &mut counts[0]);
+            } else {
+                shared_indices.push(T::get_shared(&record.index).expect("Shared index checked"));
+            }
+        }
+        for index in shared_indices {
+            let one_hot = driver.one_hot_vector_from_shared_index(index, len)?;
+            eyre::ensure!(one_hot.len() >= len, "ROM one-hot vector is too short");
+            for (count, bit) in counts.iter_mut().zip(one_hot) {
+                driver.add_assign(count, T::AcvmType::from(bit));
+            }
+        }
+        for (row, count) in table_rows.into_iter().zip(counts) {
+            let count_witness = self.add_variable(count);
+            self.blocks.memory.w_o()[row.expect("Every ROM cell has a table row")] = count_witness;
         }
         Ok(())
     }
@@ -2130,7 +2288,15 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         for (i, record) in records.into_iter().enumerate() {
             let index = record.index;
             let value = self.get_variable(record.value_witness.try_into().unwrap());
-            let index_witness = self.add_variable(T::AcvmType::from(index));
+            // The index-delta sub-relation has roots {0,-1} in the field, so an unpinned sorted
+            // chain could start at p-1 and still satisfy the delta=1 check when transitioning to
+            // 0. Pin the first sorted gate's index witness to the constant zero (copy-constrained
+            // through its fix_witness gate) so the chain is bound to start at 0.
+            let index_witness = if i == 0 {
+                self.zero_idx
+            } else {
+                self.add_variable(T::AcvmType::from(index))
+            };
 
             let timestamp_witness =
                 self.add_variable(T::AcvmType::from(P::ScalarField::from(record.timestamp)));
@@ -2277,7 +2443,14 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         for (i, (record, index, value, stamp, access_type)) in
             izip!(records, &sorted[0], &sorted[1], &sorted[2], &sorted[3]).enumerate()
         {
-            let index_witness = self.add_variable(index.clone().into());
+            // Pin the first sorted gate's index witness to the constant zero (see
+            // process_ram_array_public_inner); RAM cell 0 is always initialized, so the first
+            // sorted index is structurally 0 even when shared — the pin leaks nothing.
+            let index_witness = if i == 0 {
+                self.zero_idx
+            } else {
+                self.add_variable(index.clone().into())
+            };
             let timestamp_witness = self.add_variable(stamp.clone().into());
             let value_witness = self.add_variable(value.clone().into());
             let mut sorted_record = RamRecord::<T::AcvmType> {
@@ -2604,21 +2777,16 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
     }
 
     pub fn compute_dyadic_size(&self) -> usize {
-        // For the lookup argument the circuit size must be at least as large as the sum of all
-        // tables used. The table polynomials are written starting at `blocks.lookup.trace_offset`
-        // (i.e. after the disabled head rows and the pub_inputs block), so that gap must be
-        // accounted for here too, or the trace can end up too small to hold the tables.
-        let min_size_due_to_lookups = self.blocks.get_pub_inputs().len() + self.get_tables_size();
+        // For the lookup argument the circuit size must be at least as large as the sum of all tables
+        // used. The table data is placed at the lookup block's trace offset.
+        let tables_size = self.get_tables_size();
+        let tables_end = self.blocks.get_lookup_block_offset() + tables_size;
 
-        // minimum size of execution trace due to everything else
-        let min_size_of_execution_trace = self.blocks.get_total_content_size();
+        // Minimum size of the execution trace due to everything else: the disabled/masking head rows,
+        // the zero row enabling shifts, and the content of all trace blocks.
+        let trace_end = TRACE_OFFSET + NUM_ZERO_ROWS + self.blocks.get_total_content_size();
 
-        // The number of gates is the maximum required by the lookup argument or everything else, plus an optional zero row
-        // to allow for shifts.
-        let num_zero_rows = 1;
-        let total_num_gates = NUM_DISABLED_ROWS_IN_SUMCHECK as usize
-            + num_zero_rows
-            + std::cmp::max(min_size_due_to_lookups, min_size_of_execution_trace);
+        let total_num_gates = std::cmp::max(tables_end, trace_end);
 
         // Next power of 2 (dyadic circuit size)
         Self::get_circuit_subgroup_size(total_num_gates)
@@ -4020,6 +4188,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             cached_partial_non_native_field_multiplications: Vec::new(),
             memory_read_records: Vec::new(),
             memory_write_records: Vec::new(),
+            rom_logup_records: Vec::new(),
             memory_records_shared: BTreeMap::new(),
             current_tag: 0,
             is_write_vk_mode: true,
@@ -4136,6 +4305,8 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             // Gates added after first call to finalize will not be processed since finalization is only performed once
             tracing::warn!("WARNING: Redundant call to finalize_circuit(). Is this intentional?");
         } else {
+            // Note: barretenberg no longer adds dummy "ensure non-zero" gates; commitments to
+            // all-zero polynomials are simply points at infinity.
             self.process_non_native_field_multiplications();
             self.process_rom_arrays(driver)?;
             self.process_ram_arrays(driver)?;
@@ -4315,9 +4486,10 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
         let len = self.lookup_tables.len();
         if index == len {
-            // Table doesn't exist! So try to create it.
+            // Table doesn't exist! So try to create it. Indices start at 1 so that the relation
+            // batched term always contains at least beta cubed.
             self.lookup_tables
-                .push(PlookupBasicTable::create_basic_table(id, len));
+                .push(PlookupBasicTable::create_basic_table(id, len + 1));
             self.lookup_tables.last_mut().unwrap()
         } else {
             &mut self.lookup_tables[index]
@@ -4952,5 +5124,245 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         b.assert_equal(&b_accumulator, self, driver);
 
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod rom_ram_pinning_tests {
+    //! Tests for ROM/RAM sorted-index chain pinning (bb PR #29).
+    //! The index-delta sub-relation `Δ² + Δ = 0` accepts `Δ ∈ {0, -1}`, so an
+    //! unpinned sorted memory-index chain could start at the field value
+    //! `p - 1` and wrap to `0` while still satisfying the delta check —
+    //! encoding an out-of-range access at the phantom index `p - 1`. The fix
+    //! pins the FIRST sorted index witness to the copy-constrained constant
+    //! `zero_idx` instead of a free `add_variable(0)`, keeping the chain bound
+    //! to `[0, N-1]`. These tests assert that structural pin, mirroring bb's
+    //! `EXPECT_EQ(sorted_0_idx_w, zero_idx())` in `rom_ram.test.cpp`; if it is
+    //! ever reverted the first sorted gate would carry a free witness and they
+    //! fail.
+    use super::*;
+    use ark_ff::{One, Zero};
+    use co_noir_common::types::Bn254G1;
+
+    type Fr = ark_bn254::Fr;
+
+    /// The first sorted ROM consistency gate must use `zero_idx` as its index
+    /// wire (start-of-chain pin).
+    #[test]
+    fn rom_first_sorted_index_pinned_to_zero() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut b = UltraCircuitBuilder::<Bn254G1>::init(0, Vec::new(), Vec::new(), false);
+
+        // ROM of size 3 holding [10, 20, 30].
+        let rom = b.create_rom_array(3);
+        for (i, v) in [10u64, 20, 30].into_iter().enumerate() {
+            let w = b.add_variable(Fr::from(v));
+            b.set_rom_element_pair(rom, i, [w, b.zero_idx]);
+        }
+        // A read via a variable (non-constant) index.
+        let idx = b.add_variable(Fr::from(0u64));
+        let _ = b.read_rom_array_pair(rom, idx, &mut driver).unwrap();
+
+        b.process_rom_arrays(&mut driver).unwrap();
+
+        // RomConsistencyCheck selectors: q_1 = q_2 = 1, q_3 = 0, q_m = 0.
+        let q1 = b.blocks.memory.q_1().clone();
+        let q2 = b.blocks.memory.q_2().clone();
+        let q3 = b.blocks.memory.q_3().clone();
+        let qm = b.blocks.memory.q_m().clone();
+        let wl = b.blocks.memory.w_l().clone();
+
+        let sorted_0 = (0..q1.len())
+            .find(|&i| q1[i].is_one() && q2[i].is_one() && q3[i].is_zero() && qm[i].is_zero());
+        let sorted_0 = sorted_0.expect("no sorted ROM consistency gate found");
+        assert_eq!(
+            wl[sorted_0], b.zero_idx,
+            "first sorted ROM index must be pinned to zero_idx (field-wrap guard)"
+        );
+    }
+
+    /// The first sorted RAM consistency gate must use `zero_idx` as its index
+    /// wire (start-of-chain pin).
+    #[test]
+    fn ram_first_sorted_index_pinned_to_zero() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut b = UltraCircuitBuilder::<Bn254G1>::init(0, Vec::new(), Vec::new(), false);
+
+        // RAM of size 3 initialised to [10, 20, 30], then one write.
+        let ram = b.create_ram_array(3, &mut driver);
+        for (i, v) in [10u64, 20, 30].into_iter().enumerate() {
+            let w = b.add_variable(Fr::from(v));
+            b.init_ram_element(&mut driver, ram, i, w).unwrap();
+        }
+        let idx = b.add_variable(Fr::from(0u64));
+        let val = b.add_variable(Fr::from(99u64));
+        b.write_ram_array(&mut driver, ram, idx, val).unwrap();
+
+        b.process_ram_arrays(&mut driver).unwrap();
+
+        // RamConsistencyCheck selectors: q_3 = 1, q_1 = q_2 = 0, q_m = 0.
+        let q1 = b.blocks.memory.q_1().clone();
+        let q2 = b.blocks.memory.q_2().clone();
+        let q3 = b.blocks.memory.q_3().clone();
+        let qm = b.blocks.memory.q_m().clone();
+        let wl = b.blocks.memory.w_l().clone();
+
+        let sorted_0 = (0..q3.len())
+            .find(|&i| q3[i].is_one() && q1[i].is_zero() && q2[i].is_zero() && qm[i].is_zero());
+        let sorted_0 = sorted_0.expect("no sorted RAM consistency gate found");
+        assert_eq!(
+            wl[sorted_0], b.zero_idx,
+            "first sorted RAM index must be pinned to zero_idx (field-wrap guard)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rom_logup_tests {
+    use super::*;
+    use co_noir_common::types::Bn254G1;
+    type Fr = ark_bn254::Fr;
+
+    #[test]
+    fn rom_logup_fixed_indices_array_ids_and_multiplicities() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut b = UltraCircuitBuilder::<Bn254G1>::init(0, vec![], vec![], false);
+        for size in [3usize, 1] {
+            let rom = b.create_rom_array(size);
+            // Initialize in reverse order: each table row must be keyed by its
+            // fixed cell index, not by initialization order or a free witness.
+            for i in (0..size).rev() {
+                let value = b.add_variable(Fr::from((10 + i) as u64));
+                b.set_rom_element(rom, i, value);
+            }
+            for index in [0, size - 1, size - 1] {
+                let witness = b.add_variable(Fr::from(index as u64));
+                let read = b.read_rom_array(rom, witness, &mut driver).unwrap();
+                assert_eq!(b.get_variable(read as usize), Fr::from((10 + index) as u64));
+            }
+        }
+        let gates_before = b.blocks.memory.len();
+        b.process_rom_arrays(&mut driver).unwrap();
+        assert_eq!(
+            b.blocks.memory.len(),
+            gates_before,
+            "LogUp must not add sorted rows"
+        );
+        assert_eq!(b.rom_logup_records.len(), gates_before);
+        assert!(b.memory_read_records.is_empty());
+        for rom_id in 0..2 {
+            let records = b.rom_arrays[rom_id].records.clone();
+            for record in records {
+                let row = record.gate_index;
+                assert_eq!(b.blocks.memory.q_memory()[row], Fr::one());
+                assert_eq!(b.blocks.memory.q_c()[row], Fr::from(rom_id as u64));
+                assert_eq!(b.blocks.memory.q_1()[row], Fr::zero());
+                assert_eq!(b.blocks.memory.q_3()[row], Fr::zero());
+                assert_eq!(b.blocks.memory.q_m()[row], Fr::zero());
+                assert_eq!(b.blocks.memory.q_2()[row], Fr::from(!record.is_read));
+                assert_eq!(b.blocks.memory.q_4()[row], Fr::from(record.is_read));
+                assert_ne!(record.record_witness, b.zero_idx);
+                let count_wire = b.blocks.memory.w_o()[row];
+                if record.is_read {
+                    assert_eq!(count_wire, b.zero_idx);
+                } else {
+                    let fixed_index = b.put_constant_variable(record.index);
+                    assert_eq!(b.blocks.memory.w_l()[row], fixed_index);
+                    let expected = if rom_id == 1 {
+                        3
+                    } else if record.index.is_zero() {
+                        1
+                    } else if record.index == Fr::from(2u64) {
+                        2
+                    } else {
+                        0
+                    };
+                    assert_eq!(
+                        b.get_variable(count_wire as usize),
+                        Fr::from(expected as u64)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rom_logup_rejects_duplicate_missing_and_mixed_initialization() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        for case in 0..4 {
+            let mut b = UltraCircuitBuilder::<Bn254G1>::init(0, vec![], vec![], false);
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let rom = b.create_rom_array(2);
+            let value = b.add_variable(Fr::from(7u64));
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    if case == 3 {
+                        b.set_rom_element_pair(rom, 0, [value, value]);
+                        b.set_rom_element(rom, 1, value);
+                    } else {
+                        b.set_rom_element(rom, 0, value);
+                        match case {
+                            0 => b.set_rom_element(rom, 0, value),
+                            1 => b.process_rom_arrays(&mut driver).unwrap(),
+                            2 => b.set_rom_element_pair(rom, 1, [value, value]),
+                            _ => unreachable!(),
+                        }
+                    }
+                }))
+                .is_err(),
+                "invalid ROM case {case} was accepted"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod plookup_table_regression_tests {
+    //! Regression tests for two proof-breaking plookup-table fixes that were
+    //! easy to miss (nothing exercised them): lookup table indices must start
+    //! at 1, and the SHA-256 CH-input L2 tables must be 10-bit. They guard
+    //! against a silent revert by a future refactor.
+    use super::*;
+    use crate::types::plookup::{BasicTableId, PlookupBasicTable};
+    use co_noir_common::types::Bn254G1;
+
+    type Fr = ark_bn254::Fr;
+    type Pbt = PlookupBasicTable<Bn254G1, PlainAcvmSolver<Fr>>;
+
+    /// Lookup basic-table indices must start at 1, not 0 (bb `0a7d0af035`): the
+    /// LogDerivLookup batched term must always contain at least β³, which fails
+    /// if a table can have index 0. `get_table` on a fresh builder must hand the
+    /// first-created table index 1, the second index 2.
+    #[test]
+    fn lookup_table_index_starts_at_one() {
+        let mut b = UltraCircuitBuilder::<Bn254G1>::new(0);
+        let first = b.get_table(BasicTableId::Sha256Base16).table_index;
+        assert_eq!(first, 1, "first lookup table_index must be 1, not 0");
+        // A different table id creates a second table -> index 2.
+        let second = b.get_table(BasicTableId::Sha256Base28Rotate3).table_index;
+        assert_eq!(second, 2, "second distinct lookup table_index must be 2");
+        // Re-requesting the first id returns the existing table (index unchanged).
+        let first_again = b.get_table(BasicTableId::Sha256Base16).table_index;
+        assert_eq!(first_again, 1, "re-request must return the cached table");
+    }
+
+    /// The SHA-256 CH-input L2 basic tables must be 10-bit, not 11-bit (bb
+    /// `bbbde54094`): an oversized backing table admits keys outside the
+    /// declared 10-bit slice, letting a prover witness an out-of-range slice.
+    /// A 10-bit sparse table has 2^10 = 1024 rows.
+    #[test]
+    fn sha256_ch_l2_tables_are_10_bit() {
+        for id in [
+            BasicTableId::Sha256Base16,
+            BasicTableId::Sha256Base28Rotate3,
+        ] {
+            let t = Pbt::create_basic_table(id.clone(), 0);
+            assert_eq!(
+                t.column_1.len(),
+                1 << 10,
+                "SHA table {id:?} must be 10-bit (1024 rows), not 11-bit (2048) \
+                 — an oversized backing table would admit keys outside the declared 10-bit slice"
+            );
+        }
     }
 }
