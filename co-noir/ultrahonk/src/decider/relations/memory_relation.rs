@@ -13,6 +13,8 @@ pub(crate) struct MemoryRelationAcc<F: PrimeField> {
     pub(crate) r3: Univariate<F, 6>,
     pub(crate) r4: Univariate<F, 6>,
     pub(crate) r5: Univariate<F, 6>,
+    pub(crate) r6: Univariate<F, 6>,
+    pub(crate) r7: Univariate<F, 6>,
 }
 
 impl<F: PrimeField> MemoryRelationAcc<F> {
@@ -24,6 +26,8 @@ impl<F: PrimeField> MemoryRelationAcc<F> {
         self.r3 *= elements[3];
         self.r4 *= elements[4];
         self.r5 *= elements[5];
+        self.r6 *= elements[6];
+        self.r7 *= elements[7];
     }
 
     pub(crate) fn extend_and_batch_univariates<const SIZE: usize>(
@@ -73,6 +77,19 @@ impl<F: PrimeField> MemoryRelationAcc<F> {
             partial_evaluation_result,
             true,
         );
+        self.r6.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            true,
+        );
+        // ROM LogUp is a global sum, not a row-wise vanishing identity.
+        self.r7.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            false,
+        );
     }
 }
 
@@ -84,6 +101,8 @@ pub(crate) struct MemoryRelationEvals<F: PrimeField> {
     pub(crate) r3: F,
     pub(crate) r4: F,
     pub(crate) r5: F,
+    pub(crate) r6: F,
+    pub(crate) r7: F,
 }
 
 impl<F: PrimeField> MemoryRelationEvals<F> {
@@ -96,13 +115,15 @@ impl<F: PrimeField> MemoryRelationEvals<F> {
         *result += self.r3 * running_challenge[3];
         *result += self.r4 * running_challenge[4];
         *result += self.r5 * running_challenge[5];
+        *result += self.r6 * running_challenge[6];
+        *result += self.r7 * running_challenge[7];
     }
 }
 
 pub(crate) struct MemoryRelation {}
 
 impl MemoryRelation {
-    pub(crate) const NUM_RELATIONS: usize = 6;
+    pub(crate) const NUM_RELATIONS: usize = 8;
 }
 
 impl<F: PrimeField> Relation<F> for MemoryRelation {
@@ -355,6 +376,21 @@ impl<F: PrimeField> Relation<F> for MemoryRelation {
         for i in 0..univariate_accumulator.r0.evaluations.len() {
             univariate_accumulator.r0.evaluations[i] += memory_identity.evaluations[i];
         } // deg 5
+
+        for i in 0..univariate_accumulator.r6.evaluations.len() {
+            let table = q_2.evaluations[i] * (F::one() - q_1.evaluations[i]);
+            let read = q_4.evaluations[i] * (F::one() - q_1.evaluations[i]);
+            let denom = w_1.evaluations[i]
+                + relation_parameters.eta_1 * w_2.evaluations[i]
+                + relation_parameters.eta_2 * q_c.evaluations[i]
+                + relation_parameters.rom_logup_gamma;
+            let inverse = w_4.evaluations[i];
+            univariate_accumulator.r6.evaluations[i] +=
+                q_memory_by_scaling.evaluations[i] * (table + read) * (inverse * denom - F::one());
+            // Deliberately omit scaling_factor: only the sum across rows vanishes.
+            univariate_accumulator.r7.evaluations[i] +=
+                q_memory.evaluations[i] * (read - table * w_3.evaluations[i]) * inverse;
+        }
     }
 
     fn verify_accumulate(
@@ -558,5 +594,144 @@ impl<F: PrimeField> Relation<F> for MemoryRelation {
         memory_identity += ram_consistency_check_identity; // deg 5 ( = deg 5 + (deg 3 or deg 5))
 
         univariate_accumulator.r0 += memory_identity; // deg 5
+
+        let table = *q_2 * (F::one() - q_1);
+        let read = *q_4 * (F::one() - q_1);
+        let denom = *w_1
+            + relation_parameters.eta_1 * w_2
+            + relation_parameters.eta_2 * q_c
+            + relation_parameters.rom_logup_gamma;
+        univariate_accumulator.r6 +=
+            q_memory_by_scaling * (table + read) * (*w_4 * denom - F::one());
+        univariate_accumulator.r7 += *q_memory * (read - table * w_3) * w_4;
+    }
+}
+
+#[cfg(test)]
+mod rom_logup_tests {
+    use super::*;
+    use ark_ff::{Field, One};
+    use co_noir_common::honk_proof::TranscriptFieldType as Fr;
+
+    fn parameters() -> RelationParameters<Fr> {
+        RelationParameters {
+            eta_1: Fr::from(3u64),
+            eta_2: Fr::from(9u64),
+            eta_3: Fr::from(27u64),
+            rom_logup_gamma: Fr::from(11u64),
+            beta: Fr::zero(),
+            gamma: Fr::zero(),
+            public_input_delta: Fr::one(),
+        }
+    }
+
+    fn row(read: bool, count: u64, array: u64) -> ClaimedEvaluations<Fr> {
+        let mut row = ClaimedEvaluations::default();
+        *row.precomputed.q_memory_mut() = Fr::one();
+        if read {
+            *row.precomputed.q_4_mut() = Fr::one();
+        } else {
+            *row.precomputed.q_r_mut() = Fr::one();
+        }
+        *row.precomputed.q_c_mut() = Fr::from(array);
+        *row.witness.w_l_mut() = Fr::from(2u64);
+        *row.witness.w_r_mut() = Fr::from(5u64);
+        *row.witness.w_o_mut() = Fr::from(count);
+        fill_inverse(&mut row);
+        row
+    }
+
+    fn fill_inverse(row: &mut ClaimedEvaluations<Fr>) {
+        let p = parameters();
+        *row.witness.w_4_mut() = (*row.witness.w_l()
+            + p.eta_1 * row.witness.w_r()
+            + p.eta_2 * row.precomputed.q_c()
+            + p.rom_logup_gamma)
+            .inverse()
+            .unwrap();
+    }
+
+    fn evaluate(row: &ClaimedEvaluations<Fr>, weight: u64) -> MemoryRelationEvals<Fr> {
+        let mut acc = MemoryRelationEvals::default();
+        MemoryRelation::verify_accumulate(&mut acc, row, &parameters(), &Fr::from(weight));
+        acc
+    }
+
+    #[test]
+    fn rom_logup_global_sum_ignores_row_weights() {
+        let table = evaluate(&row(false, 2, 0), 3);
+        let read_a = evaluate(&row(true, 0, 0), 7);
+        let read_b = evaluate(&row(true, 0, 0), 13);
+        assert!(table.r6.is_zero() && read_a.r6.is_zero() && read_b.r6.is_zero());
+        assert!(!table.r7.is_zero());
+        assert!((table.r7 + read_a.r7 + read_b.r7).is_zero());
+        assert_eq!(evaluate(&row(true, 0, 0), 1).r7, read_a.r7);
+    }
+
+    #[test]
+    fn rom_logup_rejects_wrong_inverse_multiplicity_and_cross_array_reads() {
+        let mut read = row(true, 0, 0);
+        *read.witness.w_4_mut() = Fr::zero();
+        let bad = evaluate(&read, 1);
+        assert!(!bad.r6.is_zero());
+        assert_eq!(evaluate(&read, 7).r6, bad.r6 * Fr::from(7u64));
+        let table = evaluate(&row(false, 1, 0), 1);
+        let foreign_read = evaluate(&row(true, 0, 1), 1);
+        assert!(foreign_read.r6.is_zero());
+        assert!(!(table.r7 + foreign_read.r7).is_zero());
+        assert!(!(evaluate(&row(false, 2, 0), 1).r7 + evaluate(&row(true, 0, 0), 1).r7).is_zero());
+        for change_index in [true, false] {
+            let mut read = row(true, 0, 0);
+            if change_index {
+                *read.witness.w_l_mut() += Fr::one();
+            } else {
+                *read.witness.w_r_mut() += Fr::one();
+            }
+            fill_inverse(&mut read);
+            let invalid = evaluate(&read, 1);
+            assert!(invalid.r6.is_zero());
+            assert!(!(table.r7 + invalid.r7).is_zero());
+        }
+    }
+
+    #[test]
+    fn rom_logup_selectors_exclude_other_memory_rows() {
+        for memory_enabled in [false, true] {
+            let mut other = row(false, 42, 0);
+            *other.witness.w_4_mut() = Fr::from(99u64);
+            if memory_enabled {
+                *other.precomputed.q_l_mut() = Fr::one();
+            } else {
+                *other.precomputed.q_memory_mut() = Fr::zero();
+            }
+            let acc = evaluate(&other, 7);
+            assert!(acc.r6.is_zero() && acc.r7.is_zero());
+        }
+    }
+
+    #[test]
+    fn rom_logup_univariate_and_verifier_evaluations_agree() {
+        let row = row(false, 2, 0);
+        let mut input = ProverUnivariates::default();
+        for (poly, value) in input.iter_mut().zip(row.iter()) {
+            poly.evaluations.fill(*value);
+        }
+        let mut acc = MemoryRelationAcc::default();
+        MemoryRelation::accumulate(&mut acc, &input, &parameters(), &Fr::from(7u64));
+        let expected = evaluate(&row, 7);
+        assert!(acc.r6.evaluations.iter().all(|value| *value == expected.r6));
+        assert!(acc.r7.evaluations.iter().all(|value| *value == expected.r7));
+        // Isolate the dependent term: extending and batching must not reapply
+        // either the current gate-separator polynomial or its partial value.
+        let only_sum = MemoryRelationAcc {
+            r7: acc.r7,
+            ..Default::default()
+        };
+        let mut out = Univariate::<Fr, 8>::default();
+        let random_poly = Univariate {
+            evaluations: [Fr::from(17u64); 8],
+        };
+        only_sum.extend_and_batch_univariates(&mut out, &random_poly, &Fr::from(19u64));
+        assert!(out.evaluations.iter().all(|value| *value == expected.r7));
     }
 }

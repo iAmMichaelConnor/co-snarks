@@ -69,6 +69,8 @@ pub(crate) struct UltraPermutationRelation {}
 
 impl UltraPermutationRelation {
     pub(crate) const NUM_RELATIONS: usize = 3;
+    // The third subrelation (lagrange_first * z_perm) is a public-times-shared product and thus
+    // requires no MPC multiplication, so CRAND_PAIRS_FACTOR is unchanged.
     pub(crate) const CRAND_PAIRS_FACTOR: usize = 8;
 }
 
@@ -255,8 +257,9 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P
 
         fold_accumulator!(univariate_accumulator.r1, tmp);
 
-        // Enforce z_perm starts at 0 at the lagrange_first row (row NUM_DISABLED_ROWS_IN_SUMCHECK):
-        // without this, a cheating prover could set z_perm there to a non-zero value.
+        // Contribution (3): Enforce z_perm starts at 0. The grand product initialization relies on
+        // z_perm[0] = 0 so that (z_perm + L_first) evaluates to 1 at the first row.
+        // Without this constraint, a cheating prover could set z_perm[0] to a non-zero value.
         let mut tmp = T::mul_with_public_many(lagrange_first, z_perm);
         T::mul_assign_with_public_many(&mut tmp, scaling_factors);
 

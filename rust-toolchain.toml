@@ -1,0 +1,4 @@
+# Pin the toolchain the workspace is known to build with. Older defaults (e.g. 1.85) fail with a
+# misleading wall of trait-resolution errors in workspace deps rather than a clear version message.
+[toolchain]
+channel = "1.90.0"

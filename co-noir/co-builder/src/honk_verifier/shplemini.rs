@@ -16,7 +16,9 @@ use co_noir_common::{
     polynomials::entities::WITNESS_ENTITIES_SIZE,
 };
 use co_noir_common::{
-    constants::{NUM_SMALL_IPA_EVALUATIONS, SHIFTED_WITNESS_ENTITIES_SIZE},
+    constants::{
+        NUM_SMALL_IPA_EVALUATIONS, NUM_SMALL_IPA_OPENING_CLAIMS, SHIFTED_WITNESS_ENTITIES_SIZE,
+    },
     polynomials::entities::PRECOMPUTED_ENTITIES_SIZE,
     types::ZeroKnowledge,
 };
@@ -398,9 +400,9 @@ impl ShpleminiVerifier {
             )?;
             eval_pos = eval_pos.multiply(&tmp, builder, driver)?;
 
-            // The prover now honestly computes and sends real (non-zeroed) fold constants for virtual
-            // rounds too, matching the zero-extended `batched_evaluation` seed, so the recursion must
-            // always propagate the genuinely computed value here (no indicator-based freeze).
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
             eval_pos_prev = eval_pos;
             fold_pos_evaluations.push(eval_pos_prev.clone());
         }
@@ -512,9 +514,7 @@ impl ShpleminiVerifier {
             let rhs = scaling_factor_pos.multiply(&gemini_pos_evaluations[j], builder, driver)?;
             constant_term_accumulator.add_assign(&lhs.add(&rhs, builder, driver), builder, driver);
 
-            // Place the scaling factor to the 'scalars' vector. The prover sends real (non-zeroed)
-            // fold constants for virtual/padding rounds too, so the recursion must always propagate
-            // the genuinely computed value here (no indicator-based freeze), matching bb exactly.
+            // Place the scaling factor to the 'scalars' vector
             scalars.push(
                 scaling_factor_neg
                     .add(&scaling_factor_pos, builder, driver)
@@ -621,10 +621,11 @@ impl ShpleminiVerifier {
         // Add Libra commitments to the vector of commitments
         commitments.extend_from_slice(libra_commitments);
 
-        // Compute corresponding scalars and the correction to the constant term
-        let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS] =
-            array::from_fn(|_| FieldCT::default());
-        let mut batching_scalars: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS] =
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
             array::from_fn(|_| FieldCT::default());
 
         // Compute Shplonk denominators and invert them
@@ -647,27 +648,50 @@ impl ShpleminiVerifier {
         )?;
 
         denominators[2] = denominators[0].clone();
-        denominators[3] = denominators[0].clone();
+        denominators[3] = one.divide(
+            &shplonk_evaluation_challenge.sub(&one, builder, driver),
+            builder,
+            driver,
+        )?;
+        denominators[4] = denominators[0].clone();
 
-        // Compute the scalars to be multiplied against the commitments
-        for idx in 0..NUM_SMALL_IPA_EVALUATIONS {
+        // The evaluations of the five claims (in transcript order G(r), A(g*r), A(r), A(1), Q(r));
+        // slot 3 is the fixed boundary value A(1) = 0, which is not transmitted.
+        let claim_evaluations = [
+            libra_evaluations[0].clone(),
+            libra_evaluations[1].clone(),
+            libra_evaluations[2].clone(),
+            FieldCT::from(C::ScalarField::ZERO),
+            libra_evaluations[3].clone(),
+        ];
+
+        // Compute the scalars to be multiplied against the commitments. Per-claim batching scalars
+        // are grouped by backing commitment (bb: `SMALL_IPA_CLAIMS[idx].commitment_index`), so the
+        // claims backed by the grand sum commitment (A(g*r), A(r), A(1)) fold into a single scalar.
+        // The grouping subtraction is emitted INSIDE the loop, between the nu-power multiplication
+        // and the evaluation multiplication, to match bb's gate emission order
+        // (`batch_small_ipa_opening_claims` in commitment_schemes/shplonk/shplemini.hpp).
+        const COMMITMENT_INDEX: [usize; NUM_SMALL_IPA_OPENING_CLAIMS] = [0, 1, 1, 1, 2];
+        let mut grouped_scalars: [FieldCT<C::ScalarField>; NUM_LIBRA_COMMITMENTS] =
+            array::from_fn(|_| FieldCT::from(C::ScalarField::ZERO));
+        for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor = denominators[idx].multiply(
                 &shplonk_batching_challenge_powers[2 * virtual_log_n + idx],
                 builder,
                 driver,
             )?;
-            batching_scalars[idx] = scaling_factor.neg();
+            grouped_scalars[COMMITMENT_INDEX[idx]] =
+                grouped_scalars[COMMITMENT_INDEX[idx]].sub(&scaling_factor, builder, driver);
             *constant_term_accumulator = constant_term_accumulator.add(
-                &scaling_factor.multiply(&libra_evaluations[idx], builder, driver)?,
+                &scaling_factor.multiply(&claim_evaluations[idx], builder, driver)?,
                 builder,
                 driver,
             );
         }
 
-        // To save a scalar mul, add the sum of the batching scalars corresponding to the big sum evaluations
-        scalars.push(batching_scalars[0].clone());
-        scalars.push(batching_scalars[1].add(&batching_scalars[2], builder, driver));
-        scalars.push(batching_scalars[3].clone());
+        for scalar in grouped_scalars {
+            scalars.push(scalar);
+        }
 
         Ok(())
     }
@@ -830,12 +854,12 @@ impl ShpleminiVerifier {
         let zero = FieldCT::from(C::ScalarField::ZERO);
         diff.assert_equal(&zero, builder, driver);
 
-        // TODO(https://github.com/AztecProtocol/barretenberg/issues/1186).
-        // Insecure pattern.
-        // TACEO TODO: We could also ignore the result?
+        // This host-side diagnostic is available only for public witnesses.
+        // Shared values remain private; the equality constraint above is the
+        // verifier check and rejects an invalid witness in either case.
         Ok(T::get_public(&diff.get_value(builder, driver))
-            .expect("Is this ever shared?")
-            .is_zero())
+            .map(|value| value.is_zero())
+            .unwrap_or(true))
     }
 
     fn compute_batched_barycentric_evaluations<
@@ -914,7 +938,7 @@ impl ShpleminiVerifier {
         let mut num_powers = 2 * virtual_log_n;
 
         if has_zk {
-            num_powers += NUM_SMALL_IPA_EVALUATIONS;
+            num_powers += NUM_SMALL_IPA_OPENING_CLAIMS;
         }
 
         let mut result = Vec::with_capacity(num_powers);

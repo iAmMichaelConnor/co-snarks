@@ -9,6 +9,7 @@ pub(crate) mod poseidon2_internal_relation;
 pub(crate) mod ultra_arithmetic_relation;
 
 use crate::accumulate_all_relations;
+use crate::honk_verifier::sumcheck::SumcheckVerifier;
 use crate::honk_verifier::verifier_relations::memory_relation::MemoryRelation;
 use crate::honk_verifier::verifier_relations::memory_relation::MemoryRelationEvals;
 use crate::honk_verifier::verifier_relations::non_native_field_relation::NonNativeFieldRelation;
@@ -50,15 +51,23 @@ pub struct AllRelationsEvals<F: PrimeField> {
     r_pos_int: Poseidon2InternalRelationEvals<F>,
 }
 
-pub(crate) const NUM_SUBRELATIONS: usize = UltraArithmeticRelation::NUM_RELATIONS
-    + UltraPermutationRelation::NUM_RELATIONS
+// The order of the relations matches the Ultra flavor's relation tuple in barretenberg
+// (Permutation, LogDerivLookup, Arithmetic, DeltaRangeConstraint, Elliptic, Memory,
+// NonNativeField, Poseidon2External, Poseidon2Internal), which determines the
+// alpha-power-to-subrelation assignment.
+pub(crate) const NUM_SUBRELATIONS: usize = UltraPermutationRelation::NUM_RELATIONS
+    + LogDerivLookupRelation::NUM_RELATIONS
+    + UltraArithmeticRelation::NUM_RELATIONS
     + DeltaRangeConstraintRelation::NUM_RELATIONS
     + EllipticRelation::NUM_RELATIONS
     + MemoryRelation::NUM_RELATIONS
     + NonNativeFieldRelation::NUM_RELATIONS
-    + LogDerivLookupRelation::NUM_RELATIONS
     + Poseidon2ExternalRelation::NUM_RELATIONS
     + Poseidon2InternalRelation::NUM_RELATIONS;
+
+// Aztec v6 Ultra flavor: 31 subrelations. A change in any relation's subrelation count re-slices
+// every subsequent relation's alpha powers; fail at compile time rather than mis-batching silently.
+const _: () = assert!(NUM_SUBRELATIONS == 31);
 
 pub(crate) trait VerifyAccGetter<C: HonkCurve<TranscriptFieldType>> {
     fn get_accumulators(&self) -> Vec<FieldCT<C::ScalarField>>;
@@ -66,17 +75,28 @@ pub(crate) trait VerifyAccGetter<C: HonkCurve<TranscriptFieldType>> {
         &self,
         result: &mut FieldCT<C::ScalarField>,
         challenges: &[FieldCT<C::ScalarField>],
+        row_disabling_factor: Option<&FieldCT<C::ScalarField>>,
         builder: &mut GenericUltraCircuitBuilder<C, T>,
         driver: &mut T,
     ) -> HonkProofResult<()> {
+        // The row-disabling factor (ZK only) is folded in PER SUBRELATION, `entry × α × rd`,
+        // mirroring bb's scale_and_batch_elements — algebraically the same as one post-multiply
+        // of the batched total, but the per-element form is what bb's recursive verifier emits
+        // as gates.
         for (entry, challenge) in self.get_accumulators().iter().zip(challenges) {
             if challenge.is_constant()
                 && challenge.get_value(builder, driver) == C::ScalarField::ONE.into()
             {
-                *result = entry.clone();
+                *result = match row_disabling_factor {
+                    Some(rd) => entry.multiply(rd, builder, driver)?,
+                    None => entry.clone(),
+                };
                 continue;
             }
-            let tmp = entry.multiply(challenge, builder, driver)?;
+            let mut tmp = entry.multiply(challenge, builder, driver)?;
+            if let Some(rd) = row_disabling_factor {
+                tmp = tmp.multiply(rd, builder, driver)?;
+            }
             result.add_assign(&tmp, builder, driver);
         }
         Ok(())
@@ -97,6 +117,7 @@ pub(crate) trait Relation<C: HonkCurve<TranscriptFieldType>> {
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn compute_full_relation_purported_value<
     C: HonkCurve<TranscriptFieldType>,
     T: NoirWitnessExtensionProtocol<C::ScalarField>,
@@ -106,6 +127,10 @@ pub(crate) fn compute_full_relation_purported_value<
     relation_parameters: &RelationParameters<FieldCT<C::ScalarField>>,
     gate_separators: GateSeparatorPolynomial<C>,
     alphas: &[FieldCT<C::ScalarField>],
+    // ZK only: the full sumcheck challenge, used to evaluate the row-disabling polynomial. The
+    // factor must be computed HERE, between relation accumulation and batching, and applied per
+    // subrelation — bb's gate-emission order, which VK byte-parity depends on.
+    row_disabling_challenge: Option<&[FieldCT<C::ScalarField>]>,
     builder: &mut GenericUltraCircuitBuilder<C, T>,
     driver: &mut T,
 ) -> HonkProofResult<FieldCT<C::ScalarField>> {
@@ -118,12 +143,20 @@ pub(crate) fn compute_full_relation_purported_value<
         driver
     )?;
 
+    let row_disabling_factor = match row_disabling_challenge {
+        Some(challenge) => Some(SumcheckVerifier::evaluate_at_challenge(
+            challenge, builder, driver,
+        )?),
+        None => None,
+    };
+
     let mut output = FieldCT::from(C::ScalarField::ZERO);
     let first_scalar = FieldCT::from(C::ScalarField::ONE);
     scale_and_batch_all!(
         &mut output,
         &univariate_accumulators,
         first_scalar,
+        row_disabling_factor.as_ref(),
         alphas,
         builder,
         driver
@@ -150,9 +183,9 @@ macro_rules! accumulate_all_relations {
         }
 
         // Apply to all relations
-        process_relation!(UltraArithmeticRelation, r_arith);
         process_relation!(UltraPermutationRelation, r_perm);
         process_relation!(LogDerivLookupRelation, r_lookup);
+        process_relation!(UltraArithmeticRelation, r_arith);
         process_relation!(DeltaRangeConstraintRelation, r_delta);
         process_relation!(EllipticRelation, r_elliptic);
         process_relation!(MemoryRelation, r_memory);
@@ -166,7 +199,8 @@ macro_rules! accumulate_all_relations {
 
 #[macro_export]
 macro_rules! scale_and_batch_all {
-    ($output:expr, $univariate_accumulators:expr, $first_scalar:expr, $challenges:ident, $builder:expr, $driver:expr) => {{
+    ($output:expr, $univariate_accumulators:expr, $first_scalar:expr, $row_disabling_factor:expr, $challenges:ident, $builder:expr, $driver:expr) => {{
+        let row_disabling_factor = $row_disabling_factor;
         // Helper macro to process each relation
         macro_rules! process_relation {
             ($relation_accumulator:ident, $relevant_challenges:expr) => {
@@ -175,6 +209,7 @@ macro_rules! scale_and_batch_all {
                     .scale_by_challenge_and_accumulate(
                         $output,
                         $relevant_challenges,
+                        row_disabling_factor,
                         $builder,
                         $driver,
                     )?;
@@ -182,15 +217,22 @@ macro_rules! scale_and_batch_all {
         }
 
         // Apply to all relations
-        process_relation!(r_arith, &[$first_scalar, $challenges[0].clone()]);
-        process_relation!(r_perm, &$challenges[1..4]);
-        process_relation!(r_lookup, &$challenges[4..7]);
+        process_relation!(
+            r_perm,
+            &[
+                $first_scalar,
+                $challenges[0].clone(),
+                $challenges[1].clone()
+            ]
+        );
+        process_relation!(r_lookup, &$challenges[2..5]);
+        process_relation!(r_arith, &$challenges[5..7]);
         process_relation!(r_delta, &$challenges[7..11]);
         process_relation!(r_elliptic, &$challenges[11..13]);
-        process_relation!(r_memory, &$challenges[13..19]);
-        process_relation!(r_nnf, &$challenges[19..20]);
-        process_relation!(r_pos_ext, &$challenges[20..24]);
-        process_relation!(r_pos_int, &$challenges[24..]);
+        process_relation!(r_memory, &$challenges[13..21]);
+        process_relation!(r_nnf, &$challenges[21..22]);
+        process_relation!(r_pos_ext, &$challenges[22..26]);
+        process_relation!(r_pos_int, &$challenges[26..]);
 
         HonkProofResult::Ok(())
     }};

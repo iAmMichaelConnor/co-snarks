@@ -2,13 +2,15 @@
 
 script_dir="$(dirname "$(realpath "$0")")"
 
-NARGO_VERSION=1.0.0-rc.3 ##specify the desired nargo version here
+# Version pins live in versions.env at the repo root
+source "$script_dir/../../../versions.env"
 
 ## install noirup: curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
 r=$(bash -c "nargo --version")
 if  [[ $r != "nargo version = $NARGO_VERSION"* ]];
 then
-    bash -c "noirup -v ${NARGO_VERSION}"
+    echo "nargo version mismatch (got: '$r', expected: 'nargo version = $NARGO_VERSION...')." >&2
+    exit 1
 fi
 
 for folder in "$script_dir"/test_vectors/*; do

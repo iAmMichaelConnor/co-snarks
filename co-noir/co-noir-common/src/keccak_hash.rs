@@ -68,6 +68,35 @@ impl<F: PrimeField> TranscriptHasher<F> for Keccak256 {
         P::BaseField::from_be_bytes_mod_order(&bytes)
     }
 
+    fn validate_scalarfield<P: crate::honk_curve::HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> crate::honk_proof::HonkProofResult<()> {
+        let [word] = elements else {
+            return Err(crate::honk_proof::HonkProofError::NonCanonicalFieldEncoding);
+        };
+        let value = P::ScalarField::from_be_bytes_mod_order(&word.0.to_be_bytes::<32>());
+        if U256::convert_field_into(&value) != *word {
+            return Err(crate::honk_proof::HonkProofError::NonCanonicalFieldEncoding);
+        }
+        Ok(())
+    }
+
+    fn validate_basefield_limbs<P: crate::honk_curve::HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> crate::honk_proof::HonkProofResult<()> {
+        // BB v6 U256Codec rejects raw coordinates >= the base-field modulus.
+        // Re-encoding after conversion detects reduction, including aliases
+        // of infinity. This applies even to the final, unhashed KZG point.
+        let [word] = elements else {
+            return Err(crate::honk_proof::HonkProofError::NonCanonicalFieldEncoding);
+        };
+        let value = P::BaseField::from_be_bytes_mod_order(&word.0.to_be_bytes::<32>());
+        if U256::convert_field_into(&value) != *word {
+            return Err(crate::honk_proof::HonkProofError::NonCanonicalFieldEncoding);
+        }
+        Ok(())
+    }
+
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2] {
         // Match barretenberg field_conversion::split_challenge:
         // split a 254-bit challenge into two 127-bit limbs.

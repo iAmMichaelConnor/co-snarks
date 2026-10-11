@@ -1,8 +1,7 @@
 export CARGO_TERM_QUIET=true
-BARRETENBERG_BINARY=~/.bb/bb  ##specify the $BARRETENBERG_BINARY path here
+source "$(dirname "${BASH_SOURCE[0]}")/../../../versions.env"
+BARRETENBERG_BINARY="${BB_TARGET:-$BARRETENBERG_BINARY_DEFAULT}"
 
-NARGO_VERSION=1.0.0-rc.3 ##specify the desired nargo version here
-BARRETENBERG_VERSION=5.0.0-nightly.20260522 ##specify the desired barretenberg version here or use the corresponding one for this nargo version
 PLAINDRIVER="../../../target/release/plaindriver"
 exit_code=0
 case_failed=0
@@ -34,7 +33,7 @@ fi
 r=$(bash -c "$BARRETENBERG_BINARY --version 2> /dev/null")
 if  [[ $r != "$BARRETENBERG_VERSION" ]];
 then
-    bash -c "bbup -v ${BARRETENBERG_VERSION}"
+    echo "Use the source-built oracle pinned in versions.env (source builds may report a placeholder version)." >&2
 fi
 
 echo "Using nargo version $NARGO_VERSION"

@@ -802,6 +802,11 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
             builder,
             true,
         );
+        // The Strauss MSM rounds do not consume naf_entries[0] (the +1 contribution is hardcoded
+        // via the chain's initial entry), so outside the scalar-reconstruction sum below this
+        // entry is otherwise unconstrained — pin it to false (+1) with a fix-witness gate, as bb
+        // does (biggroup_nafs.hpp).
+        builder.fix_witness(naf_entries[0].witness_index, F::zero());
 
         // Validate correctness of NAF
         let mut accumulators = Vec::with_capacity(num_rounds + 1);

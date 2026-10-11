@@ -1487,6 +1487,8 @@ dependencies = [
  "ark-ec",
  "ark-ff 0.6.0",
  "ark-poly",
+ "ark-serialize 0.6.0",
+ "bytes",
  "co-noir-common",
  "criterion",
  "eyre",

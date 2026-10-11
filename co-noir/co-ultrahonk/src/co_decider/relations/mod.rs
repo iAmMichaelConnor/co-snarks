@@ -93,9 +93,13 @@ pub(crate) trait Relation<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFiel
     ) -> HonkProofResult<()>;
 }
 
-pub(crate) const NUM_SUBRELATIONS: usize = UltraArithmeticRelation::NUM_RELATIONS
-    + UltraPermutationRelation::NUM_RELATIONS
+// The order of the relations matches the Ultra flavor's relation tuple in barretenberg
+// (Permutation, LogDerivLookup, Arithmetic, DeltaRangeConstraint, Elliptic, Memory,
+// NonNativeField, Poseidon2External, Poseidon2Internal), which determines the
+// alpha-power-to-subrelation assignment.
+pub(crate) const NUM_SUBRELATIONS: usize = UltraPermutationRelation::NUM_RELATIONS
     + LogDerivLookupRelation::NUM_RELATIONS
+    + UltraArithmeticRelation::NUM_RELATIONS
     + DeltaRangeConstraintRelation::NUM_RELATIONS
     + EllipticRelation::NUM_RELATIONS
     + MemoryRelation::NUM_RELATIONS
@@ -103,15 +107,19 @@ pub(crate) const NUM_SUBRELATIONS: usize = UltraArithmeticRelation::NUM_RELATION
     + Poseidon2ExternalRelation::NUM_RELATIONS
     + Poseidon2InternalRelation::NUM_RELATIONS;
 
-pub const CRAND_PAIRS_FACTOR: usize = MemoryRelation::CRAND_PAIRS_FACTOR
-    + NonNativeFieldRelation::CRAND_PAIRS_FACTOR
+// Aztec v6 Ultra flavor: 31 subrelations. A change in any relation's subrelation count re-slices
+// every subsequent relation's alpha powers; fail at compile time rather than mis-batching silently.
+const _: () = assert!(NUM_SUBRELATIONS == 31);
+
+pub const CRAND_PAIRS_FACTOR: usize = UltraPermutationRelation::CRAND_PAIRS_FACTOR
+    + LogDerivLookupRelation::CRAND_PAIRS_FACTOR
+    + UltraArithmeticRelation::CRAND_PAIRS_FACTOR
     + DeltaRangeConstraintRelation::CRAND_PAIRS_FACTOR
     + EllipticRelation::CRAND_PAIRS_FACTOR
-    + LogDerivLookupRelation::CRAND_PAIRS_FACTOR
-    + UltraPermutationRelation::CRAND_PAIRS_FACTOR
+    + MemoryRelation::CRAND_PAIRS_FACTOR
+    + NonNativeFieldRelation::CRAND_PAIRS_FACTOR
     + Poseidon2ExternalRelation::CRAND_PAIRS_FACTOR
-    + Poseidon2InternalRelation::CRAND_PAIRS_FACTOR
-    + UltraArithmeticRelation::CRAND_PAIRS_FACTOR;
+    + Poseidon2InternalRelation::CRAND_PAIRS_FACTOR;
 
 pub(crate) struct AllRelationAcc<T: NoirUltraHonkProver<P>, P: CurveGroup> {
     pub(crate) r_arith: UltraArithmeticRelationAcc<T, P>,
@@ -196,15 +204,15 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Default for AllRelationAccHalfSha
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> AllRelationAcc<T, P> {
     pub(crate) fn scale(&mut self, first_scalar: P::ScalarField, elements: &[P::ScalarField]) {
         assert!(elements.len() == NUM_SUBRELATIONS - 1);
-        self.r_arith.scale(&[first_scalar, elements[0]]);
-        self.r_perm.scale(&elements[1..4]);
-        self.r_lookup.scale(&elements[4..7]);
+        self.r_perm.scale(&[first_scalar, elements[0], elements[1]]);
+        self.r_lookup.scale(&elements[2..5]);
+        self.r_arith.scale(&elements[5..7]);
         self.r_delta.scale(&elements[7..11]);
         self.r_elliptic.scale(&elements[11..13]);
-        self.r_memory.scale(&elements[13..19]);
-        self.r_nnf.scale(&elements[19..20]);
-        self.r_pos_ext.scale(&elements[20..24]);
-        self.r_pos_int.scale(&elements[24..]);
+        self.r_memory.scale(&elements[13..21]);
+        self.r_nnf.scale(&elements[21..22]);
+        self.r_pos_ext.scale(&elements[22..26]);
+        self.r_pos_int.scale(&elements[26..]);
     }
 
     pub(crate) fn extend_and_batch_univariates<const SIZE: usize>(
@@ -213,17 +221,17 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> AllRelationAcc<T, P> {
         extended_random_poly: &Univariate<P::ScalarField, SIZE>,
         partial_evaluation_result: &P::ScalarField,
     ) {
-        self.r_arith.extend_and_batch_univariates(
-            result,
-            extended_random_poly,
-            partial_evaluation_result,
-        );
         self.r_perm.extend_and_batch_univariates(
             result,
             extended_random_poly,
             partial_evaluation_result,
         );
         self.r_lookup.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+        );
+        self.r_arith.extend_and_batch_univariates(
             result,
             extended_random_poly,
             partial_evaluation_result,

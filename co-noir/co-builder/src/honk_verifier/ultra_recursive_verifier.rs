@@ -30,6 +30,18 @@ use crate::{
 pub(crate) struct UltraRecursiveVerifier;
 
 impl UltraRecursiveVerifier {
+    // Like v6 BB, derive shape from the actual proof, never from a VK witness.
+    fn public_input_count(proof_len: usize, has_zk: ZeroKnowledge) -> eyre::Result<usize> {
+        let fixed_len = if has_zk == ZeroKnowledge::Yes {
+            ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK
+        } else {
+            ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS
+        };
+        proof_len
+            .checked_sub(fixed_len)
+            .filter(|count| *count >= PAIRING_POINT_ACCUMULATOR_SIZE as usize)
+            .ok_or_else(|| co_noir_common::honk_proof::HonkProofError::InvalidProofLength.into())
+    }
     pub fn verify_proof<
         C: HonkCurve<TranscriptFieldType>,
         H: TranscriptHasherCT<C>,
@@ -41,20 +53,22 @@ impl UltraRecursiveVerifier {
         driver: &mut T,
         has_zk: ZeroKnowledge,
     ) -> eyre::Result<PairingPoints<C, T>> {
-        debug_assert_eq!(
-            proof.len(),
-            if has_zk == ZeroKnowledge::Yes {
-                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK
-            } else {
-                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS
-            } + key.public_inputs.len()
-                + PAIRING_POINT_ACCUMULATOR_SIZE as usize
-        );
+        let num_public_inputs = Self::public_input_count(proof.len(), has_zk)?;
+        if num_public_inputs != key.public_inputs.len() + PAIRING_POINT_ACCUMULATOR_SIZE as usize {
+            return Err(co_noir_common::honk_proof::HonkProofError::InvalidProofLength.into());
+        }
         let mut transcript = TranscriptCT::<C, H>::new_verifier(proof);
 
         // No IPA accumulator on the UltraRecursiveFlavor
 
-        OinkRecursiveVerifier::verify(&mut key, &mut transcript, builder, has_zk, driver)?;
+        OinkRecursiveVerifier::verify(
+            &mut key,
+            &mut transcript,
+            builder,
+            has_zk,
+            num_public_inputs,
+            driver,
+        )?;
 
         // Execute Sumcheck Verifier and extract multivariate opening point u = (u_0, ..., u_{d-1}) and purported
         // multivariate evaluations at u
@@ -95,6 +109,7 @@ impl UltraRecursiveVerifier {
                 &key.relation_parameters,
                 &key.alphas,
                 &key.gate_challenges,
+                CONST_PROOF_SIZE_LOG_N,
                 builder,
                 has_zk,
                 driver,
@@ -112,6 +127,7 @@ impl UltraRecursiveVerifier {
                 &key.relation_parameters,
                 &key.alphas,
                 &key.gate_challenges,
+                CONST_PROOF_SIZE_LOG_N,
                 builder,
                 has_zk,
                 driver,
@@ -204,5 +220,33 @@ impl UltraRecursiveVerifier {
         inputs.aggregate::<H>(pairing_points, builder, driver)?;
 
         Ok(inputs)
+    }
+}
+
+#[cfg(test)]
+mod proof_length_tests {
+    use super::*;
+    #[test]
+    fn recursive_proof_length_reserves_accumulator_inputs() {
+        for (zk, base) in [
+            (ZeroKnowledge::No, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS),
+            (ZeroKnowledge::Yes, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK),
+        ] {
+            for length in [
+                0,
+                base - 1,
+                base,
+                base + PAIRING_POINT_ACCUMULATOR_SIZE as usize - 1,
+            ] {
+                assert!(UltraRecursiveVerifier::public_input_count(length, zk).is_err());
+            }
+            for application_inputs in [0, 1, 20] {
+                let total = application_inputs + PAIRING_POINT_ACCUMULATOR_SIZE as usize;
+                assert_eq!(
+                    UltraRecursiveVerifier::public_input_count(base + total, zk).unwrap(),
+                    total
+                );
+            }
+        }
     }
 }
