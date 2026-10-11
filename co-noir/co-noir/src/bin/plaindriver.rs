@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 use co_acvm::{PlainAcvmSolver, solver::PlainCoSolver};
 use co_builder::keys::proving_key::{self};
 use co_builder::prelude::{HonkRecursion, UltraCircuitBuilder};
-use co_noir::Bn254G1;
+use co_noir::{Bn254G1, RecursionInputVisibility};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::keys::verification_key::VerifyingKey;
 use co_noir_common::{crs::parse::CrsParser, types::ZeroKnowledge};
@@ -75,6 +75,10 @@ pub struct Cli {
     /// Prove with or without the zero knowledge property
     #[arg(long)]
     pub zk: bool,
+    /// Use disclosed recursion with the canonical BB circuit profile. Private recursion requires --zk.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub reveal_recursion_inputs: Option<bool>,
     /// The path to the witness share file
     #[arg(long)]
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
@@ -98,6 +102,9 @@ pub struct Config {
     pub out_dir: PathBuf,
     /// Prove with or without the zero knowledge property
     pub zk: bool,
+    /// Select the canonical disclosed-recursion profile instead of private accumulator blinding.
+    #[serde(default)]
+    pub reveal_recursion_inputs: bool,
     /// The path to the witness file, if not passed it will get computed with the plaindriver
     pub witness: Option<PathBuf>,
 }
@@ -186,6 +193,11 @@ fn main() -> color_eyre::Result<ExitCode> {
     let out_dir = config.out_dir;
     let witness_file = config.witness;
     let has_zk = ZeroKnowledge::from(config.zk);
+    let recursion_visibility = if config.reveal_recursion_inputs {
+        RecursionInputVisibility::RevealToParticipants
+    } else {
+        RecursionInputVisibility::KeepSecret
+    };
 
     let main_start = std::time::Instant::now();
 
@@ -195,6 +207,12 @@ fn main() -> color_eyre::Result<ExitCode> {
         .context("while parsing program artifact")?;
     let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
     phase_timing("read_circuit", phase_start);
+    if constraint_system.is_recursive_verification_circuit()
+        && recursion_visibility == RecursionInputVisibility::KeepSecret
+    {
+        co_noir_common::keys::proof_privacy::ProofPrivacy::PrivateRecursion
+            .validate_proving_mode(has_zk, false)?;
+    }
 
     // Create witness
     let phase_start = std::time::Instant::now();
@@ -223,19 +241,22 @@ fn main() -> color_eyre::Result<ExitCode> {
     } else {
         ProverCrs::default()
     };
-    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
         &constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         &recursion_crs,
         &mut driver,
+        recursion_visibility,
     )
     .context("while creating the circuit")?;
     phase_timing("build_circuit", phase_start);
     // Read the Crs
     let phase_start = std::time::Instant::now();
-    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
+    // Size the exact finalized profile above, including private-recursion
+    // accumulator blinding. Canonical BB sizing omits those gates.
+    let crs_size = builder.compute_dyadic_size();
     let crs =
         CrsParser::<<ark_ec::bn::Bn<ark_bn254::Config> as ark_ec::pairing::Pairing>::G1>::get_crs::<
             Bn254,
@@ -365,5 +386,32 @@ fn main() -> color_eyre::Result<ExitCode> {
     } else {
         tracing::error!("Proof verification failed");
         Ok(ExitCode::FAILURE)
+    }
+}
+
+#[cfg(test)]
+mod privacy_cli_tests {
+    use super::*;
+
+    #[test]
+    fn plain_driver_disclosure_profile_is_explicit() {
+        assert_eq!(
+            Cli::try_parse_from(["plaindriver"])
+                .unwrap()
+                .reveal_recursion_inputs,
+            None
+        );
+        assert_eq!(
+            Cli::try_parse_from(["plaindriver", "--reveal-recursion-inputs"])
+                .unwrap()
+                .reveal_recursion_inputs,
+            Some(true)
+        );
+        assert_eq!(
+            Cli::try_parse_from(["plaindriver", "--reveal-recursion-inputs=false"])
+                .unwrap()
+                .reveal_recursion_inputs,
+            Some(false)
+        );
     }
 }

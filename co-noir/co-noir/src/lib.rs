@@ -36,6 +36,7 @@ pub use acir::FieldElement;
 pub use ark_bn254::Bn254;
 pub use ark_ec::pairing::Pairing;
 pub use co_acvm::{Rep3AcvmType, ShamirAcvmType};
+pub use co_builder::prelude::RecursionInputVisibility;
 pub use co_builder::prelude::constraint_system_from_reader;
 pub use co_builder::prelude::get_constraint_system_from_artifact;
 pub use co_noir_common::transcript::{Poseidon2Sponge, TranscriptHasher};
@@ -153,6 +154,7 @@ where
         precomputed: proving_key.polynomials.precomputed,
     };
     let result = ShamirProvingKey {
+        proof_privacy: proving_key.proof_privacy,
         polynomials,
         circuit_size: proving_key.circuit_size,
         public_inputs: proving_key.public_inputs,
@@ -171,6 +173,8 @@ where
 }
 
 /// Compute the circuit size that is needed to load the prover crs
+/// Size the canonical BB circuit profile (without private accumulator blinding).
+/// Use the CRS-aware visibility variant for private recursive proving.
 pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
     constraint_system: &AcirFormat<P::ScalarField>,
 ) -> Result<usize> {
@@ -181,6 +185,28 @@ pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
         &ProverCrs::<P>::default(),
         &mut PlainAcvmSolver::new(),
     )
+}
+
+/// Size the requested recursive circuit profile using the actual CRS basis.
+/// KeepSecret includes final-accumulator blinding gates and needs at least the
+/// first two CRS monomials. The empty witness keeps construction independent
+/// of private inputs. Nonrecursive circuits do not require a CRS here.
+pub fn compute_circuit_size_with_recursion_input_visibility<P: HonkCurve<TranscriptFieldType>>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+    crs: &ProverCrs<P>,
+    visibility: RecursionInputVisibility,
+) -> Result<usize> {
+    let mut driver = PlainAcvmSolver::new();
+    let builder = UltraCircuitBuilder::<P>::create_circuit_with_recursion_input_visibility(
+        constraint_system,
+        0,
+        vec![],
+        HonkRecursion::UltraHonk,
+        crs,
+        &mut driver,
+        visibility,
+    )?;
+    Ok(builder.compute_dyadic_size())
 }
 
 /// Build and finalize the plain UltraHonk circuit for read-only inspection (no witness,
@@ -194,13 +220,14 @@ pub fn build_finalized_circuit_plain<P: HonkCurve<TranscriptFieldType>>(
     // An empty witness puts the builder into write-vk mode, exactly like the
     // vk-generation path: the circuit structure is built and finalized without
     // requiring witness values.
-    UltraCircuitBuilder::<P>::create_circuit(
+    UltraCircuitBuilder::<P>::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         vec![],
         HonkRecursion::UltraHonk,
         &ProverCrs::<P>::default(),
         &mut driver,
+        RecursionInputVisibility::RevealToParticipants,
     )
 }
 
@@ -211,6 +238,27 @@ pub fn generate_proving_key_rep3<N: Network>(
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
     lookup_batch_size: Option<usize>,
+) -> Result<Rep3ProvingKey<Bn254G1>> {
+    generate_proving_key_rep3_with_recursion_input_visibility(
+        constraint_system,
+        witness_share,
+        net,
+        prover_crs,
+        lookup_batch_size,
+        RecursionInputVisibility::KeepSecret,
+    )
+}
+
+/// Generate a shared proving key with an explicit recursive-input disclosure policy.
+/// RevealToParticipants exposes the supplied inner proof, its public inputs,
+/// verification key, key hash and witness predicate to every MPC participant.
+pub fn generate_proving_key_rep3_with_recursion_input_visibility<N: Network>(
+    constraint_system: &AcirFormat<ark_bn254::Fr>,
+    witness_share: Rep3SharedWitness<ark_bn254::Fr>,
+    net: &N,
+    prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
+    recursion_input_visibility: RecursionInputVisibility,
 ) -> Result<Rep3ProvingKey<Bn254G1>> {
     let id = PartyID::try_from(net.id())?;
     let mut driver = Rep3AcvmSolver::new(net, A2BType::default())?;
@@ -229,13 +277,14 @@ pub fn generate_proving_key_rep3<N: Network>(
     };
     // create the circuit
     let t_build = std::time::Instant::now();
-    let builder = Rep3CoBuilder::create_circuit(
+    let builder = Rep3CoBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         witness_share,
         HonkRecursion::UltraHonk,
         crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
@@ -254,6 +303,32 @@ pub fn generate_proving_key_shamir<N: Network>(
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
     lookup_batch_size: Option<usize>,
+) -> Result<ShamirProvingKey<Bn254G1>> {
+    generate_proving_key_shamir_with_recursion_input_visibility(
+        num_parties,
+        threshold,
+        constraint_system,
+        witness_share,
+        net,
+        prover_crs,
+        lookup_batch_size,
+        RecursionInputVisibility::KeepSecret,
+    )
+}
+
+/// Generate a shared proving key with an explicit recursive-input disclosure policy.
+/// RevealToParticipants exposes the supplied inner proof, its public inputs,
+/// verification key, key hash and witness predicate to every MPC participant.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_proving_key_shamir_with_recursion_input_visibility<N: Network>(
+    num_parties: usize,
+    threshold: usize,
+    constraint_system: &AcirFormat<ark_bn254::Fr>,
+    witness_share: ShamirSharedWitness<ark_bn254::Fr>,
+    net: &N,
+    prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
+    recursion_input_visibility: RecursionInputVisibility,
 ) -> Result<ShamirProvingKey<Bn254G1>> {
     let id = net.id();
     // We have to handle precomputation on the fly, so amount is 0 initially
@@ -278,13 +353,14 @@ pub fn generate_proving_key_shamir<N: Network>(
     };
     // create the circuit
     let t_build = std::time::Instant::now();
-    let builder = ShamirCoBuilder::create_circuit(
+    let builder = ShamirCoBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         witness_share,
         HonkRecursion::UltraHonk,
         crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
@@ -354,19 +430,37 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
     constraint_system: &AcirFormat<P::ScalarField>,
     prover_crs: Arc<ProverCrs<P>>,
 ) -> Result<VerifyingKeyBarretenberg<P>> {
+    generate_vk_barretenberg_with_recursion_input_visibility(
+        constraint_system,
+        prover_crs,
+        RecursionInputVisibility::KeepSecret,
+    )
+}
+
+/// Generate a key for the selected recursive input visibility profile.
+/// Private and disclosed recursion use different circuit keys because only
+/// private recursion blinds the final public pairing accumulator.
+pub fn generate_vk_barretenberg_with_recursion_input_visibility<
+    P: HonkCurve<TranscriptFieldType>,
+>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+    prover_crs: Arc<ProverCrs<P>>,
+    visibility: RecursionInputVisibility,
+) -> Result<VerifyingKeyBarretenberg<P>> {
     let mut driver = PlainAcvmSolver::new();
     // The two halves of per-circuit setup, timed separately under
     // CO_NOIR_PHASE_TIMINGS=1: building the circuit STRUCTURE (empty witness —
     // this is what makes the whole thing witness-independent and hence
     // precomputable) and COMMITTING to the resulting precomputed polynomials.
     let t_structure = std::time::Instant::now();
-    let circuit = UltraCircuitBuilder::create_circuit(
+    let circuit = UltraCircuitBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         vec![],
         HonkRecursion::UltraHonk,
         &prover_crs,
         &mut driver,
+        visibility,
     )?;
     co_builder::phase_timing("vkgen/build_structure", t_structure);
 

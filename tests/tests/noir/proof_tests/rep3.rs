@@ -2,7 +2,7 @@ use crate::proof_tests::{CRS_PATH_G1, CRS_PATH_G2};
 use ark_bn254::{Bn254, Fr};
 use ark_serialize::CanonicalSerialize;
 use bytes::Bytes;
-use co_acvm::{solver::Rep3CoSolver, PlainAcvmSolver};
+use co_acvm::{solver::Rep3CoSolver, PlainAcvmSolver, Rep3AcvmType};
 use co_builder::{
     keys::proving_key,
     prelude::{HonkRecursion, UltraCircuitBuilder},
@@ -34,6 +34,20 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     has_zk: ZeroKnowledge,
     proof_file: &str,
 ) {
+    proof_test_with_recursion_visibility::<H>(
+        name,
+        has_zk,
+        proof_file,
+        co_noir::RecursionInputVisibility::KeepSecret,
+    );
+}
+
+fn proof_test_with_recursion_visibility<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    has_zk: ZeroKnowledge,
+    proof_file: &str,
+    recursion_input_visibility: co_noir::RecursionInputVisibility,
+) {
     let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
     let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
 
@@ -42,6 +56,13 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
             .expect("failed to parse program artifact");
     let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
     let public_inputs = &constraint_system.public_inputs;
+    let is_private_recursion = name.starts_with("recursion_private");
+    if is_private_recursion {
+        assert!(
+            public_inputs.is_empty(),
+            "Inner public inputs must be PRIVATE outer inputs"
+        );
+    }
 
     let witnesses = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
         .unwrap()
@@ -66,30 +87,57 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
 
     let nets = LocalNetwork::new_3_parties();
     let mut threads = Vec::with_capacity(3);
-    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prefix = CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, 2, ZeroKnowledge::No).unwrap();
+    let crs_size = co_noir::compute_circuit_size_with_recursion_input_visibility::<Bn254G1>(
+        &constraint_system,
+        &prefix,
+        recursion_input_visibility,
+    )
+    .unwrap();
     let prover_crs =
         Arc::new(CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, has_zk).unwrap());
     // Get vk
     let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+    let is_rom_fixture = name == "rom_shared";
+    let rom_threads = rayon::current_num_threads();
     for (net, witness) in izip!(nets, witnesses) {
         let prover_crs = prover_crs.clone();
         let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
         threads.push(std::thread::spawn(move || {
-            // generate proving key and vk
-            let pk = co_noir::generate_proving_key_rep3(
-                &constraint_system,
-                witness,
-                &net,
-                &prover_crs,
-                None,
-            )
-            .unwrap();
-            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+            let prove = || {
+                // generate proving key and vk
+                let pk = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
+                    &constraint_system,
+                    witness,
+                    &net,
+                    &prover_crs,
+                    None,
+                    recursion_input_visibility,
+                )
+                .unwrap();
+                if is_rom_fixture {
+                    assert!(
+                        !pk.rom_logup_records.is_empty(),
+                        "ROM regression must exercise LogUp rows"
+                    );
+                }
+                let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
 
-            let (proof, public_input) =
-                Rep3CoUltraHonk::<_, H>::prove(&net, pk, &prover_crs, has_zk, &vk.inner_vk)
-                    .unwrap();
-            (proof, public_input, vk)
+                let (proof, public_input) =
+                    Rep3CoUltraHonk::<_, H>::prove(&net, pk, &prover_crs, has_zk, &vk.inner_vk)
+                        .unwrap();
+                (proof, public_input, vk)
+            };
+            if is_rom_fixture {
+                // Rayon pools are not inherited by std::thread::spawn.
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(rom_threads)
+                    .build()
+                    .unwrap()
+                    .install(prove)
+            } else {
+                prove()
+            }
         }));
     }
 
@@ -114,7 +162,39 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     }
 
     let vk = results[0].2.clone();
-    if has_zk == ZeroKnowledge::No && name != "recursion" && name != "recursion_zk" {
+    if is_private_recursion {
+        // An empty-witness key must match the actual private MPC circuit. This
+        // detects witness-dependent layout and profile/CRS sizing mismatches.
+        let expected_vk =
+            co_noir::generate_vk_barretenberg_with_recursion_input_visibility::<Bn254G1>(
+                &constraint_system,
+                prover_crs.clone(),
+                recursion_input_visibility,
+            )
+            .unwrap();
+        for (_, _, party_vk) in &results {
+            assert_eq!(party_vk.inner_vk.to_buffer(), expected_vk.to_buffer());
+        }
+    }
+    if is_rom_fixture {
+        let expected_vk = std::fs::read(proof_file.replace("_proof_", "_vk_")).unwrap();
+        for (_, _, party_vk) in &results {
+            let serialized = if proof_file.ends_with("_pos") {
+                party_vk.inner_vk.to_buffer()
+            } else {
+                party_vk.inner_vk.to_buffer_keccak()
+            };
+            assert_eq!(
+                serialized, expected_vk,
+                "ROM VK must match the v6 BB oracle"
+            );
+        }
+    }
+    if has_zk == ZeroKnowledge::No
+        && name != "recursion"
+        && name != "recursion_zk"
+        && !is_private_recursion
+    {
         let proof_u8 = H::to_buffer(proof.inner_as_ref());
         let read_proof_u8 = std::fs::read(proof_file).unwrap();
         assert_eq!(proof_u8, read_proof_u8);
@@ -123,6 +203,19 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
         assert_eq!(proof, read_proof);
     }
 
+    if is_private_recursion {
+        assert!(
+            public_input.is_empty(),
+            "Private inner statement must not become outer public input"
+        );
+        if let Ok(directory) = std::env::var("PRIVATE_RECURSION_EVIDENCE_DIR") {
+            let directory = std::path::Path::new(&directory).join(format!("{name}-{has_zk:?}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(directory.join("proof"), H::to_buffer(proof.inner_as_ref())).unwrap();
+            std::fs::write(directory.join("public_inputs"), H::to_buffer(&public_input)).unwrap();
+            std::fs::write(directory.join("vk"), vk.inner_vk.to_buffer()).unwrap();
+        }
+    }
     let is_valid = UltraHonk::<Bn254G1, H>::verify(proof, &public_input, &vk, has_zk).unwrap();
     assert!(is_valid);
 }
@@ -298,6 +391,15 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     has_zk: ZeroKnowledge,
     proof_file: &str,
 ) {
+    witness_and_proof_test_with_visibility::<H>(name, has_zk, proof_file, false);
+}
+
+fn witness_and_proof_test_with_visibility<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    has_zk: ZeroKnowledge,
+    proof_file: &str,
+    require_public_inputs: bool,
+) {
     let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
     let prover_toml = format!("../test_vectors/noir/{name}/Prover.toml");
 
@@ -313,8 +415,17 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
         Arc::new(CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, has_zk).unwrap());
     // Get vk
     let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
-    let vk = co_noir::generate_vk::<Bn254>(&constraint_system, prover_crs.clone(), verifier_crs)
-        .unwrap();
+    // This helper reads plaintext TOML inputs. Keep the canonical public profile;
+    // genuine private-recursion tests use independently shared witness fixtures.
+    let vk = VerifyingKey::<Bn254> {
+        crs: verifier_crs,
+        inner_vk: co_noir::generate_vk_barretenberg_with_recursion_input_visibility::<Bn254G1>(
+            &constraint_system,
+            prover_crs.clone(),
+            co_noir::RecursionInputVisibility::RevealToParticipants,
+        )
+        .unwrap(),
+    };
     for net in nets {
         let prover_crs = prover_crs.clone();
         let vk = vk.clone();
@@ -322,16 +433,36 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
         let artifact = program_artifact.clone();
         let prover_toml = prover_toml.clone();
         threads.push(std::thread::spawn(move || {
-            let solver = Rep3CoSolver::new(&net, artifact, prover_toml).unwrap();
+            let solver = if require_public_inputs {
+                // Plain TOML values are Public even when the Noir ABI marks
+                // their witnesses private. Make this support boundary explicit.
+                let inputs =
+                    Rep3CoSolver::<Fr, LocalNetwork>::read_abi_bn254(&prover_toml, &artifact.abi)
+                        .unwrap();
+                assert!(inputs.clone().into_iter().count() > 0);
+                assert!(inputs
+                    .clone()
+                    .into_iter()
+                    .all(|(_, value)| matches!(value, Rep3AcvmType::Public(_))));
+                Rep3CoSolver::new_with_witness(&net, artifact, inputs).unwrap()
+            } else {
+                Rep3CoSolver::new(&net, artifact, prover_toml).unwrap()
+            };
             let witness = solver.solve().unwrap();
             let witness = co_noir::witness_stack_to_vec_rep3(witness);
+            if require_public_inputs {
+                assert!(witness
+                    .iter()
+                    .all(|value| matches!(value, Rep3Type::Public(_))));
+            }
             // generate proving key and vk
-            let pk = co_noir::generate_proving_key_rep3(
+            let pk = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
                 &constraint_system,
                 witness,
                 &net,
                 &prover_crs,
                 None,
+                co_noir::RecursionInputVisibility::RevealToParticipants,
             )
             .unwrap();
             let (proof, public_input) =
@@ -504,8 +635,8 @@ fn assert_byte_totals_within(
 /// The REP3 claim backing "batching cannot move proof/VK bytes" at the SHARE
 /// level (not merely the value level) is that `arithmetic::mul_vec` draws its
 /// masks one element at a time from the correlated ChaCha streams
-/// (`masking_field_element`, a per-element `F::rand` on rng1/rng2 — NOT the
-/// length-chunked `masking_field_elements_vec` used by `local_mul_vec`), so a
+/// (`masking_field_element`, a per-element `F::rand` on rng1/rng2; the fixed
+/// vector sampler now preserves that same uniform stream), so a
 /// single call over a concatenation consumes exactly the mask sequence the
 /// per-chunk calls consumed, and the reshared output shares are
 /// bit-identical. This test pins that property directly: two identical Rep3
@@ -620,8 +751,8 @@ struct CommsFenceMeasurement {
 /// untouched above) so new per-circuit fences don't each re-derive the
 /// harness.
 ///
-/// pk-gen is measured across BOTH REP3 networks (net0 + net1); prove is
-/// measured on net0 only -- this is what `Rep3CoUltraHonk::prove` uses, and
+/// Both pk-gen and prove use the upstream single REP3 network. Snapshots
+/// separate their counters; `Rep3CoUltraHonk::prove` starts after pk-gen, and
 /// matches the phase split documented in `rep3_comms_floor_table.json`.
 fn rep3_prove_comms_fence<H: TranscriptHasher<TranscriptFieldType>>(
     name: &str,
@@ -1293,17 +1424,33 @@ fn poseidon_witness_view_scan_no_plaintext_leak_poseidon2sponge() {
 }
 
 #[test]
-#[ignore = "REP3 methods on shared values are not yet implemented"]
-fn recursion_witness_and_proof_test_poseidon2sponge() {
-    witness_and_proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::No, "");
-    witness_and_proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::Yes, "");
+#[ignore = "Expensive full REP3 recursive witness construction and both outer proof modes"]
+fn recursion_public_inputs_witness_and_proof_test_poseidon2sponge() {
+    // This tests a non-ZK inner proof whose proof, key and inputs are already
+    // public to every party. It does not provide private recursive verification.
+    for outer_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        witness_and_proof_test_with_visibility::<Poseidon2Sponge>("recursion", outer_zk, "", true);
+    }
 }
 
 #[test]
-#[ignore = "REP3 methods on shared values are not yet implemented"]
-fn recursion_proof_test_poseidon2sponge() {
-    proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::No, "");
-    proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::Yes, "");
+#[ignore = "Expensive private REP3 recursive witness construction with a ZK outer proof"]
+fn private_non_zk_recursion_proof_test_poseidon2sponge() {
+    proof_test::<Poseidon2Sponge>("recursion_private", ZeroKnowledge::Yes, "");
+}
+
+#[test]
+#[ignore = "Expensive private REP3 disabled recursive witness construction with a ZK outer proof"]
+fn private_disabled_recursion_proof_test_poseidon2sponge() {
+    // Same ACIR and private ABI as recursion_private. The hidden predicate is
+    // false and one inner sumcheck scalar is corrupt; valid encodings remain.
+    proof_test::<Poseidon2Sponge>("recursion_private_disabled", ZeroKnowledge::Yes, "");
+}
+
+#[test]
+#[ignore = "Expensive private REP3 recursive witness construction with a ZK outer proof"]
+fn private_zk_recursion_proof_test_poseidon2sponge() {
+    proof_test::<Poseidon2Sponge>("recursion_private_zk", ZeroKnowledge::Yes, "");
 }
 
 #[test]
@@ -1314,10 +1461,29 @@ fn zk_recursion_witness_and_proof_test_poseidon2sponge() {
 }
 
 #[test]
+#[ignore = "Expensive full REP3 recursive proof with explicit input disclosure"]
+fn non_zk_recursion_explicit_reveal_proof_test_poseidon2sponge() {
+    for outer_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        proof_test_with_recursion_visibility::<Poseidon2Sponge>(
+            "recursion",
+            outer_zk,
+            "",
+            co_noir::RecursionInputVisibility::RevealToParticipants,
+        );
+    }
+}
+
+#[test]
 #[ignore = "Test is too slow for the pipeline"]
-fn zk_recursion_proof_test_poseidon2sponge() {
-    proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
-    proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
+fn zk_recursion_explicit_reveal_proof_test_poseidon2sponge() {
+    for outer_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        proof_test_with_recursion_visibility::<Poseidon2Sponge>(
+            "recursion_zk",
+            outer_zk,
+            "",
+            co_noir::RecursionInputVisibility::RevealToParticipants,
+        );
+    }
 }
 
 /// Loads the committed comms floor-table: median per-phase, per-party
@@ -1916,6 +2082,9 @@ fn lookup_chunk_boundaries_preserve_shared_proof() {
     }
 }
 
+/// Real secret-index ROM regression for the memory LogUp accumulators. In v6,
+/// dropping r6/r7 when merging sumcheck chunks breaks even honest proofs.
+/// Exercise independent thread schedules, both transcript modes, and ZK.
 #[test]
 fn rom_logup_shared_proofs_match_v6_oracle() {
     for num_threads in [1, 4] {
