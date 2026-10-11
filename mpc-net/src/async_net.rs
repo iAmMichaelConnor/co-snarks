@@ -7,12 +7,7 @@
 //! obtained (quinn bidi streams vs a split `Framed<TcpStream>`) and which runtime the
 //! tasks are spawned on, both of which are decided by the caller of [`AsyncChannels::add_peer`].
 
-use std::{
-    collections::HashMap,
-    io,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use std::{collections::HashMap, io, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use eyre::{Context, ContextCompat as _};
@@ -22,7 +17,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
-use crate::ConnectionStats;
+use crate::{ConnectionStats, TrafficCounters};
 
 /// Capacity (in frames) of each per-peer send/receive queue.
 pub(crate) const ASYNC_QUEUE_CAP: usize = 32;
@@ -35,8 +30,8 @@ enum WriteMsg {
     Flush(oneshot::Sender<eyre::Result<()>>),
 }
 
-type SendEntry = (mpsc::Sender<WriteMsg>, AtomicUsize);
-type RecvEntry = (Mutex<mpsc::Receiver<eyre::Result<Bytes>>>, AtomicUsize);
+type SendEntry = (mpsc::Sender<WriteMsg>, TrafficCounters);
+type RecvEntry = (Mutex<mpsc::Receiver<eyre::Result<Bytes>>>, TrafficCounters);
 
 /// Per-peer send/receive queues (and byte counters) shared by the async transports.
 #[derive(Debug)]
@@ -138,9 +133,9 @@ impl AsyncChannels {
         });
 
         self.send
-            .insert(other_id, (send_tx, AtomicUsize::default()));
+            .insert(other_id, (send_tx, TrafficCounters::default()));
         self.recv
-            .insert(other_id, (Mutex::new(recv_rx), AtomicUsize::default()));
+            .insert(other_id, (Mutex::new(recv_rx), TrafficCounters::default()));
     }
 
     /// Enqueue `data` to `to`.
@@ -148,8 +143,8 @@ impl AsyncChannels {
         if data.len() > self.max_frame_length {
             eyre::bail!("frame len {} > max {}", data.len(), self.max_frame_length);
         }
-        let (tx, sent_bytes) = self.send.get(&to).context("party id out-of-bounds")?;
-        sent_bytes.fetch_add(data.len(), Ordering::Relaxed);
+        let (tx, sent) = self.send.get(&to).context("party id out-of-bounds")?;
+        sent.record(data.len());
         tx.blocking_send(WriteMsg::Frame(data))
             .map_err(|_| eyre::eyre!("write task for party {to} terminated"))?;
         Ok(())
@@ -180,7 +175,7 @@ impl AsyncChannels {
 
     /// Receive the next frame from `from`.
     pub(crate) fn recv(&self, from: usize) -> eyre::Result<Bytes> {
-        let (receiver, recv_bytes) = self.recv.get(&from).context("party id out-of-bounds")?;
+        let (receiver, recv) = self.recv.get(&from).context("party id out-of-bounds")?;
         let mut guard = receiver.lock();
         let received = if let Some(timeout) = self.timeout {
             self.handle
@@ -193,23 +188,21 @@ impl AsyncChannels {
             Ok(None) => eyre::bail!("receiver sender dropped"),
             Err(_) => eyre::bail!("recv timeout waiting for party {from}",),
         };
-        recv_bytes.fetch_add(data.len(), Ordering::Relaxed);
+        recv.record(data.len());
         Ok(data)
     }
 
-    /// Application-level (sent, received) byte counts per peer.
+    /// Application-level (sent, received) byte and message counts per peer.
     pub(crate) fn stats(&self, my_id: usize) -> ConnectionStats {
         let mut stats = std::collections::BTreeMap::new();
-        for (id, (_, sent_bytes)) in self.send.iter() {
-            let recv_bytes = &self.recv.get(id).expect("was in send so must be in recv").1;
-            stats.insert(
-                *id,
-                (
-                    sent_bytes.load(Ordering::Relaxed),
-                    recv_bytes.load(Ordering::Relaxed),
-                ),
-            );
+        let mut msgs = std::collections::BTreeMap::new();
+        for (id, (_, sent)) in self.send.iter() {
+            let recv = &self.recv.get(id).expect("was in send so must be in recv").1;
+            let (sent_bytes, sent_msgs) = sent.load();
+            let (recv_bytes, recv_msgs) = recv.load();
+            stats.insert(*id, (sent_bytes, recv_bytes));
+            msgs.insert(*id, (sent_msgs, recv_msgs));
         }
-        ConnectionStats::new(my_id, stats)
+        ConnectionStats::new_with_msgs(my_id, stats, msgs)
     }
 }

@@ -35,4 +35,5 @@ thiserror.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+bincode.workspace = true
 mpc-net = { version = "0.5.0", path = "../../mpc-net", features = ["local"] }

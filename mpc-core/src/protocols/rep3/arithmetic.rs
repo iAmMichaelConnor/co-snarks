@@ -236,13 +236,20 @@ pub fn inv_vec<F: PrimeField, N: Network>(
     state: &mut Rep3State,
 ) -> eyre::Result<Vec<FieldShare<F>>> {
     let r = (0..a.len()).map(|_| rand(state)).collect_vec();
-    let y = mul_open_vec(a, &r, net, state)?;
+    let mut y = mul_open_vec(a, &r, net, state)?;
     if y.iter().any(|y| y.is_zero()) {
         eyre::bail!("During execution of inverse in MPC: cannot compute inverse of zero",);
     }
 
-    // we can unwrap as we checked that none of the y is zero
-    Ok(izip!(r, y).map(|(r, y)| r * y.inverse().unwrap()).collect())
+    // The opened y values are public, so we can Montgomery-batch-invert them. Batch
+    // inversion yields exactly the per-element inverses the previous serial loop computed
+    // (we bailed on zeros above), so the resulting shares are identical.
+    ark_ff::batch_inversion(&mut y);
+    Ok(r.par_iter()
+        .zip_eq(y.par_iter())
+        .with_min_len(1024)
+        .map(|(r, y)| *r * *y)
+        .collect())
 }
 
 /// Performs the opening of a shared value and returns the equivalent public value.
@@ -345,9 +352,10 @@ pub fn mul_open_vec<F: PrimeField, N: Network>(
     net: &N,
     state: &mut Rep3State,
 ) -> eyre::Result<Vec<F>> {
-    let mut a = izip!(a, b)
-        .map(|(a, b)| a * b + state.rngs.rand.masking_field_element::<F>())
-        .collect_vec();
+    // Reuse the pre-squeezed parallel local multiply (squeezes all masks up front, then
+    // multiplies in parallel). The opened values are identical to the serial per-element
+    // version: the masks cancel across parties in the broadcast sum.
+    let mut a = local_mul_vec(a, b, state);
     let (b, c) = net.broadcast_many(&a)?;
     izip!(a.iter_mut(), b, c).for_each(|(a, b, c)| *a += b + c);
     Ok(a)

@@ -8,6 +8,7 @@ use ark_poly::{DenseUVPolynomial, Polynomial as _, univariate::DensePolynomial};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_traits::Zero;
 use rand::{CryptoRng, Rng};
+use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{AddAssign, Index, IndexMut, MulAssign, SubAssign};
 
@@ -245,8 +246,20 @@ impl<F: PrimeField> Polynomial<F> {
     }
 
     pub fn add_scaled_slice(&mut self, src: &[F], scalar: &F) {
-        for (des, src) in self.coefficients.iter_mut().zip(src) {
-            *des += *src * scalar;
+        // Elementwise, purely local field ops; large vectors go through rayon (bit-identical to
+        // the serial loop since each output element only depends on the same input index).
+        // Threshold mirrors SharedPolynomial::MIN_PAR_LEN.
+        if self.coefficients.len().min(src.len()) >= (1 << 13) {
+            self.coefficients
+                .par_iter_mut()
+                .zip(src.par_iter())
+                .for_each(|(des, src)| {
+                    *des += *scalar * src;
+                });
+        } else {
+            for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
+                *des += *scalar * src;
+            }
         }
     }
 

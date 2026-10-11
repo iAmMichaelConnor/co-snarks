@@ -183,15 +183,44 @@ pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
     )
 }
 
+/// Build and finalize the plain UltraHonk circuit for read-only inspection (no witness,
+/// no CRS file, no network, no proving). This is the same construction as
+/// [`compute_circuit_size`], but returns the finalized builder so callers can report
+/// structural statistics (per-block trace rows, lookup tables, dyadic size, ...).
+pub fn build_finalized_circuit_plain<P: HonkCurve<TranscriptFieldType>>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+) -> Result<UltraCircuitBuilder<P>> {
+    let mut driver = PlainAcvmSolver::new();
+    // An empty witness puts the builder into write-vk mode, exactly like the
+    // vk-generation path: the circuit structure is built and finalized without
+    // requiring witness values.
+    UltraCircuitBuilder::<P>::create_circuit(
+        constraint_system,
+        0,
+        vec![],
+        HonkRecursion::UltraHonk,
+        &ProverCrs::<P>::default(),
+        &mut driver,
+    )
+}
+
 /// Generate a REP3 shared proving key
 pub fn generate_proving_key_rep3<N: Network>(
     constraint_system: &AcirFormat<ark_bn254::Fr>,
     witness_share: Rep3SharedWitness<ark_bn254::Fr>,
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
 ) -> Result<Rep3ProvingKey<Bn254G1>> {
     let id = PartyID::try_from(net.id())?;
     let mut driver = Rep3AcvmSolver::new(net, A2BType::default())?;
+    // Override the lookup read-count batch size if requested: `None` keeps the
+    // driver's bounded default; `Some(0)` = unbounded (all gates in one batch —
+    // fewest rounds but can OOM on lookup-dense circuits); `Some(k)` = k gates per
+    // batch (peak memory ∝ k). Byte-identical for any value.
+    if let Some(k) = lookup_batch_size {
+        driver.set_lookup_read_count_batch_size((k != 0).then_some(k));
+    }
     let witness_share = witness_share.into_iter().map(Rep3AcvmType::from).collect();
     let crs = if constraint_system.is_recursive_verification_circuit() {
         prover_crs // TACEO TODO: Maybe just use a subset of the crs here?
@@ -199,6 +228,7 @@ pub fn generate_proving_key_rep3<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
+    let t_build = std::time::Instant::now();
     let builder = Rep3CoBuilder::create_circuit(
         constraint_system,
         0,
@@ -207,12 +237,12 @@ pub fn generate_proving_key_rep3<N: Network>(
         crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
-    Ok(proving_key::create_prover_instance(
-        id,
-        builder,
-        &mut driver,
-    )?)
+    let t_instance = std::time::Instant::now();
+    let pk = proving_key::create_prover_instance(id, builder, &mut driver)?;
+    co_builder::phase_timing("pkgen/prover_instance", t_instance);
+    Ok(pk)
 }
 
 /// Generate a shamir shared proving key
@@ -223,12 +253,20 @@ pub fn generate_proving_key_shamir<N: Network>(
     witness_share: ShamirSharedWitness<ark_bn254::Fr>,
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+    lookup_batch_size: Option<usize>,
 ) -> Result<ShamirProvingKey<Bn254G1>> {
     let id = net.id();
     // We have to handle precomputation on the fly, so amount is 0 initially
     let preprocessing = ShamirPreprocessing::new(num_parties, threshold, 0, net)?;
     let state = ShamirState::from(preprocessing);
     let mut driver = ShamirAcvmSolver::new(net, state);
+    // Override the lookup read-count batch size if requested: `None` keeps the
+    // driver's bounded default; `Some(0)` = unbounded (all gates in one batch —
+    // fewest rounds but can OOM on lookup-dense circuits); `Some(k)` = k gates per
+    // batch (peak memory ∝ k). Byte-identical for any value.
+    if let Some(k) = lookup_batch_size {
+        driver.set_lookup_read_count_batch_size((k != 0).then_some(k));
+    }
     let witness_share = witness_share
         .into_iter()
         .map(ShamirAcvmType::from)
@@ -239,6 +277,7 @@ pub fn generate_proving_key_shamir<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
+    let t_build = std::time::Instant::now();
     let builder = ShamirCoBuilder::create_circuit(
         constraint_system,
         0,
@@ -247,12 +286,12 @@ pub fn generate_proving_key_shamir<N: Network>(
         crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("pkgen/build_circuit", t_build);
     // generate pk
-    Ok(proving_key::create_prover_instance(
-        id,
-        builder,
-        &mut driver,
-    )?)
+    let t_instance = std::time::Instant::now();
+    let pk = proving_key::create_prover_instance(id, builder, &mut driver)?;
+    co_builder::phase_timing("pkgen/prover_instance", t_instance);
+    Ok(pk)
 }
 
 /// Generate a plain proving key
@@ -289,6 +328,11 @@ where
     P::G1: HonkCurve<TranscriptFieldType>,
 {
     let mut driver = PlainAcvmSolver::new();
+    // The two halves of per-circuit setup, timed separately under
+    // CO_NOIR_PHASE_TIMINGS=1: building the circuit STRUCTURE (empty witness —
+    // this is what makes the whole thing witness-independent and hence
+    // precomputable) and COMMITTING to the resulting precomputed polynomials.
+    let t_structure = std::time::Instant::now();
     let circuit = UltraCircuitBuilder::<P::G1>::create_circuit(
         constraint_system,
         0,
@@ -297,13 +341,12 @@ where
         &prover_crs,
         &mut driver,
     )?;
+    co_builder::phase_timing("vkgen/build_structure", t_structure);
 
-    Ok(VerifyingKey::create(
-        circuit,
-        prover_crs,
-        verifier_crs,
-        &mut driver,
-    )?)
+    let t_vk = std::time::Instant::now();
+    let vk = VerifyingKey::create(circuit, prover_crs, verifier_crs, &mut driver)?;
+    co_builder::phase_timing("vkgen/create_key", t_vk);
+    Ok(vk)
 }
 
 /// Generate a barretenberg verification key
@@ -312,6 +355,11 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
     prover_crs: Arc<ProverCrs<P>>,
 ) -> Result<VerifyingKeyBarretenberg<P>> {
     let mut driver = PlainAcvmSolver::new();
+    // The two halves of per-circuit setup, timed separately under
+    // CO_NOIR_PHASE_TIMINGS=1: building the circuit STRUCTURE (empty witness —
+    // this is what makes the whole thing witness-independent and hence
+    // precomputable) and COMMITTING to the resulting precomputed polynomials.
+    let t_structure = std::time::Instant::now();
     let circuit = UltraCircuitBuilder::create_circuit(
         constraint_system,
         0,
@@ -320,7 +368,12 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
         &prover_crs,
         &mut driver,
     )?;
-    Ok(circuit.create_vk_barretenberg(prover_crs, &mut driver)?)
+    co_builder::phase_timing("vkgen/build_structure", t_structure);
+
+    let t_vk = std::time::Instant::now();
+    let vk = circuit.create_vk_barretenberg(prover_crs, &mut driver)?;
+    co_builder::phase_timing("vkgen/create_key", t_vk);
+    Ok(vk)
 }
 
 /// Split a proving key into RPE3 shares

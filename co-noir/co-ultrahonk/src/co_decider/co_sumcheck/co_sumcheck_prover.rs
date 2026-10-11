@@ -18,6 +18,7 @@ use co_noir_common::{
     transcript::{Transcript, TranscriptHasher},
 };
 use mpc_net::Network;
+use rayon::prelude::*;
 use ultrahonk::{Utils, prelude::GateSeparatorPolynomial};
 
 // Keep in mind, the UltraHonk protocol (UltraFlavor) does not per default have ZK
@@ -36,27 +37,56 @@ impl<
     ) {
         tracing::trace!("Partially_evaluate init");
 
-        // Barretenberg uses multithreading here
+        // Folding each column is independent, purely local (communication- and randomness-free)
+        // work for every driver — only public field ops and the linear share ops T::sub /
+        // T::mul_with_public / T::add — so the work is farmed out to rayon (same convention as
+        // the oink row loops). Source and destination are distinct buffers, and destination
+        // element j only reads source elements 2j and 2j+1, so a column additionally splits
+        // into row chunks. Each output element is computed exactly as in the serial loop, so
+        // the result is bit-identical regardless of chunking.
 
-        for (poly_src, poly_des) in polys
+        // Number of destination rows per inner task (first sumcheck round processes
+        // round_size = 2^20 source rows per column at the largest size).
+        const ROW_CHUNK: usize = 1 << 15;
+        let n_out = round_size >> 1;
+
+        polys
             .public_iter()
             .zip(partially_evaluated_poly.public_iter_mut())
-        {
-            for i in (0..round_size).step_by(2) {
-                poly_des[i >> 1] = poly_src[i] + (poly_src[i + 1] - poly_src[i]) * round_challenge;
-            }
-        }
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|(poly_src, poly_des)| {
+                poly_des[..n_out]
+                    .par_chunks_mut(ROW_CHUNK)
+                    .enumerate()
+                    .for_each(|(c, chunk)| {
+                        let base = c * ROW_CHUNK;
+                        for (k, des) in chunk.iter_mut().enumerate() {
+                            let i = 2 * (base + k);
+                            *des = poly_src[i] + (poly_src[i + 1] - poly_src[i]) * round_challenge;
+                        }
+                    });
+            });
 
-        for (poly_src, poly_des) in polys
+        polys
             .shared_iter()
             .zip(partially_evaluated_poly.shared_iter_mut())
-        {
-            for i in (0..round_size).step_by(2) {
-                let tmp = T::sub(poly_src[i + 1], poly_src[i]);
-                let tmp = T::mul_with_public(*round_challenge, tmp);
-                poly_des[i >> 1] = T::add(poly_src[i], tmp);
-            }
-        }
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|(poly_src, poly_des)| {
+                poly_des[..n_out]
+                    .par_chunks_mut(ROW_CHUNK)
+                    .enumerate()
+                    .for_each(|(c, chunk)| {
+                        let base = c * ROW_CHUNK;
+                        for (k, des) in chunk.iter_mut().enumerate() {
+                            let i = 2 * (base + k);
+                            let tmp = T::sub(poly_src[i + 1], poly_src[i]);
+                            let tmp = T::mul_with_public(*round_challenge, tmp);
+                            *des = T::add(poly_src[i], tmp);
+                        }
+                    });
+            });
     }
 
     pub(crate) fn partially_evaluate_inplace(
@@ -65,33 +95,45 @@ impl<
     ) {
         tracing::trace!("Partially_evaluate inplace");
 
-        // Barretenberg uses multithreading here
+        // As in partially_evaluate_init, each column is independent and purely local for every
+        // driver, so the columns run in parallel on rayon. The in-place fold within a column
+        // (write at i>>1, reads at i, i+1) stays serial: its reads overlap earlier writes, so it
+        // cannot be chunked, but the per-column scan order is unchanged and the results are
+        // bit-identical to the serial loop.
 
-        for poly in partially_evaluated_poly.public_iter_mut() {
-            let limit = poly.len();
-            for i in (0..limit).step_by(2) {
-                poly[i >> 1] = poly[i] + (poly[i + 1] - poly[i]) * round_challenge;
-            }
+        partially_evaluated_poly
+            .public_iter_mut()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|poly| {
+                let limit = poly.len();
+                for i in (0..limit).step_by(2) {
+                    poly[i >> 1] = poly[i] + (poly[i + 1] - poly[i]) * round_challenge;
+                }
 
-            poly.truncate(limit / 2 + limit % 2);
-            if poly.len() < 2 {
-                poly.push(P::ScalarField::zero());
-            }
-        }
+                poly.truncate(limit / 2 + limit % 2);
+                if poly.len() < 2 {
+                    poly.push(P::ScalarField::zero());
+                }
+            });
 
-        for poly in partially_evaluated_poly.shared_iter_mut() {
-            let limit = poly.len();
-            for i in (0..limit).step_by(2) {
-                let tmp = T::sub(poly[i + 1], poly[i]);
-                let tmp = T::mul_with_public(*round_challenge, tmp);
-                poly[i >> 1] = T::add(poly[i], tmp);
-            }
+        partially_evaluated_poly
+            .shared_iter_mut()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|poly| {
+                let limit = poly.len();
+                for i in (0..limit).step_by(2) {
+                    let tmp = T::sub(poly[i + 1], poly[i]);
+                    let tmp = T::mul_with_public(*round_challenge, tmp);
+                    poly[i >> 1] = T::add(poly[i], tmp);
+                }
 
-            poly.truncate(limit / 2 + limit % 2);
-            if poly.len() < 2 {
-                poly.push(T::ArithmeticShare::default());
-            }
-        }
+                poly.truncate(limit / 2 + limit % 2);
+                if poly.len() < 2 {
+                    poly.push(T::ArithmeticShare::default());
+                }
+            });
     }
 
     fn add_evals_to_transcript(
@@ -166,6 +208,12 @@ impl<
             multivariate_d as usize,
         );
 
+        // Sub-phase wall-clock accumulators across all rounds (reported once at the end,
+        // only when CO_NOIR_PHASE_TIMINGS=1).
+        let mut t_univariate = 0f64;
+        let mut t_open = 0f64;
+        let mut t_partial_eval = 0f64;
+
         let mut multivariate_challenge = Vec::with_capacity(virtual_log_n);
         let round_idx = 0;
 
@@ -174,6 +222,7 @@ impl<
         // In the first round, we compute the first univariate polynomial and populate the book-keeping table of
         // #partially_evaluated_polynomials, which has \f$ n/2 \f$ rows and \f$ N \f$ columns. When the Flavor has ZK,
         // compute_univariate also takes into account the zk_sumcheck_data.
+        let timer = std::time::Instant::now();
         let round_univariate = sum_check_round.compute_univariate::<T, P, N>(
             self.net,
             self.state,
@@ -183,7 +232,10 @@ impl<
             &self.memory.polys,
             &self.memory.alphas,
         )?;
+        t_univariate += timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
         let round_univariate = T::open_many(&round_univariate.evaluations, self.net, self.state)?;
+        t_open += timer.elapsed().as_secs_f64();
 
         // Place the evaluations of the round univariate into transcript.
         transcript.send_fr_iter_to_verifier::<P, _>(
@@ -194,6 +246,7 @@ impl<
         multivariate_challenge.push(round_challenge);
 
         // Prepare sumcheck book-keeping table for the next round
+        let timer = std::time::Instant::now();
         let mut partially_evaluated_polys =
             PartiallyEvaluatePolys::<T, P>::new(multivariate_n as usize >> 1);
         Self::partially_evaluate_init(
@@ -202,6 +255,7 @@ impl<
             multivariate_n as usize,
             &round_challenge,
         );
+        t_partial_eval += timer.elapsed().as_secs_f64();
 
         gate_separators.partially_evaluate(round_challenge);
 
@@ -213,6 +267,7 @@ impl<
             // Write the round univariate to the transcript
             tracing::trace!("Sumcheck prove round {}", round_idx);
 
+            let timer = std::time::Instant::now();
             let round_univariate = sum_check_round.compute_univariate::<T, P, N>(
                 self.net,
                 self.state,
@@ -222,9 +277,12 @@ impl<
                 &partially_evaluated_polys,
                 &self.memory.alphas,
             )?;
+            t_univariate += timer.elapsed().as_secs_f64();
 
+            let timer = std::time::Instant::now();
             let round_univariate =
                 T::open_many(&round_univariate.evaluations, self.net, self.state)?;
+            t_open += timer.elapsed().as_secs_f64();
 
             // Place the evaluations of the round univariate into transcript.
             transcript.send_fr_iter_to_verifier::<P, _>(
@@ -235,10 +293,15 @@ impl<
             multivariate_challenge.push(round_challenge);
 
             // Prepare sumcheck book-keeping table for the next round
+            let timer = std::time::Instant::now();
             Self::partially_evaluate_inplace(&mut partially_evaluated_polys, &round_challenge);
+            t_partial_eval += timer.elapsed().as_secs_f64();
             gate_separators.partially_evaluate(round_challenge);
             sum_check_round.round_size >>= 1;
         }
+        crate::phase_timing_secs("sumcheck/compute_univariate_total", t_univariate);
+        crate::phase_timing_secs("sumcheck/open_many_total", t_open);
+        crate::phase_timing_secs("sumcheck/partially_evaluate_total", t_partial_eval);
 
         let mut virtual_gate_separator = GateSeparatorPolynomial::construct_virtual_separator(
             &self.memory.gate_challenges,
@@ -329,9 +392,17 @@ impl<
 
         tracing::trace!("Sumcheck prove round {}", round_idx);
 
+        // Sub-phase wall-clock accumulators across all rounds (reported once at the end,
+        // only when CO_NOIR_PHASE_TIMINGS=1).
+        let mut t_univariate = 0f64;
+        let mut t_open = 0f64;
+        let mut t_partial_eval = 0f64;
+        let mut t_zk_updates = 0f64;
+
         // In the first round, we compute the first univariate polynomial and populate the book-keeping table of
         // #partially_evaluated_polynomials, which has \f$ n/2 \f$ rows and \f$ N \f$ columns. When the Flavor has ZK,
         // compute_univariate also takes into account the zk_sumcheck_data.
+        let timer = std::time::Instant::now();
         let round_univariate = sum_check_round.compute_univariate_zk::<T, P, N>(
             self.net,
             self.state,
@@ -343,7 +414,10 @@ impl<
             &mut row_disabling_polynomial,
             &self.memory.alphas,
         )?;
+        t_univariate += timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
         let round_univariate = T::open_many(&round_univariate.evaluations, self.net, self.state)?;
+        t_open += timer.elapsed().as_secs_f64();
 
         // Place the evaluations of the round univariate into transcript.
         transcript.send_fr_iter_to_verifier::<P, _>(
@@ -354,6 +428,7 @@ impl<
         multivariate_challenge.push(round_challenge);
 
         // Prepare sumcheck book-keeping table for the next round
+        let timer = std::time::Instant::now();
         let mut partially_evaluated_polys =
             PartiallyEvaluatePolys::<T, P>::new(multivariate_n as usize >> 1);
         Self::partially_evaluate_init(
@@ -362,9 +437,12 @@ impl<
             multivariate_n as usize,
             &round_challenge,
         );
+        t_partial_eval += timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
         zk_sumcheck_data.update_zk_sumcheck_data(round_challenge, round_idx);
 
         row_disabling_polynomial.update_evaluations(round_challenge, round_idx);
+        t_zk_updates += timer.elapsed().as_secs_f64();
 
         gate_separators.partially_evaluate(round_challenge);
         sum_check_round.round_size >>= 1; // AZTEC TODO(#224)(Cody): Maybe partially_evaluate should do this and
@@ -374,6 +452,7 @@ impl<
             tracing::trace!("Sumcheck prove round {}", round_idx);
             // Write the round univariate to the transcript
 
+            let timer = std::time::Instant::now();
             let round_univariate = sum_check_round.compute_univariate_zk::<T, P, N>(
                 self.net,
                 self.state,
@@ -385,8 +464,11 @@ impl<
                 &mut row_disabling_polynomial,
                 &self.memory.alphas,
             )?;
+            t_univariate += timer.elapsed().as_secs_f64();
+            let timer = std::time::Instant::now();
             let round_univariate =
                 T::open_many(&round_univariate.evaluations, self.net, self.state)?;
+            t_open += timer.elapsed().as_secs_f64();
 
             // Place the evaluations of the round univariate into transcript.
             transcript.send_fr_iter_to_verifier::<P, _>(
@@ -396,18 +478,23 @@ impl<
             let round_challenge = transcript.get_challenge::<P>(format!("Sumcheck:u_{round_idx}"));
             multivariate_challenge.push(round_challenge);
             // Prepare sumcheck book-keeping table for the next round
-
+            let timer = std::time::Instant::now();
             Self::partially_evaluate_inplace(&mut partially_evaluated_polys, &round_challenge);
-
+            t_partial_eval += timer.elapsed().as_secs_f64();
             // Prepare evaluation masking and libra structures for the next round (for ZK Flavors)
-
+            let timer = std::time::Instant::now();
             zk_sumcheck_data.update_zk_sumcheck_data(round_challenge, round_idx);
             row_disabling_polynomial.update_evaluations(round_challenge, round_idx);
+            t_zk_updates += timer.elapsed().as_secs_f64();
 
             gate_separators.partially_evaluate(round_challenge);
             sum_check_round.round_size >>= 1;
         }
         tracing::trace!("Completed {multivariate_d} rounds of sumcheck");
+        crate::phase_timing_secs("sumcheck/compute_univariate_total", t_univariate);
+        crate::phase_timing_secs("sumcheck/open_many_total", t_open);
+        crate::phase_timing_secs("sumcheck/partially_evaluate_total", t_partial_eval);
+        crate::phase_timing_secs("sumcheck/zk_updates_total", t_zk_updates);
 
         // Virtual rounds: the prover's multilinear polynomials in `multivariate_d` variables are
         // extended by zero to polynomials in `virtual_log_n` variables. The round univariates are
@@ -465,7 +552,7 @@ impl<
         // evaluations of all witnesses are masked.
         let multivariate_evaluations =
             Self::extract_claimed_evaluations(self.net, self.state, partially_evaluated_polys)?;
-
+        let timer = std::time::Instant::now();
         let masking_poly = self
             .memory
             .gemini_masking_poly
@@ -473,7 +560,7 @@ impl<
             .expect("Gemini masking polynomial must be prepared in Oink")
             .clone();
         let masking_eval_shared = masking_poly.evaluate_mle(&multivariate_challenge);
-
+        crate::phase_timing("sumcheck/masking_poly_eval_mle", timer);
         let masking_eval = T::open_many(&[masking_eval_shared], self.net, self.state)?[0];
         Self::add_evals_to_transcript(transcript, &multivariate_evaluations, Some(masking_eval));
 
