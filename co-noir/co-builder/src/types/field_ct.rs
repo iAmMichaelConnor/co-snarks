@@ -621,7 +621,10 @@ impl<F: PrimeField> FieldCT<F> {
                 let q_l = other.additive_constant;
                 let q_c = -val;
                 let other_val = other.get_value(builder, driver);
-                let inverse = driver.invert(other_val)?;
+                // Witness construction must not reveal whether a secret
+                // denominator is zero. The unchanged gate below rejects an
+                // unsatisfied nonzero-numerator division.
+                let inverse = Self::zero_or_inverse::<P, T>(other_val, driver)?;
                 let out_value = driver.mul_with_public(val, inverse);
                 result.witness_index = builder.add_variable(out_value);
                 builder.create_arithmetic_gate(&PolyTriple {
@@ -1023,7 +1026,7 @@ impl<F: PrimeField> FieldCT<F> {
             let val: BigUint = T::get_public(&self.get_value(builder, driver))
                 .expect("Constants are public")
                 .into();
-            assert!((val.bits() as usize) < num_bits);
+            assert!((val.bits() as usize) <= num_bits);
         } else {
             let index = self.get_witness_index(builder, driver);
             // We have plookup
@@ -1721,7 +1724,7 @@ impl<F: PrimeField> FieldCT<F> {
         let (lo_val, hi_val) = if T::is_shared(&value) {
             let value = T::get_shared(&value).expect("Already checked it is shared");
             let [lo, hi] = driver.slice(value, lo_bits as u8, 0, max_bits)?;
-            (T::AcvmType::from(hi), T::AcvmType::from(lo))
+            (T::AcvmType::from(lo), T::AcvmType::from(hi))
         } else {
             let value: BigUint = T::get_public(&value)
                 .expect("Already checked it is public")
@@ -4415,34 +4418,57 @@ impl<F: PrimeField> ByteArray<F> {
         driver: &mut T,
     ) -> eyre::Result<Self> {
         let max_num_bytes = 32;
-        let midpoint = max_num_bytes / 2;
-        let one = BigUint::one();
-
-        assert!(num_bytes < max_num_bytes);
-        let mut values = Vec::with_capacity(num_bytes);
+        assert!(num_bytes <= max_num_bytes);
         let value = input.get_value(builder, driver);
 
         let is_shared = T::is_shared(&value);
-        let decomposed = if is_shared {
+        let decomposed = if num_bytes == 0 {
+            Vec::new()
+        } else if is_shared {
             let value = T::get_shared(&value).expect("Already checked it is shared");
 
-            driver
-                .decompose_arithmetic(value, num_bytes * 8, 8)?
+            let mut bytes: Vec<_> = driver
+                .decompose_arithmetic(value, (num_bytes * 8).min(F::MODULUS_BIT_SIZE as usize), 8)?
                 .into_iter()
-                .rev()
                 .map(T::AcvmType::from)
-                .collect::<Vec<_>>()
+                .collect();
+            // The top field byte may contain fewer than eight bits. Any bytes
+            // beyond the field width are public zero, before reversing to BE.
+            bytes.resize(num_bytes, T::public_zero());
+            bytes.reverse();
+            bytes
         } else {
             let value: BigUint = T::get_public(&value)
                 .expect("Already checked it is public")
                 .into();
-            let mut bytes = value.to_bytes_be();
-            bytes.resize(num_bytes, 0);
-            bytes
-                .into_iter()
-                .map(|byte| F::from(byte).into())
+            (0..num_bytes)
+                .map(|i| {
+                    let shift = (num_bytes - i - 1) * 8;
+                    F::from((&value >> shift) & BigUint::from(255u64)).into()
+                })
                 .collect::<Vec<_>>()
         };
+
+        Self::from_field_ct_with_bytes(input, num_bytes, decomposed, builder, driver)
+    }
+
+    // Keep byte extraction separate from its constraints. Tests can inject a
+    // noncanonical 256-bit representative, as in BB's byte_array test_val path.
+    fn from_field_ct_with_bytes<
+        P: CurveGroup<ScalarField = F>,
+        T: NoirWitnessExtensionProtocol<P::ScalarField>,
+    >(
+        input: &FieldCT<F>,
+        num_bytes: usize,
+        decomposed: Vec<T::AcvmType>,
+        builder: &mut GenericUltraCircuitBuilder<P, T>,
+        driver: &mut T,
+    ) -> eyre::Result<Self> {
+        assert!(num_bytes <= 32);
+        assert_eq!(decomposed.len(), num_bytes);
+        let midpoint = 16;
+        let one = BigUint::one();
+        let mut values = Vec::with_capacity(num_bytes);
 
         // To optimize the computation of the reconstructed_hi  and reconstructed_lo, we use the `field_t::accumulate`
         // method.
@@ -4501,8 +4527,8 @@ impl<F: PrimeField> ByteArray<F> {
             let [diff_lo_lo_value, diff_lo_hi_value] = if T::is_shared(&diff_lo_value) {
                 let slice_result = driver.slice(
                     T::get_shared(&diff_lo_value).expect("we checked it is shared"),
+                    128,
                     0,
-                    127,
                     F::MODULUS_BIT_SIZE as usize,
                 )?;
                 [
@@ -4611,3 +4637,7 @@ impl<F: PrimeField> ByteArray<F> {
         Self { values }
     }
 }
+
+#[cfg(test)]
+#[path = "field_ct_slice_tests.rs"]
+mod slice_tests;

@@ -381,8 +381,8 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         bitsize: usize,
     ) -> eyre::Result<[Self::ArithmeticShare; 2]> {
         let x: BigUint = input.into();
-        let hi = F::from(Utils::slice_u256(&x, lsb as u64, msb as u64));
-        let lo = F::from(Utils::slice_u256(&x, msb as u64, bitsize as u64));
+        let lo = F::from(Utils::slice_u256(&x, lsb as u64, msb as u64));
+        let hi = F::from(Utils::slice_u256(&x, msb as u64, bitsize as u64));
 
         Ok([lo, hi])
     }
@@ -397,8 +397,8 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         let mut result = Vec::with_capacity(input.len());
         for x in input.iter() {
             let x: BigUint = (*x).into();
-            let hi = F::from(Utils::slice_u256(&x, lsb as u64, msb as u64));
-            let lo = F::from(Utils::slice_u256(&x, msb as u64, bitsize as u64));
+            let lo = F::from(Utils::slice_u256(&x, lsb as u64, msb as u64));
+            let hi = F::from(Utils::slice_u256(&x, msb as u64, bitsize as u64));
             result.push([lo, hi]);
         }
         Ok(result)
@@ -966,19 +966,20 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         scalar: &Self::AcvmType,
         max_num_bits: usize,
     ) -> eyre::Result<Vec<Self::AcvmType>> {
-        let modulus: BigUint = F::MODULUS.into();
-        let mut scalar_multiplier = scalar.into_bigint().into();
+        let mut scalar_multiplier: BigUint = scalar.into_bigint().into();
 
-        let num_rounds = if max_num_bits == 0 || scalar_multiplier.is_zero() {
+        let num_rounds = if max_num_bits == 0 {
             F::MODULUS_BIT_SIZE as usize
         } else {
             max_num_bits
         };
 
-        // NAF can't handle 0 so we set scalar = r in this case.
-        if scalar_multiplier.is_zero() {
-            scalar_multiplier = modulus;
-        }
+        // Match v6 biggroup_nafs.hpp: zero uses the same public width and
+        // skew-one representation as other even scalars.
+        eyre::ensure!(
+            num_rounds <= F::MODULUS_BIT_SIZE as usize,
+            "NAF width exceeds scalar field width"
+        );
 
         let skew = (&scalar_multiplier & BigUint::one()).is_zero();
         if skew {

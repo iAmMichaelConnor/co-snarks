@@ -1555,10 +1555,10 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 Ok(arithmetic::lt_public(b, a, self.net, &mut self.state)?.into())
             }
             (Rep3AcvmType::Shared(a), Rep3AcvmType::Public(b)) => {
-                Ok(arithmetic::ge_public(a, b, self.net, &mut self.state)?.into())
+                Ok(arithmetic::gt_public(a, b, self.net, &mut self.state)?.into())
             }
             (Rep3AcvmType::Shared(a), Rep3AcvmType::Shared(b)) => {
-                Ok(arithmetic::ge(a, b, self.net, &mut self.state)?.into())
+                Ok(arithmetic::gt(a, b, self.net, &mut self.state)?.into())
             }
         }
     }
@@ -2730,6 +2730,10 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         b: &[[Self::AcvmType; 4]],
         to_add: &[[Self::AcvmType; 4]],
     ) -> eyre::Result<([Self::AcvmType; 4], Self::OtherAcvmType<C>)> {
+        eyre::ensure!(
+            a.len() == b.len(),
+            "Non-native product vectors must have equal lengths"
+        );
         let a_public = a.iter().all(|arr| arr.iter().all(|x| !Self::is_shared(x)));
         let b_public = b.iter().all(|arr| arr.iter().all(|x| !Self::is_shared(x)));
         let to_add_public = to_add

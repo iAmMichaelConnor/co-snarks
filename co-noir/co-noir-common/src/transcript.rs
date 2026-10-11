@@ -198,6 +198,20 @@ where
         HonkProof::new(self.proof_data)
     }
 
+    /// Assert the verifier consumed the entire proof buffer. Called once, after
+    /// the final field element has been read, to reject proofs carrying trailing
+    /// data (bb rejects such proofs; without this check co-noir would accept a
+    /// valid proof with junk appended). Only meaningful on the verifier side.
+    pub fn assert_fully_consumed(&self) -> HonkProofResult<()> {
+        if self.num_frs_read != self.proof_data.len() {
+            return Err(HonkProofError::ProofNotFullyConsumed {
+                read: self.num_frs_read,
+                total: self.proof_data.len(),
+            });
+        }
+        Ok(())
+    }
+
     #[expect(dead_code)]
     pub(crate) fn print(&self) {
         self.manifest.print();
@@ -298,11 +312,15 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<H::DataType>> {
-        if self.num_frs_read + n > self.proof_data.len() {
+        let end = self
+            .num_frs_read
+            .checked_add(n)
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        if end > self.proof_data.len() {
             return Err(HonkProofError::ProofTooSmall);
         }
-        let elements = self.proof_data[self.num_frs_read..self.num_frs_read + n].to_owned();
-        self.num_frs_read += n;
+        let elements = self.proof_data[self.num_frs_read..end].to_owned();
+        self.num_frs_read = end;
 
         self.add_element_frs_to_hash_buffer(label, &elements);
         Ok(elements)
@@ -358,7 +376,10 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<P::ScalarField>> {
-        let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS * n)?;
+        let count = H::NUM_SCALARFIELD_ELEMENTS
+            .checked_mul(n)
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        let elements = self.receive_n_from_prover(label, count)?;
 
         // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
         let elements = elements

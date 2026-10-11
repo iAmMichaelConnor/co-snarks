@@ -268,19 +268,60 @@ where
         Ok(driver.mul_many(x_is_zero, y_is_zero)?)
     }
 
+    /// A shared false predicate must not evaluate invalid inactive operands.
+    /// Select the neutral point (0, 0), and zero scalar limbs, before the
+    /// backend runs. The normalized predicate stays shared.
+    fn mask_curve_inputs(
+        driver: &mut T,
+        predicate: &T::AcvmType,
+        inputs: Vec<T::AcvmType>,
+    ) -> CoAcvmResult<Vec<T::AcvmType>> {
+        if T::is_shared(predicate) {
+            let predicates = vec![predicate.clone(); inputs.len()];
+            Ok(driver.mul_many(&inputs, &predicates)?)
+        } else {
+            Ok(inputs)
+        }
+    }
+
     pub(super) fn multi_scalar_mul(
         driver: &mut T,
         initial_witness: &mut WitnessMap<T::AcvmType>,
         points: &[FunctionInput<GenericFieldElement<F>>],
         scalars: &[FunctionInput<GenericFieldElement<F>>],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
         outputs: &(Witness, Witness),
         pedantic_solving: bool,
     ) -> CoAcvmResult<()> {
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+        if T::get_public(&predicate).is_some_and(|value| !value.is_one()) {
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        }
+        // Noir interprets the predicate with is_one(), even for an artifact
+        // containing a non-Boolean value. Keep public and shared paths equal.
+        let predicate = if T::is_shared(&predicate) {
+            driver.equal(&predicate, &T::AcvmType::from(F::from(1u64)))?
+        } else {
+            predicate
+        };
+
         let points: Result<Vec<_>, _> = points
             .iter()
             .map(|input| Self::input_to_value(initial_witness, *input))
             .collect();
-        let points: Vec<_> = points?;
+        let mut operands = points?;
+        let num_coordinates = operands.len();
+        let scalars: Result<Vec<_>, _> = scalars
+            .iter()
+            .map(|input| Self::input_to_value(initial_witness, *input))
+            .collect();
+        operands.extend(scalars?);
+        // Coordinate and scalar masks are independent: use one multiplication
+        // batch before reconstructing the infinity flags.
+        let mut points = Self::mask_curve_inputs(driver, &predicate, operands)?;
+        let scalars = points.split_off(num_coordinates);
 
         // acir encodes each point as an (x, y) pair with no explicit is_infinity input;
         // reconstruct the (x, y, is_infinity) triples the driver still expects.
@@ -303,11 +344,6 @@ where
             points_with_infinity.push(is_infinity);
         }
 
-        let scalars: Result<Vec<_>, _> = scalars
-            .iter()
-            .map(|input| Self::input_to_value(initial_witness, *input))
-            .collect();
-        let scalars = scalars?;
         let mut scalars_lo = Vec::with_capacity(scalars.len().div_ceil(2));
         let mut scalars_hi = Vec::with_capacity(scalars.len() / 2);
         for (i, scalar) in scalars.into_iter().enumerate() {
@@ -337,12 +373,35 @@ where
         initial_witness: &mut WitnessMap<T::AcvmType>,
         input1: &[FunctionInput<GenericFieldElement<F>>; 2],
         input2: &[FunctionInput<GenericFieldElement<F>>; 2],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
         outputs: &(Witness, Witness),
     ) -> CoAcvmResult<()> {
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+        if T::get_public(&predicate).is_some_and(|value| !value.is_one()) {
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        }
+        let predicate = if T::is_shared(&predicate) {
+            driver.equal(&predicate, &T::AcvmType::from(F::from(1u64)))?
+        } else {
+            predicate
+        };
+
         let input1_x = Self::input_to_value(initial_witness, input1[0])?;
         let input1_y = Self::input_to_value(initial_witness, input1[1])?;
         let input2_x = Self::input_to_value(initial_witness, input2[0])?;
         let input2_y = Self::input_to_value(initial_witness, input2[1])?;
+        let mut coordinates = Self::mask_curve_inputs(
+            driver,
+            &predicate,
+            vec![input1_x, input1_y, input2_x, input2_y],
+        )?
+        .into_iter();
+        let input1_x = coordinates.next().expect("has 4 coordinates");
+        let input1_y = coordinates.next().expect("has 4 coordinates");
+        let input2_x = coordinates.next().expect("has 4 coordinates");
+        let input2_y = coordinates.next().expect("has 4 coordinates");
 
         let mut is_infinite = Self::point_is_infinity_many(
             driver,
@@ -521,24 +580,30 @@ where
             BlackBoxFuncCall::MultiScalarMul {
                 points,
                 scalars,
+                predicate,
                 outputs,
-                ..
             } => Self::multi_scalar_mul(
                 &mut self.driver,
                 initial_witness,
                 points,
                 scalars,
+                predicate,
                 outputs,
                 pedantic_solving,
             )?,
             BlackBoxFuncCall::EmbeddedCurveAdd {
                 input1,
                 input2,
+                predicate,
                 outputs,
-                ..
-            } => {
-                Self::embedded_curve_add(&mut self.driver, initial_witness, input1, input2, outputs)
-            }?,
+            } => Self::embedded_curve_add(
+                &mut self.driver,
+                initial_witness,
+                input1,
+                input2,
+                predicate,
+                outputs,
+            )?,
             BlackBoxFuncCall::Sha256Compression {
                 inputs,
                 hash_values,
@@ -604,5 +669,146 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod predicate_tests {
+    use super::*;
+    use crate::PlainAcvmSolver;
+    use crate::mpc::rep3::{Rep3AcvmSolver, Rep3AcvmType};
+    use ark_ec::AffineRepr;
+    use ark_ff::Field;
+    use mpc_core::protocols::rep3::{combine_field_elements, share_field_elements};
+    use mpc_net::local::LocalNetwork;
+    use rand::{SeedableRng, rngs::StdRng};
+    type F = ark_bn254::Fr;
+
+    fn operands(predicate: u64) -> Vec<F> {
+        let (x, y, lo, hi) = if predicate == 1 {
+            let point = ark_grumpkin::Affine::generator();
+            (point.x, point.y, F::from(1u64), F::from(0u64))
+        } else {
+            // Disabled operations must not validate this off-curve point or
+            // these oversized scalar limbs. Both operations return zero.
+            let invalid_limb = F::from(2u64).pow([200]);
+            (F::from(1u64), F::from(1u64), invalid_limb, invalid_limb)
+        };
+        vec![
+            x,
+            y,
+            F::from(predicate),
+            lo,
+            hi,
+            F::from(0u64),
+            F::from(0u64),
+        ]
+    }
+
+    fn solve_operations<T: NoirWitnessExtensionProtocol<F>>(
+        driver: &mut T,
+        values: Vec<T::AcvmType>,
+    ) -> Vec<T::AcvmType> {
+        let mut witness = WitnessMap::default();
+        for (i, value) in values.into_iter().enumerate() {
+            witness.insert(Witness(i as u32), value);
+        }
+        let input = |i| FunctionInput::Witness(Witness(i));
+        CoSolver::<T, F>::multi_scalar_mul(
+            driver,
+            &mut witness,
+            &[input(0), input(1)],
+            &[input(3), input(4)],
+            &input(2),
+            &(Witness(10), Witness(11)),
+            true,
+        )
+        .expect("predicated MSM");
+        CoSolver::<T, F>::embedded_curve_add(
+            driver,
+            &mut witness,
+            &[input(0), input(1)],
+            &[input(5), input(6)],
+            &input(2),
+            &(Witness(20), Witness(21)),
+        )
+        .expect("predicated curve addition");
+        [10, 11, 20, 21]
+            .map(|i| witness.get(&Witness(i)).unwrap().clone())
+            .to_vec()
+    }
+
+    fn expected(predicate: u64) -> Vec<F> {
+        if predicate == 1 {
+            let point = ark_grumpkin::Affine::generator();
+            vec![point.x, point.y, point.x, point.y]
+        } else {
+            vec![F::from(0u64); 4]
+        }
+    }
+
+    #[test]
+    fn public_curve_predicates_match_noir_is_one_semantics() {
+        for predicate in [0, 1, 2] {
+            let actual = solve_operations(&mut PlainAcvmSolver::default(), operands(predicate));
+            assert_eq!(actual, expected(predicate), "predicate {predicate}");
+        }
+    }
+
+    #[test]
+    fn shared_curve_predicates_mask_inactive_invalid_operands() {
+        let mut rng = StdRng::seed_from_u64(0x5052_4544_4943_4154);
+        for predicate in [0, 1, 2] {
+            for share_operands in [false, true] {
+                let values = operands(predicate);
+                let shares = share_field_elements(&values, &mut rng);
+                let workers: Vec<_> = LocalNetwork::new_3_parties()
+                    .into_iter()
+                    .zip(shares)
+                    .map(|(net, shares)| {
+                        let values = values.clone();
+                        std::thread::spawn(move || {
+                            let mut driver = Rep3AcvmSolver::new(&net, Default::default()).unwrap();
+                            let inputs = values
+                                .into_iter()
+                                .zip(shares)
+                                .enumerate()
+                                .map(|(i, (value, share))| {
+                                    if i == 2 || share_operands {
+                                        Rep3AcvmType::Shared(share)
+                                    } else {
+                                        Rep3AcvmType::Public(value)
+                                    }
+                                })
+                                .collect();
+                            solve_operations(&mut driver, inputs)
+                                .into_iter()
+                                .map(|value| match value {
+                                    Rep3AcvmType::Shared(share) => share,
+                                    Rep3AcvmType::Public(_) => {
+                                        panic!("secret predicate result became public")
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                let outputs: Vec<_> = workers
+                    .into_iter()
+                    .map(|worker| worker.join().unwrap())
+                    .collect();
+                let actual = combine_field_elements(&outputs[0], &outputs[1], &outputs[2]);
+                assert_eq!(
+                    actual,
+                    expected(predicate),
+                    "predicate {predicate}, shared operands {share_operands}"
+                );
+                for party in 0..3 {
+                    for i in 0..4 {
+                        assert_eq!(outputs[party][i].a, outputs[(party + 1) % 3][i].b);
+                    }
+                }
+            }
+        }
     }
 }

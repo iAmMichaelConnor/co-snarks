@@ -1,7 +1,8 @@
 use ark_ec::pairing::Pairing;
 use co_noir_common::{
+    constants::PAIRING_POINT_ACCUMULATOR_SIZE,
     honk_curve::HonkCurve,
-    honk_proof::TranscriptFieldType,
+    honk_proof::{HonkProofError, TranscriptFieldType},
     keys::verification_key::VerifyingKey,
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
@@ -25,6 +26,20 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
     ) -> HonkVerifyResult<bool> {
         tracing::trace!("UltraHonk verification");
+        verifying_key.inner_vk.validate_metadata()?;
+        // The accumulator is carried inside the proof; application inputs must
+        // all come from the caller. Checking before concatenation prevents a
+        // prover from moving an application input into the proof unchanged.
+        let expected_public_inputs = verifying_key
+            .inner_vk
+            .num_public_inputs
+            .checked_sub(u64::from(PAIRING_POINT_ACCUMULATOR_SIZE))
+            .ok_or(HonkProofError::CorruptedKey)?;
+        eyre::ensure!(
+            u64::try_from(public_inputs.len())? == expected_public_inputs,
+            "Expected {expected_public_inputs} public inputs, got {}",
+            public_inputs.len()
+        );
         let honk_proof = honk_proof.insert_public_inputs(public_inputs.to_vec());
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new_verifier(honk_proof);

@@ -421,6 +421,14 @@ impl<F: PrimeField> BrilligDriver<F> for PlainBrilligDriver<F> {
                 };
                 input /= &radix;
             }
+            // Match beta.22 (noir-lang/noir acvm-repo/brillig_vm/src/black_box.rs
+            // `to_be_radix`): if `output_size` limbs were not enough to fully consume
+            // `input` - which also catches `output_size == 0` for a non-zero input -
+            // reject with a structured error instead of silently returning a
+            // truncated/lossy decomposition.
+            if !input.is_zero() {
+                eyre::bail!("Field failed to decompose into specified {output_size} limbs");
+            }
             for limb in limbs.iter() {
                 tracing::debug!("{limb:?}");
             }
@@ -464,5 +472,55 @@ impl<F: PrimeField> BrilligDriver<F> for PlainBrilligDriver<F> {
         } else {
             eyre::bail!("expected field, but got {val:?}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for noir-claude #1019 ("ToRadix N=0 divergence"): asking to
+    /// decompose a non-zero field element into zero limbs must be a structured error
+    /// (matching beta.22's `to_be_radix`, which rejects an incomplete decomposition),
+    /// not a silent, lossy success.
+    #[test]
+    fn to_radix_zero_limbs_with_nonzero_input_returns_err() {
+        let mut driver = PlainBrilligDriver::<ark_bn254::Fr>::new();
+        let val = PlainBrilligType::Field(ark_bn254::Fr::from(42u64));
+        let radix = PlainBrilligType::Int(256, IntegerBitSize::U32);
+        let result = driver.to_radix(val, radix, 0, false);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Decomposing zero into zero limbs is legitimate (there is nothing to lose) and
+    /// must still succeed with an empty limb vector.
+    #[test]
+    fn to_radix_zero_limbs_with_zero_input_returns_empty_ok() {
+        let mut driver = PlainBrilligDriver::<ark_bn254::Fr>::new();
+        let val = PlainBrilligType::Field(ark_bn254::Fr::from(0u64));
+        let radix = PlainBrilligType::Int(256, IntegerBitSize::U32);
+        let result = driver
+            .to_radix(val, radix, 0, false)
+            .expect("decomposing zero into 0 limbs must succeed");
+        assert!(result.is_empty());
+    }
+
+    /// Sanity check that a normal (sufficiently-sized) decomposition still works after
+    /// adding the completeness check.
+    #[test]
+    fn to_radix_with_enough_limbs_still_succeeds() {
+        let mut driver = PlainBrilligDriver::<ark_bn254::Fr>::new();
+        let val = PlainBrilligType::Field(ark_bn254::Fr::from(300u64));
+        let radix = PlainBrilligType::Int(256, IntegerBitSize::U32);
+        let result = driver
+            .to_radix(val, radix, 2, false)
+            .expect("300 fits into 2 base-256 limbs");
+        assert_eq!(
+            result,
+            vec![
+                PlainBrilligType::Int(1, IntegerBitSize::U8),
+                PlainBrilligType::Int(44, IntegerBitSize::U8),
+            ]
+        );
     }
 }

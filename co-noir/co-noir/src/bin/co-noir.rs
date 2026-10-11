@@ -1865,7 +1865,7 @@ fn run_verify(config: VerifyConfig) -> color_eyre::Result<ExitCode> {
             }
         }
         // Case 2: Neither file is JSON (both are binary)
-        (None, None) | (Some(false), None) => match hasher {
+        (None | Some(false), None | Some(false)) => match hasher {
             TranscriptHash::POSEIDON2 => HonkProofType::proof_and_public_inputs_from_buffer_field(
                 &proof_u8,
                 &public_inputs_u8,
