@@ -1064,7 +1064,11 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // per party = a2b_many(19)+inject(1)+ohv_many(11)+or_tree(4) = (35,35), i.e. -111
     // symmetric in both directions. Predicted exactly in advance from the round
     // formula (session-19 l2-1b evidence); a2b_many(19)+inject(1) untouched.
-    const PKGEN_MSGS: [(usize, usize); 3] = [(40, 49), (46, 43), (46, 40)];
+    // Limb decomposition now uses Yao input conversion followed by batched bit
+    // injection instead of masked field-output garbling. One batched call adds
+    // (sent, recv) = [(1,1), (1,0), (1,2)] while reducing the payload below.
+    // Proof/KAT equality, proving traffic, and byte tolerances remain pinned.
+    const PKGEN_MSGS: [(usize, usize); 3] = [(41, 50), (47, 43), (47, 42)];
     // 199 -> 198: array_prod_inner_mul_many mul_many merge (grand product),
     // NOT a lookup-path change (see the assert message below).
     // 198 -> 204: L0d half-share commit MSMs (see the poseidon fence).
@@ -1091,7 +1095,7 @@ fn blackbox_and_prove_comms_message_fence_poseidon2sponge() {
     // v6 port: upstream e2177d9c replaces variable BigUint serialization with
     // fixed-width integers. Message counts and proving traffic are unchanged.
     const PKGEN_BYTES: [(usize, usize); 3] =
-        [(2673784, 4129528), (3966856, 2860752), (2885280, 2535640)];
+        [(2661696, 3999616), (3853200, 2832336), (2856872, 2539816)];
     const PROVE_BYTES: [(usize, usize); 3] = [
         (21040064, 21040064),
         (21040096, 21040064),
@@ -1176,7 +1180,10 @@ fn add3u64_prove_comms_message_fence_poseidon2sponge() {
     // Upstream 01296e43 batches sorting's arithmetic-to-binary conversion;
     // e2177d9c also replaces variable BigUint serialization with fixed width.
     // Re-pin only pk-gen: the proving message/byte counts remain unchanged.
-    const PKGEN_MSGS: [(usize, usize); 3] = [(133, 140), (181, 176), (181, 179)];
+    // One batched limb-decomposition call changes from field-output garbling
+    // to Yao input conversion plus bit injection: [(+1,+1),(+1,0),(+1,+2)].
+    // The lower payload is repinned without changing proof checks or tolerance.
+    const PKGEN_MSGS: [(usize, usize); 3] = [(134, 141), (182, 176), (182, 181)];
     // 249 -> 248: array_prod_inner_mul_many mul_many merge (see poseidon fence).
     // 248 -> 254: L0d half-share commit MSMs (see the poseidon fence).
     const PROVE_MSGS: [(usize, usize); 3] = [(254, 254), (254, 254), (254, 254)];
@@ -1185,7 +1192,7 @@ fn add3u64_prove_comms_message_fence_poseidon2sponge() {
     // the blackbox_and fence. Prove is pure field flows: exact (re-pinned for
     // L0d with PROVE_MSGS).
     const PKGEN_BYTES: [(usize, usize); 3] =
-        [(1702556, 2577452), (3448916, 2590316), (2507528, 2491232)];
+        [(1647844, 2053684), (2986108, 2474540), (2391760, 2497488)];
     const PROVE_BYTES: [(usize, usize); 3] = [
         (16249680, 16249680),
         (16249712, 16249680),
