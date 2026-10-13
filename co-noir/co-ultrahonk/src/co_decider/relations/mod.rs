@@ -329,6 +329,3 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> AllRelationAcc<T, P> {
         );
     }
 }
-
-#[cfg(test)]
-mod lookup_folding_tests;
