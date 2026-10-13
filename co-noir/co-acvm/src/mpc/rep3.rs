@@ -1009,8 +1009,8 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         total_bit_size_per_field: usize,
         decompose_bit_size: usize,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        yao::decompose_arithmetic(
-            input,
+        conversion::decompose_arithmetic_many(
+            &[input],
             self.net,
             &mut self.state,
             total_bit_size_per_field,
@@ -1031,7 +1031,7 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         let mut results = Vec::with_capacity(input.len());
 
         for inp_chunk in input.chunks(BATCH_SIZE) {
-            let result = yao::decompose_arithmetic_many(
+            let result = conversion::decompose_arithmetic_many(
                 inp_chunk,
                 self.net,
                 &mut self.state,
