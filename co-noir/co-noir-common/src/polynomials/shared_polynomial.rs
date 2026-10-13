@@ -171,7 +171,9 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
             // Each block is the affine recurrence b_out = a^len*b_in + B,
             // with a = -root_inverse. Prefix the block carries, then correct
             // their local zero-carry results. All operations are local and linear.
-            if self.len() >= 32768 {
+            // Two parallel passes do more arithmetic than the serial recurrence.
+            // Keep the serial path when there are too few workers to amortize it.
+            if self.len() >= 32768 && rayon::current_num_threads() >= 4 {
                 let block = 8192;
                 let summaries: Vec<_> = self
                     .coefficients
