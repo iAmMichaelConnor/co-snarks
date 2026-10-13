@@ -10,6 +10,7 @@ use co_noir_common::{
 use itertools::{Itertools as _, izip};
 use mpc_core::MpcState;
 use mpc_net::Network;
+use rayon::prelude::*;
 use ultrahonk::prelude::Univariate;
 
 #[derive(Clone, Debug)]
@@ -293,21 +294,73 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P
         lhs.extend_from_slice(read_tag);
         rhs.extend_from_slice(read_counts);
         rhs.extend_from_slice(read_tag);
-        let mul = T::mul_many(&lhs, &rhs, net, state)?;
-        let mul = mul.chunks_exact(mul.len() / 2).collect_vec();
-        debug_assert_eq!(mul.len(), 2);
-        let mut tmp = T::mul_with_public_many(read_selector, &read_inverse);
-        T::sub_assign_many(&mut tmp, mul[0]);
+        // Small batches retain the established path: measurements show the
+        // local folding overhead can outweigh the reduced communication there.
+        // This threshold depends only on the public number of evaluations.
+        if write_inverse.len() < 1 << 16 {
+            let mul = T::mul_many(&lhs, &rhs, net, state)?;
+            let mul = mul.chunks_exact(mul.len() / 2).collect_vec();
+            debug_assert_eq!(mul.len(), 2);
+            let mut tmp = T::mul_with_public_many(read_selector, &read_inverse);
+            T::sub_assign_many(&mut tmp, mul[0]);
 
-        fold_accumulator!(univariate_accumulator.r1, tmp);
+            fold_accumulator!(univariate_accumulator.r1, tmp);
 
-        // we should make sure that the read_tag is a boolean value
-        // degree                          1         1                       0(1) =  2(3)
-        let mut tmp = mul[1].to_owned(); //(read_tag.to_owned() * read_tag - read_tag) * scaling_factor;
-        T::sub_assign_many(&mut tmp, read_tag);
-        T::mul_assign_with_public_many(&mut tmp, scaling_factors);
-        fold_accumulator!(univariate_accumulator.r2, tmp);
+            // we should make sure that the read_tag is a boolean value
+            // degree                          1         1                       0(1) =  2(3)
+            let mut tmp = mul[1].to_owned(); //(read_tag.to_owned() * read_tag - read_tag) * scaling_factor;
+            T::sub_assign_many(&mut tmp, read_tag);
+            T::mul_assign_with_public_many(&mut tmp, scaling_factors);
+            fold_accumulator!(univariate_accumulator.r2, tmp);
 
+            return Ok(());
+        }
+
+        // Local multiplication produces masked additive shares (REP3) or
+        // degree-2t shares (Shamir). Folding is linear, so reshare only the
+        // five read-validity and three Boolean-tag evaluations. Keep the
+        // first multiplication reshared: its result is multiplied again.
+
+        // Fold degree-two local shares before the existing reshare operation.
+        let local = T::local_mul_vec(&lhs, &rhs, state);
+        let (products, squares) = local.split_at(write_inverse.len());
+        const STRIDE: usize = co_noir_common::constants::MAX_PARTIAL_RELATION_LENGTH;
+        let folded = products
+            .par_iter()
+            .enumerate()
+            .with_min_len(1024)
+            .fold(
+                || [P::ScalarField::default(); 8],
+                |mut folded, (i, product)| {
+                    let column = i % STRIDE;
+                    if column < 5 {
+                        folded[column] +=
+                            T::mul_with_public_to_half_share(read_selector[i], read_inverse[i])
+                                - product;
+                    }
+                    if column < 3 {
+                        folded[5 + column] += (squares[i]
+                            - T::mul_with_public_to_half_share(
+                                P::ScalarField::from(1u64),
+                                read_tag[i],
+                            ))
+                            * scaling_factors[i];
+                    }
+                    folded
+                },
+            )
+            .reduce(
+                || [P::ScalarField::default(); 8],
+                |mut lhs, rhs| {
+                    for (lhs, rhs) in lhs.iter_mut().zip(rhs) {
+                        *lhs += rhs;
+                    }
+                    lhs
+                },
+            );
+        let shared = T::reshare(folded.to_vec(), net, state)?;
+        T::add_assign_many(&mut univariate_accumulator.r1.evaluations, &shared[..5]);
+        T::add_assign_many(&mut univariate_accumulator.r2.evaluations, &shared[5..]);
         Ok(())
     }
 }
