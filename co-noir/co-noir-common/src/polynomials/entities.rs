@@ -327,7 +327,7 @@ impl<T: Default> PrecomputedEntities<T> {
     }
 
     /// Returns mutable references to the selector columns in the order in which they are
-    /// stored in the execution trace blocks (see [`UltraTraceBlock`]'s selector accessors):
+    /// stored in the execution trace blocks (see `UltraTraceBlock`'s selector accessors in co-builder):
     /// q_m, q_c, q_l, q_r, q_o, q_4, q_lookup, q_arith, q_delta_range, q_elliptic, q_memory,
     /// q_nnf, q_poseidon2_external, q_poseidon2_internal.
     /// Note that this is *not* the entity (column) order of the selectors.
