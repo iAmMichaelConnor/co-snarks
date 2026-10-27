@@ -3558,28 +3558,28 @@ impl GarbledCircuits {
     /// combination of these bits, so a driver can serve all 369 reads from a single invocation.
     ///
     /// Inputs: `wires_x1`/`wires_x2` are the bit decompositions of two field-share summands per
-    /// input (added mod p inside the circuit, exactly as in [`Self::sha256_compression`]) for the
+    /// input (added mod p inside the circuit, exactly as in `Self::sha256_compression`) for the
     /// 24 inputs `h_init[0..8] || w_in[0..16]`; each input is taken mod 2^32.
     ///
     /// Output layout (one group per plookup read, in the gadget's exact read order; all bit
     /// vectors LSB first):
     /// 1. The 4 init sparse-form reads (sha_compression.rs:133-138): Sha256MajInput keyed on
-    ///    h_init[1], MajInput on h_init[2], Sha256ChInput on h_init[5], ChInput on h_init[6];
+    ///    `h_init[1]`, MajInput on `h_init[2]`, Sha256ChInput on `h_init[5]`, ChInput on `h_init[6]`;
     ///    32 key bits each.
     /// 2. The message schedule (extend_witness, sha_compression.rs:200-336), iterations
     ///    i = 16..64. Per iteration, in order: a Sha256WitnessInput read of w[i-15] and/or of
     ///    w[i-2] (32 key bits each) if not yet converted (lazy `has_sparse_limbs` order; 61 reads
     ///    total), then the Sha256WitnessOutput read: 32 digit groups `[d0, d1, d2, d3, f1, f2]`
     ///    where d is the base-16 digit of the read key (d = sigma1_popcount + 4 * sigma0_popcount,
-    ///    always <= 15) and table[d] = f1 + 2 * f2 is its
+    ///    always <= 15) and `table[d]` = f1 + 2 * f2 is its
     ///    WITNESS_EXTENSION_NORMALIZATION_TABLE value; 192 bits per read.
     /// 3. The round loop (sha_compression.rs:144-158), rounds i = 0..64. Per round, in order: the
     ///    Sha256ChInput read (32 bits of register e); the Sha256ChOutput read: 32 digit groups
     ///    `[d0..d4, f1, f2]` with d = e + 2f + 3g + 7 * Sigma1_popcount <= 27 the base-28 digit
-    ///    and table[d] = f1 + 2 * f2 its CHOOSE_NORMALIZATION_TABLE value (224 bits); the
+    ///    and `table[d]` = f1 + 2 * f2 its CHOOSE_NORMALIZATION_TABLE value (224 bits); the
     ///    Sha256MajInput read (32 bits of register a); the Sha256MajOutput read: 32 digit groups
     ///    `[d0..d3, f1, f2]` with d = a + b + c + 4 * Sigma0_popcount <= 15 the base-16 digit and
-    ///    table[d] = f1 + 2 * f2 its MAJORITY_NORMALIZATION_TABLE value (192 bits).
+    ///    `table[d]` = f1 + 2 * f2 its MAJORITY_NORMALIZATION_TABLE value (192 bits).
     ///
     /// Totals [`Self::SHA256_BLOCK_SPARSE_TRACE_OUTPUT_BITS`] = 42,016 bits.
     ///

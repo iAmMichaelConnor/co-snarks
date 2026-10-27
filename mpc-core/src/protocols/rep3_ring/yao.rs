@@ -234,7 +234,7 @@ pub fn input_ring_id2<T: IntRing2k, N: Network>(
 /// Merged variant of [`joint_input_arithmetic_added_many`] (ring inputs)
 /// followed by [`input_ring_id2_many`]: both input exchanges happen in a
 /// single round-trip (see
-/// [`rep3::yao::joint_input_added_and_id2_as_bits`] for why this is safe).
+/// `rep3::yao::joint_input_added_and_id2_as_bits` for why this is safe).
 /// `x23` must be `Some` exactly for ID2 and hold `n_x23` elements.
 pub fn joint_input_arithmetic_added_and_ring_id2_many<T: IntRing2k, U: IntRing2k, N: Network>(
     x: &[Rep3RingShare<T>],
@@ -281,7 +281,7 @@ pub fn joint_input_arithmetic_added_and_ring_id2_many<T: IntRing2k, U: IntRing2k
 /// Merged variant of [`joint_input_arithmetic_added_many`] (ring inputs)
 /// followed by [`rep3::yao::input_field_id2_many`]: both input exchanges
 /// happen in a single round-trip (see
-/// [`rep3::yao::joint_input_added_and_id2_as_bits`] for why this is safe).
+/// `rep3::yao::joint_input_added_and_id2_as_bits` for why this is safe).
 /// `x23` must be `Some` exactly for ID2 and hold `n_x23` elements.
 pub fn joint_input_ring_added_and_field_id2_many<T: IntRing2k, F: FieldUint, N: Network>(
     x: &[Rep3RingShare<T>],
@@ -328,7 +328,7 @@ pub fn joint_input_ring_added_and_field_id2_many<T: IntRing2k, F: FieldUint, N: 
 /// Merged variant of [`rep3::yao::joint_input_arithmetic_added_many`] (field
 /// inputs) followed by [`input_ring_id2_many`]: both input exchanges happen in
 /// a single round-trip (see
-/// [`rep3::yao::joint_input_added_and_id2_as_bits`] for why this is safe).
+/// `rep3::yao::joint_input_added_and_id2_as_bits` for why this is safe).
 /// `x23` must be `Some` exactly for ID2 and hold `n_x23` elements.
 pub fn joint_input_field_added_and_ring_id2_many<F: FieldUint, T: IntRing2k, N: Network>(
     x: &[Rep3PrimeFieldShare<F>],
@@ -375,7 +375,7 @@ pub fn joint_input_field_added_and_ring_id2_many<F: FieldUint, T: IntRing2k, N: 
 /// Merged variant of [`joint_input_arithmetic_added_many`] (ring inputs)
 /// followed by [`rep3::yao::input_two_field_id2_many`]: both input exchanges
 /// happen in a single round-trip (see
-/// [`rep3::yao::joint_input_added_and_id2_as_bits`] for why this is safe).
+/// `rep3::yao::joint_input_added_and_id2_as_bits` for why this is safe).
 /// The x23 element encode order matches `input_two_field_id2_many`: per input,
 /// `output_size_1` F elements followed by `output_size_2` K elements.
 /// `x23_f`/`x23_k` must be `Some` exactly for ID2.

@@ -789,7 +789,7 @@ pub(crate) fn joint_input_added_and_id2_as_bits<N: Network>(
 
 /// Merged variant of [`joint_input_arithmetic_added_many`] followed by
 /// [`input_field_id2_many`]: both input exchanges happen in a single
-/// round-trip (see [`joint_input_added_and_id2_as_bits`] for why this is
+/// round-trip (see `joint_input_added_and_id2_as_bits` for why this is
 /// safe). `x23` must be `Some` exactly for ID2 and hold `n_x23` elements.
 pub fn joint_input_arithmetic_added_and_field_id2_many<F: FieldUint, K: FieldUint, N: Network>(
     x: &[Rep3PrimeFieldShare<F>],
