@@ -15,7 +15,7 @@ cmake --build build --target bb -j 8
 
 Source builds report a placeholder version. Record the source commit and build options beside the binary; the version string alone does not identify a proof-compatible oracle.
 
-Existing v5 proofs, verification keys, and serialized proving-key shares are not compatible with this protocol. Regenerate them with the paired compiler and prover. Proving-key shares use positional bincode without a version envelope; old caches must not be passed to the v6 CLI.
+Existing v5 proofs, verification keys, and serialized proving-key shares are not compatible with this protocol. Regenerate them with the paired compiler and prover. Saved co-proving keys include a mandatory version and privacy header. Keys without the current header must be regenerated; old caches must not be passed to the v6 CLI.
 
 ## Building this workspace
 

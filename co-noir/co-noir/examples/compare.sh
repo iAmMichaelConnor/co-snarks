@@ -194,12 +194,19 @@ for f in "${test_cases[@]}"; do
   failed=0
   case_failed=0
 
+  # These public fixtures compare BB's canonical recursion profile. The
+  # default private profile adds blinding constraints and requires outer ZK.
+  recursion_flag=""
+  if [[ "$f" == recursion || "$f" == recursion_zk ]]; then
+    recursion_flag="--reveal-recursion-inputs"
+  fi
+
   # compile witnesses and bytecode with specified nargo version
   echo "computing witnesses with nargo"
   bash -c "(cd test_vectors/${f} && nargo execute) $PIPE"
 
   # -e to exit on first error
-  bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher poseidon2 --out-dir test_vectors/${f} $PIPE" || failed=1
+  bash -c "${PLAINDRIVER} $recursion_flag --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher poseidon2 --out-dir test_vectors/${f} $PIPE" || failed=1
 
   if [ "$failed" -ne 0 ]
   then
@@ -211,7 +218,7 @@ for f in "${test_cases[@]}"; do
 
   # Run with ZK:
 
-  bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher poseidon2 --out-dir test_vectors/${f} --zk $PIPE" || failed=1
+  bash -c "${PLAINDRIVER} $recursion_flag --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher poseidon2 --out-dir test_vectors/${f} --zk $PIPE" || failed=1
 
   if [ "$failed" -ne 0 ]
   then
@@ -223,7 +230,7 @@ for f in "${test_cases[@]}"; do
   cleanup_circuit "$f"
 
    # -e to exit on first error
-  bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} $PIPE"  || failed=1
+  bash -c "${PLAINDRIVER} $recursion_flag --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} $PIPE"  || failed=1
 
   if [ "$failed" -ne 0 ]
   then
@@ -234,7 +241,7 @@ for f in "${test_cases[@]}"; do
   run_proof_verification "$f" "keccak"
   cleanup_circuit "$f"
   # Run with ZK:
-  bash -c "${PLAINDRIVER} --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} --zk $PIPE" || failed=1
+  bash -c "${PLAINDRIVER} $recursion_flag --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat --input test_vectors/${f}/Prover.toml --circuit test_vectors/${f}/target/${f}.json --hasher keccak --out-dir test_vectors/${f} --zk $PIPE" || failed=1
   if [ "$failed" -ne 0 ]
   then
     exit_code=1

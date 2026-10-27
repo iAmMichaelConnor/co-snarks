@@ -204,6 +204,13 @@ for f in "${test_cases[@]}"; do
   failed=0
   case_failed=0
 
+  # These public fixtures compare BB's canonical recursion profile. The
+  # default private profile adds blinding constraints and requires outer ZK.
+  recursion_flag=""
+  if [[ "$f" == recursion || "$f" == recursion_zk ]]; then
+    recursion_flag="--reveal-recursion-inputs"
+  fi
+
   # compile witnesses and bytecode with specified nargo version
   echo "compiling circuits with nargo"
   bash -c "(cd test_vectors/${f} && nargo execute) $PIPE"
@@ -224,15 +231,15 @@ for f in "${test_cases[@]}"; do
   done
   mpc_pids=()
   # Create verification key
-  bash -c "\"$CO\" create-vk --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --hasher poseidon2 --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1
+  bash -c "\"$CO\" create-vk $recursion_flag --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --hasher poseidon2 --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1
 
   echo "proving and verifying without ZK in co-noir and poseidon transcript"
   # run proving in MPC
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   for pid in "${mpc_pids[@]}"; do
     wait "$pid" || failed=1
   done
@@ -251,11 +258,11 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying with ZK in co-noir and poseidon transcript"
   # run proving in MPC with ZK
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --zk --vk test_vectors/${f}/cosnark_vk $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --zk --vk test_vectors/${f}/cosnark_vk $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/zk_proof.1.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/zk_proof.1.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/zk_proof.2.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/zk_proof.2.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   for pid in "${mpc_pids[@]}"; do
     wait "$pid" || failed=1
   done
@@ -273,15 +280,15 @@ for f in "${test_cases[@]}"; do
   run_proof_verification "$f" "poseidon_zk"
 
   # Create verification key
-  bash -c "\"$CO\" create-vk --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --hasher keccak --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1
+  bash -c "\"$CO\" create-vk $recursion_flag --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --hasher keccak --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1
 
   echo "proving and verifying without ZK in co-noir and keccak transcript"
   # run proving in MPC
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --fields-as-json $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --fields-as-json $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   for pid in "${mpc_pids[@]}"; do
     wait "$pid" || failed=1
   done
@@ -300,11 +307,11 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying with ZK in co-noir and keccak transcript"
   # run proving in MPC with ZK
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --zk $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --zk $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE" &
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE" &
   mpc_pids+=("$!")
-  bash -c "\"$CO\" build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1
+  bash -c "\"$CO\" build-and-generate-proof $recursion_flag --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config ${CONFIG_DIR}/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1
   for pid in "${mpc_pids[@]}"; do
     wait "$pid" || failed=1
   done
