@@ -50,11 +50,13 @@ git -C "$BB_REPO" archive "$TAG" "${ARCHIVE_PATHS[@]}" | tar -x -C "$WORK_DIR"
 git init -q "$WORK_DIR"
 
 echo "== Building bb (preset default, -DAVM=OFF -DBB_LITE=OFF, -j$JOBS)"
-cd "$WORK_DIR/barretenberg/cpp"
-CC="$CC" CXX="$CXX" cmake --preset default -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DAVM=OFF -DBB_LITE=OFF
-cmake --build build --target bb -j "$JOBS"
+(
+  cd "$WORK_DIR/barretenberg/cpp"
+  CC="$CC" CXX="$CXX" cmake --preset default -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DAVM=OFF -DBB_LITE=OFF
+  cmake --build build --target bb -j "$JOBS"
+)
 
-BB_BIN=$(find build -name bb -type f | head -1)
+BB_BIN=$(find "$WORK_DIR/barretenberg/cpp/build" -name bb -type f -print -quit)
 [[ -n "$BB_BIN" && -x "$BB_BIN" ]] || { echo "ERROR: bb binary not produced"; exit 1; }
 
 mkdir -p "$OUT_DIR"
@@ -72,7 +74,19 @@ cat "$OUT_DIR/PROVENANCE.txt"
 # Optional: compare a candidate prebuilt binary's write_vk bytes against the
 # fresh source build (catches a release binary that predates the tag's tree).
 if [[ -n "${CHECK_AGAINST:-}" ]]; then
-  CIRCUIT_JSON=$(find "$REPO_ROOT/co-noir/co-noir/examples/test_vectors" -name '*.json' -path '*/target/*' | sort | head -1)
+  # nargo writes target/<name>.json; examples/compile.sh moves it beside
+  # Nargo.toml. Accept both layouts, excluding proof/public-input JSON files.
+  CIRCUIT_JSON=""
+  for circuit_dir in "$REPO_ROOT/co-noir/co-noir/examples/test_vectors"/*; do
+    [[ -d "$circuit_dir" ]] || continue
+    circuit_name=$(basename "$circuit_dir")
+    for candidate in "$circuit_dir/target/$circuit_name.json" "$circuit_dir/$circuit_name.json"; do
+      if [[ -f "$candidate" ]]; then
+        CIRCUIT_JSON="$candidate"
+        break 2
+      fi
+    done
+  done
   [[ -n "$CIRCUIT_JSON" ]] || { echo "ERROR: no compiled circuit found for the write_vk check (run examples/compile.sh first)"; exit 1; }
   echo "== Byte-comparing write_vk output vs $CHECK_AGAINST (circuit: $CIRCUIT_JSON)"
   mkdir -p "$WORK_DIR/vk_a" "$WORK_DIR/vk_b"
