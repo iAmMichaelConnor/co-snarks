@@ -151,7 +151,7 @@ impl<'a, F: PrimeField + FieldUint, N: Network> Rep3AcvmSolver<'a, F, N> {
     }
 
     /// Number of sha256 cache tag mismatches seen so far (read-order-drift canary; see
-    /// [`Self::pop_sha256_cached_read`]). Diagnostics/tests.
+    /// `Self::pop_sha256_cached_read`). Diagnostics/tests.
     pub fn sha256_trace_cache_tag_mismatches(&self) -> usize {
         self.sha256_trace_cache_tag_mismatches
     }
