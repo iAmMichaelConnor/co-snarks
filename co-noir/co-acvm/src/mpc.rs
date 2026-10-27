@@ -19,6 +19,39 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
 /// Maximum default number of shared lookup indices per batch.
 pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
 
+/// Select the next shared-lookup batch from public table lengths.
+///
+/// Bounded batches respect both the requested gate count and a padded-entry
+/// budget. Counting gates alone can combine many large tables into field-vector
+/// frames above the default transport limit. Reserve half that limit for field
+/// entries, leaving room for framing and intermediate protocol data. Read-tag
+/// products, including each participating table's carry, use no more entries
+/// than the new one-hot vectors in the batch.
+///
+/// A table larger than the budget is processed alone, as in the singular path.
+/// `None` preserves the explicitly unbounded mode. All inputs are public and
+/// must agree across parties, since the batch boundaries determine the rounds.
+pub fn lookup_read_count_batch_len<F: PrimeField>(
+    max_gates: Option<usize>,
+    table_lengths: impl Iterator<Item = usize>,
+) -> usize {
+    let Some(max_gates) = max_gates else {
+        return table_lengths.count();
+    };
+    let max_entries = (mpc_net::DEFAULT_MAX_FRAME_LENGTH / 2) / F::ZERO.uncompressed_size();
+    let mut entries = 0usize;
+    let mut count = 0;
+    for len in table_lengths.take(max_gates.max(1)) {
+        let padded = len.next_power_of_two();
+        if count > 0 && padded > max_entries.saturating_sub(entries) {
+            break;
+        }
+        entries = entries.saturating_add(padded);
+        count += 1;
+    }
+    count
+}
+
 /// A trait representing the MPC operations required for extending the secret-shared Noir witness in MPC.
 /// The operations are generic over public and private (i.e., secret-shared) inputs.
 pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
@@ -158,8 +191,8 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
     /// `None` = all gates in a single batch (fewest communication rounds, but peak
     /// memory ∝ total lookup work — on a lookup-dense circuit such as sha256 ≥ 2^18
     /// this materialises hundreds of GB of one-hot vectors and OOMs the host).
-    /// `Some(k)` = process the gates in chunks of at most `k`, bounding peak memory
-    /// to ∝ `k` at the cost of ~`gates/k`× more rounds. The result (read counts and
+    /// `Some(k)` = process at most `k` gates per chunk, further bounded by padded
+    /// table entries through [`lookup_read_count_batch_len`]. The result (read counts and
     /// read tags) is byte-identical for every `k` — only the number of reshares, and
     /// hence the individual share splits, differ (the reconstructed values do not).
     /// The default is `None`; the REP3 and Shamir drivers override it to a bounded

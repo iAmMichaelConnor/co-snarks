@@ -498,15 +498,18 @@ pub fn construct_lookup_read_counts<
 
     // --- Chunked one-hot pass: convert shared indices to OHVs in batches of ≤ K, adding read
     // counts and folding a per-table running product of (1 − ohv) for the read tags. ---
-    let chunk_size = driver
-        .lookup_read_count_batch_size()
-        .unwrap_or(shared.len())
-        .max(1);
     // tag_carry[t] = Π (1 − ohv) over the shared gates of table `t` processed so far
     // (empty = none yet), length = table length.
     let mut tag_carry: Vec<Vec<T::AcvmType>> = vec![Vec::new(); n_tables];
 
-    for chunk in shared.chunks(chunk_size) {
+    let mut remaining = shared.as_slice();
+    while !remaining.is_empty() {
+        let chunk_len = co_acvm::mpc::lookup_read_count_batch_len::<P::ScalarField>(
+            driver.lookup_read_count_batch_size(),
+            remaining.iter().map(|s| s.len),
+        );
+        let (chunk, rest) = remaining.split_at(chunk_len);
+        remaining = rest;
         let idxs: Vec<T::ArithmeticShare> = chunk.iter().map(|s| s.index.to_owned()).collect();
         let lens: Vec<usize> = chunk.iter().map(|s| s.len).collect();
         // ONE batched index -> OHV conversion for this chunk. (Empty batch => no driver call:

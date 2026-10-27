@@ -2218,11 +2218,14 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 shared_indices.push(T::get_shared(&record.index).expect("Shared index checked"));
             }
         }
-        let batch_size = driver
-            .lookup_read_count_batch_size()
-            .unwrap_or(shared_indices.len())
-            .max(1);
-        for chunk in shared_indices.chunks(batch_size) {
+        let mut remaining = shared_indices.as_slice();
+        while !remaining.is_empty() {
+            let chunk_len = co_acvm::mpc::lookup_read_count_batch_len::<P::ScalarField>(
+                driver.lookup_read_count_batch_size(),
+                std::iter::repeat_n(len, remaining.len()),
+            );
+            let (chunk, rest) = remaining.split_at(chunk_len);
+            remaining = rest;
             let lens = vec![len; chunk.len()];
             let one_hots = driver.one_hot_vector_from_shared_index_many(chunk, &lens)?;
             eyre::ensure!(
