@@ -87,7 +87,7 @@ impl Network for LocalNetwork {
     /// Receive the next value from `from`. Peeks with a non-blocking
     /// `try_recv` first to detect a logical round boundary (a wait for the
     /// peer's next send) before falling through to the real receive — see
-    /// [`RoundCounters`]'s doc; observation-only, same as the TCP/TLS
+    /// [`RoundStats`]; observation-only, same as the TCP/TLS
     /// backend's `recv` in `blocking.rs`.
     fn recv(&self, from: usize) -> eyre::Result<Bytes> {
         let (receiver, recv, rounds) = self.recv.get(from).context("party id out-of-bounds")?;

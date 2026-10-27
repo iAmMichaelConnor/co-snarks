@@ -112,6 +112,9 @@ impl Network for () {
     feature = "tls",
     feature = "quic",
     feature = "tcp-session",
+    feature = "tls-session",
+    feature = "tcp-session-blocking",
+    feature = "tls-session-blocking",
     feature = "local"
 ))]
 #[derive(Debug, Default)]
@@ -140,7 +143,13 @@ pub(crate) struct TrafficCounters {
 /// Backends that don't track rounds (QUIC, ephemeral TCP sessions) simply
 /// never construct this type; [`ConnectionStats::get_rounds`] reports
 /// `None` for them, mirroring how untracked backends report zero messages.
-#[cfg(any(feature = "tcp", feature = "tls", feature = "local"))]
+#[cfg(any(
+    feature = "tcp",
+    feature = "tls",
+    feature = "tcp-session-blocking",
+    feature = "tls-session-blocking",
+    feature = "local"
+))]
 #[derive(Debug, Default)]
 pub(crate) struct RoundCounters {
     /// Number of detected round boundaries (blocking waits).
@@ -168,7 +177,13 @@ pub(crate) struct RoundCounters {
     histogram: std::sync::Mutex<Vec<u64>>,
 }
 
-#[cfg(any(feature = "tcp", feature = "tls", feature = "local"))]
+#[cfg(any(
+    feature = "tcp",
+    feature = "tls",
+    feature = "tcp-session-blocking",
+    feature = "tls-session-blocking",
+    feature = "local"
+))]
 impl RoundCounters {
     /// Record that `len` bytes were just handed back by `recv` (whether or
     /// not this call was the one that detected the boundary).
@@ -238,6 +253,9 @@ impl RoundCounters {
     feature = "tls",
     feature = "quic",
     feature = "tcp-session",
+    feature = "tls-session",
+    feature = "tcp-session-blocking",
+    feature = "tls-session-blocking",
     feature = "local"
 ))]
 impl TrafficCounters {
@@ -257,8 +275,9 @@ impl TrafficCounters {
     }
 }
 
-/// Per-peer logical-round data: see [`RoundCounters`] (mpc-net's internal
-/// instrumentation this is read from) for the exact boundary definition.
+/// Per-peer communication statistics. A round boundary is a receive that finds
+/// no queued frame and must wait for the peer. These observed blocking waits
+/// are a transport-level proxy for logical protocol rounds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoundStats {
     /// Number of detected round boundaries (blocking `recv` waits) on this
@@ -266,8 +285,9 @@ pub struct RoundStats {
     pub rounds: usize,
     /// Cumulative time (nanoseconds) spent inside those blocking waits.
     pub blocked_recv_nanos: u64,
-    /// Bytes received per round, oldest first (see [`RoundCounters`]'s doc
-    /// on why `len()` can slightly exceed `rounds`).
+    /// Bytes received between round boundaries, oldest first. A statistics
+    /// snapshot flushes pending bytes without counting a new boundary, so the
+    /// length can exceed `rounds`. Sum the entries for total received bytes.
     pub recv_bytes_histogram: Vec<usize>,
 }
 
