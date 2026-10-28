@@ -11,6 +11,7 @@ use co_noir_common::{
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
     utils::Utils,
+    zk_masking::SeededZkBlinding,
 };
 use mpc_net::Network;
 use noir_types::HonkProof;
@@ -27,6 +28,10 @@ pub(crate) struct CoDecider<
     pub(crate) state: &'a mut T::State,
     pub(super) memory: ProverMemory<T, P>,
     pub(crate) has_zk: ZeroKnowledge,
+    /// TESTING ONLY (cross-driver determinism tests): when `Some`, all ZK masking values are
+    /// drawn deterministically from this source instead of the driver's secure randomness.
+    /// `None` (the production path) leaves behavior exactly as before.
+    zk_blinding: Option<&'a SeededZkBlinding>,
     phantom_data: PhantomData<(P, H)>,
 }
 
@@ -43,12 +48,14 @@ impl<
         state: &'a mut T::State,
         memory: ProverMemory<T, P>,
         has_zk: ZeroKnowledge,
+        zk_blinding: Option<&'a SeededZkBlinding>,
     ) -> Self {
         Self {
             net,
             state,
             memory,
             has_zk,
+            zk_blinding,
             phantom_data: PhantomData,
         }
     }
@@ -73,12 +80,14 @@ impl<
             let log_subgroup_size = Utils::get_msb64(P::SUBGROUP_SIZE as u64);
             let commitment_key = &crs.monomials[..1 << (log_subgroup_size + 1)];
             let mut zk_sumcheck_data: SharedZKSumcheckData<T, P> =
+                // The Libra masking data covers all `virtual_log_n` rounds (real + virtual)
                 SharedZKSumcheckData::<T, P>::new(
                     virtual_log_n,
                     transcript,
                     commitment_key,
                     self.net,
                     self.state,
+                    self.zk_blinding,
                 )?;
 
             Ok((
@@ -116,6 +125,7 @@ impl<
         if self.has_zk == ZeroKnowledge::No {
             let prover_opening_claim =
                 self.shplemini_prove(transcript, circuit_size, crs, sumcheck_output, None)?;
+
             co_noir_common::compute_co_opening_proof(
                 self.net,
                 self.state,
@@ -134,8 +144,10 @@ impl<
                     .expect("We have ZK"),
                 transcript,
                 crs,
+                self.zk_blinding,
             )?;
             let witness_polynomials = small_subgroup_ipa_prover.into_witness_polynomials();
+
             let prover_opening_claim = self.shplemini_prove(
                 transcript,
                 circuit_size,
@@ -143,6 +155,7 @@ impl<
                 sumcheck_output,
                 Some(witness_polynomials),
             )?;
+
             co_noir_common::compute_co_opening_proof(
                 self.net,
                 self.state,
@@ -163,11 +176,13 @@ impl<
         tracing::trace!("Decider prove");
 
         // Run sumcheck subprotocol.
+
         let (sumcheck_output, zk_sumcheck_data) =
             self.execute_relation_check_rounds(&mut transcript, crs, circuit_size, virtual_log_n)?;
 
         // Fiat-Shamir: rho, y, x, z
         // Execute Zeromorph multilinear PCS
+
         self.execute_pcs_rounds(
             &mut transcript,
             circuit_size,
@@ -176,6 +191,8 @@ impl<
             zk_sumcheck_data,
         )?;
 
-        Ok(transcript.get_proof())
+        let proof = transcript.get_proof();
+
+        Ok(proof)
     }
 }

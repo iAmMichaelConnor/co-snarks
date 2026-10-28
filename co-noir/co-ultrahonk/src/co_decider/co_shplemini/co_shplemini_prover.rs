@@ -20,7 +20,7 @@ use co_noir_common::{
 use itertools::izip;
 use mpc_core::MpcState as _;
 use mpc_net::Network;
-use ultrahonk::{NUM_SMALL_IPA_EVALUATIONS, NUM_SMALL_IPA_OPENING_CLAIMS, Utils};
+use ultrahonk::{NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_OPENING_CLAIMS, Utils};
 
 impl<
     T: NoirUltraHonkProver<P>,
@@ -498,7 +498,7 @@ impl<
         circuit_size: u32,
         crs: &ProverCrs<P>,
         sumcheck_output: SumcheckOutput<P::ScalarField>,
-        libra_polynomials: Option<[SharedPolynomial<T, P>; NUM_SMALL_IPA_EVALUATIONS]>,
+        libra_polynomials: Option<[SharedPolynomial<T, P>; NUM_LIBRA_COMMITMENTS]>,
     ) -> HonkProofResult<ShpleminiOpeningClaim<T, P>> {
         let has_zk = ZeroKnowledge::from(libra_polynomials.is_some());
 
@@ -734,60 +734,61 @@ impl<
      */
     /// Build the five SmallSubgroupIPA opening claims, in transcript order:
     /// G(r), A(g*r), A(r), A(1) = 0 (untransmitted boundary opening), Q(r).
-    /// `libra_polynomials` retains the existing [G, A, A, Q] evaluation order.
+    /// `libra_polynomials` holds [G, A, Q] in commitment order.
     fn compute_libra_opening_claims(
         gemini_r: P::ScalarField,
-        libra_polynomials: [SharedPolynomial<T, P>; NUM_SMALL_IPA_EVALUATIONS],
+        libra_polynomials: [SharedPolynomial<T, P>; NUM_LIBRA_COMMITMENTS],
         transcript: &mut Transcript<TranscriptFieldType, H>,
         net: &N,
         state: &mut T::State,
     ) -> HonkProofResult<Vec<ShpleminiOpeningClaim<T, P>>> {
         tracing::trace!("Compute libra opening claims");
         let mut libra_opening_claims = Vec::with_capacity(NUM_SMALL_IPA_OPENING_CLAIMS);
-        let grand_sum = libra_polynomials[2].clone();
 
         let subgroup_generator = P::get_subgroup_generator();
+        let [concatenated, grand_sum, quotient] = libra_polynomials;
 
-        let libra_eval_labels = [
-            "Libra:concatenation_eval",
-            "Libra:shifted_grand_sum_eval",
-            "Libra:grand_sum_eval",
-            "Libra:quotient_eval",
+        // (label, polynomial, evaluation point, transmitted)
+        let claim_data = [
+            ("Libra:concatenation_eval", concatenated, gemini_r, true),
+            (
+                "Libra:shifted_grand_sum_eval",
+                grand_sum.clone(),
+                gemini_r * subgroup_generator,
+                true,
+            ),
+            ("Libra:grand_sum_eval", grand_sum.clone(), gemini_r, true),
+            // The boundary opening A(1) = 0 is not transmitted: the verifier hardcodes the
+            // evaluation to zero and it is enforced by the batched PCS opening.
+            ("", grand_sum, P::ScalarField::one(), false),
+            ("Libra:quotient_eval", quotient, gemini_r, true),
         ];
-        let evaluation_points = [gemini_r, gemini_r * subgroup_generator, gemini_r, gemini_r];
 
-        let mut to_open = Vec::with_capacity(libra_eval_labels.len());
-        for (poly, point) in izip!(libra_polynomials, evaluation_points) {
-            let eval = T::eval_poly(&poly.coefficients, point);
-
-            let new_claim = ShpleminiOpeningClaim {
+        let mut to_open = Vec::new();
+        let mut open_labels = Vec::new();
+        for (label, poly, point, transmitted) in claim_data {
+            let evaluation = if transmitted {
+                let eval = T::eval_poly(&poly.coefficients, point);
+                to_open.push(eval);
+                open_labels.push(label);
+                eval
+            } else {
+                // A share of the fixed boundary value 0
+                T::ArithmeticShare::default()
+            };
+            libra_opening_claims.push(ShpleminiOpeningClaim {
                 polynomial: poly,
                 opening_pair: OpeningPair {
                     challenge: point,
-                    evaluation: eval,
+                    evaluation,
                 },
                 gemini_fold: false,
-            };
-            to_open.push(new_claim.opening_pair.evaluation);
-            libra_opening_claims.push(new_claim);
+            });
         }
         let opened = T::open_many(&to_open, net, state)?;
-        for (val, label) in izip!(opened, libra_eval_labels) {
+        for (val, label) in izip!(opened, open_labels) {
             transcript.send_fr_to_verifier::<P>(label.to_string(), val);
         }
-
-        // v6 adds the fixed, untransmitted boundary opening A(1) = 0 before Q(r).
-        libra_opening_claims.insert(
-            3,
-            ShpleminiOpeningClaim {
-                polynomial: grand_sum,
-                opening_pair: OpeningPair {
-                    challenge: P::ScalarField::one(),
-                    evaluation: T::ArithmeticShare::default(),
-                },
-                gemini_fold: false,
-            },
-        );
 
         Ok(libra_opening_claims)
     }

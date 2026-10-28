@@ -159,8 +159,11 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
         let n = evaluation_points.len();
         let dim = Utils::get_msb64(self.coefficients.len() as u64 - 1) as usize + 1; // Round up to next power of 2
 
-        // To simplify handling of edge cases, we assume that the index space is always a power of 2
-        assert_eq!(self.coefficients.len(), 1 << n);
+        // To simplify handling of edge cases, we assume that the index space is always a power of 2.
+        // The polynomial is treated as multilinear in `n >= dim` variables, extended by zero beyond
+        // its actual size (the evaluation is multiplied by (1 - u_k) for k = dim, ..., n - 1).
+        assert_eq!(self.coefficients.len(), 1 << dim);
+        assert!(n >= dim);
 
         // We first fold over dim rounds l = 0,...,dim-1.
         // in round l, n_l is the size of the buffer containing the Polynomial partially evaluated

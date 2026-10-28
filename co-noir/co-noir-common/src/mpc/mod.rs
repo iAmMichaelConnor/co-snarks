@@ -360,6 +360,40 @@ pub trait NoirUltraHonkProver<P: CurveGroup>: Send + Sized + std::fmt::Debug {
         scalars: &[Self::ArithmeticShare],
     ) -> Self::PointShare;
 
+    /// Commits to a shared polynomial (MSM of `scalars` against `points`) and
+    /// IMMEDIATELY opens the resulting commitment.
+    ///
+    /// Semantically identical to `msm_public_points` + `open_point` (the
+    /// default implementation below), but protocols with replicated sharing
+    /// can override it to MSM only one additive summand per party and open by
+    /// broadcasting the partial results — the same opened point for half the
+    /// local MSM work (co-groth16's half-share pattern). Only valid because
+    /// the commitment is opened on the spot; no share of it survives.
+    fn commit_and_open<N: Network>(
+        points: &[P::Affine],
+        scalars: &[Self::ArithmeticShare],
+        net: &N,
+        state: &mut Self::State,
+    ) -> eyre::Result<P> {
+        Self::open_point(Self::msm_public_points(points, scalars), net, state)
+    }
+
+    /// Commits to many shared polynomials (each `scalars[i]` MSM'd against a
+    /// prefix of `points`) and IMMEDIATELY opens all commitments in one round.
+    /// See [`Self::commit_and_open`].
+    fn commit_and_open_many<N: Network>(
+        points: &[P::Affine],
+        scalars: &[&[Self::ArithmeticShare]],
+        net: &N,
+        state: &mut Self::State,
+    ) -> eyre::Result<Vec<P>> {
+        let shares = scalars
+            .iter()
+            .map(|poly| Self::msm_public_points(&points[..poly.len()], poly))
+            .collect::<Vec<_>>();
+        Self::open_point_many(&shares, net, state)
+    }
+
     /// Adds two shared points: \[c\] = \[a\] + \[b\].
     fn point_add(a: &Self::PointShare, b: &Self::PointShare) -> Self::PointShare;
 

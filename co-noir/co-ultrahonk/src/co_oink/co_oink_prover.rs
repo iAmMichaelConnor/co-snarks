@@ -17,7 +17,7 @@
 */
 // clang-format on
 
-use super::types::ProverMemory;
+use super::types::{Challenges, ProverMemory};
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
@@ -28,13 +28,14 @@ use co_noir_common::{
     keys::{proving_key::ProvingKey, verification_key::VerifyingKeyBarretenberg},
     mpc::NoirUltraHonkProver,
     polynomials::{
+        entities::Polynomials,
         polynomial::{NUM_MASKED_ROWS, Polynomial},
         shared_polynomial::SharedPolynomial,
     },
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
+    zk_masking::{SeededZkBlinding, site as zk_site},
 };
-use itertools::izip;
 use mpc_core::MpcState as _;
 use mpc_net::Network;
 use std::marker::PhantomData;
@@ -53,6 +54,10 @@ pub(crate) struct CoOink<
     phantom_data: PhantomData<C>,
     phantom_hasher: PhantomData<H>,
     has_zk: ZeroKnowledge,
+    /// TESTING ONLY (cross-driver determinism tests): when `Some`, all ZK masking values are
+    /// drawn deterministically from this source instead of the driver's secure randomness.
+    /// `None` (the production path) leaves behavior exactly as before.
+    zk_blinding: Option<&'a SeededZkBlinding>,
 }
 
 impl<
@@ -63,7 +68,12 @@ impl<
     N: Network,
 > CoOink<'a, T, C, H, N>
 {
-    pub(crate) fn new(net: &'a N, state: &'a mut T::State, has_zk: ZeroKnowledge) -> Self {
+    pub(crate) fn new(
+        net: &'a N,
+        state: &'a mut T::State,
+        has_zk: ZeroKnowledge,
+        zk_blinding: Option<&'a SeededZkBlinding>,
+    ) -> Self {
         Self {
             net,
             state,
@@ -71,23 +81,36 @@ impl<
             phantom_data: PhantomData,
             phantom_hasher: PhantomData,
             has_zk,
+            zk_blinding,
         }
     }
 
     fn mask_polynomial(
         &mut self,
         polynomial: &mut Polynomial<T::ArithmeticShare>,
+        zk_site: &str,
     ) -> HonkProofResult<()> {
         tracing::trace!("mask polynomial");
 
-        // Masked rows sit right after the zero row (row 0): [NUM_ZERO_ROWS, NUM_ZERO_ROWS + NUM_MASKED_ROWS).
-        let virtual_size = polynomial.coefficients.len();
+        // Write random ZK masking values at positions {1, 2, 3} (the disabled head region after
+        // the zero row).
         assert!(
-            virtual_size >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
+            polynomial.coefficients.len() >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
             "Insufficient space for masking"
         );
-        for i in (NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize).rev() {
-            polynomial.coefficients[i] = T::rand(self.net, self.state)?;
+        if let Some(blinding) = self.zk_blinding {
+            // TESTING ONLY: deterministic masking values, promoted to trivial shares (proof
+            // bytes depend on the underlying values, not the share representation).
+            let values = blinding.site_fields::<C::ScalarField>(zk_site, NUM_MASKED_ROWS as usize);
+            let id = self.state.id();
+            for (i, value) in (NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize).zip(values)
+            {
+                polynomial.coefficients[i] = T::promote_to_trivial_share(id, value);
+            }
+        } else {
+            for i in NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize {
+                polynomial.coefficients[i] = T::rand(self.net, self.state)?;
+            }
         }
 
         Ok(())
@@ -118,6 +141,7 @@ impl<
         tracing::trace!("add_ram_rom_memory_records_to_wire_4");
         // The memory record values are computed at the indicated indices as
         // w4 = w3 * eta^3 + w2 * eta^2 + w1 * eta + read_write_flag;
+
         debug_assert_eq!(
             proving_key.polynomials.witness.w_l().len(),
             proving_key.polynomials.witness.w_r().len()
@@ -157,35 +181,34 @@ impl<
     }
 
     fn compute_lookup_term(
-        &mut self,
-        proving_key: &ProvingKey<T, C>,
+        challenges: &Challenges<C::ScalarField>,
+        id: <T::State as mpc_core::MpcState>::PartyID,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
         i: usize,
     ) -> T::ArithmeticShare {
         tracing::trace!("compute lookup term");
 
-        let gamma = self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
+        let gamma = challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
 
-        let w_1 = proving_key.polynomials.witness.w_l()[i];
-        let w_2 = proving_key.polynomials.witness.w_r()[i];
-        let w_3 = proving_key.polynomials.witness.w_o()[i];
+        let w_1 = polynomials.witness.w_l()[i];
+        let w_2 = polynomials.witness.w_r()[i];
+        let w_3 = polynomials.witness.w_o()[i];
 
-        let w_1_shift = proving_key.polynomials.witness.w_l().shifted()[i];
-        let w_2_shift = proving_key.polynomials.witness.w_r().shifted()[i];
-        let w_3_shift = proving_key.polynomials.witness.w_o().shifted()[i];
+        let w_1_shift = polynomials.witness.w_l().shifted()[i];
+        let w_2_shift = polynomials.witness.w_r().shifted()[i];
+        let w_3_shift = polynomials.witness.w_o().shifted()[i];
 
-        let table_index = proving_key.polynomials.precomputed.q_o()[i];
-        let negative_column_1_step_size = proving_key.polynomials.precomputed.q_r()[i];
-        let negative_column_2_step_size = proving_key.polynomials.precomputed.q_m()[i];
-        let negative_column_3_step_size = proving_key.polynomials.precomputed.q_c()[i];
+        let table_index = polynomials.precomputed.q_o()[i];
+        let negative_column_1_step_size = polynomials.precomputed.q_r()[i];
+        let negative_column_2_step_size = polynomials.precomputed.q_m()[i];
+        let negative_column_3_step_size = polynomials.precomputed.q_c()[i];
 
         // The wire values for lookup gates are accumulators structured in such a way that the differences w_i -
         // step_size*w_i_shift result in values present in column i of a corresponding table. See the documentation in
         // method get_lookup_accumulators() in  for a detailed explanation.
-        let id = self.state.id();
-
         let mul = T::mul_with_public(negative_column_1_step_size, w_1_shift);
         let add = T::add_with_public(gamma, mul, id);
         let derived_table_entry_1 = T::add(w_1, add);
@@ -208,17 +231,21 @@ impl<
     }
 
     // Compute table_1 + gamma + table_2 * beta + table_3 * beta^2 + table_4 * beta^3
-    fn compute_table_term(&self, proving_key: &ProvingKey<T, C>, i: usize) -> C::ScalarField {
+    fn compute_table_term(
+        challenges: &Challenges<C::ScalarField>,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
+        i: usize,
+    ) -> C::ScalarField {
         tracing::trace!("compute table term");
 
-        let gamma = &self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
-        let table_1 = &proving_key.polynomials.precomputed.table_1()[i];
-        let table_2 = &proving_key.polynomials.precomputed.table_2()[i];
-        let table_3 = &proving_key.polynomials.precomputed.table_3()[i];
-        let table_4 = &proving_key.polynomials.precomputed.table_4()[i];
+        let gamma = &challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
+        let table_1 = &polynomials.precomputed.table_1()[i];
+        let table_2 = &polynomials.precomputed.table_2()[i];
+        let table_3 = &polynomials.precomputed.table_3()[i];
+        let table_4 = &polynomials.precomputed.table_4()[i];
 
         *table_1 + gamma + *table_2 * beta + *table_3 * beta_sqr + *table_4 * beta_cube
     }
@@ -242,31 +269,43 @@ impl<
         // const WRITE_TERMS: usize = 1;
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
-        self.memory.lookup_inverses.resize(
-            proving_key.circuit_size as usize,
-            T::ArithmeticShare::default(),
-        );
-        let mut q_lookup_mul_read_tag = Vec::with_capacity(proving_key.circuit_size as usize);
-        for (i, (q_lookup, lookup_read_tag)) in izip!(
-            proving_key.polynomials.precomputed.q_lookup().iter(),
-            proving_key.polynomials.witness.lookup_read_tags().iter(),
-        )
-        .enumerate()
-        {
-            // Disabled head rows contain independent masking randomness.
-            if i < TRACE_OFFSET {
-                self.memory.lookup_inverses[i] = T::ArithmeticShare::default();
-                q_lookup_mul_read_tag.push(T::ArithmeticShare::default());
-                continue;
-            }
-            debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
-            let mul = T::mul_with_public(C::ScalarField::one() - q_lookup, *lookup_read_tag);
-            q_lookup_mul_read_tag.push(T::add_with_public(*q_lookup, mul, self.state.id()));
-            let read_term = self.compute_lookup_term(proving_key, i);
-            let write_term = self.compute_table_term(proving_key, i);
-            self.memory.lookup_inverses[i] = T::mul_with_public(write_term, read_term);
-        }
 
+        // Compute local lookup terms in row order.
+        let id = self.state.id();
+        let challenges = &self.memory.challenges;
+        let polynomials = &proving_key.polynomials;
+        let q_lookup_poly = proving_key.polynomials.precomputed.q_lookup();
+        let lookup_read_tags = proving_key.polynomials.witness.lookup_read_tags();
+        let (lookup_inverses, q_lookup_mul_read_tag): (Vec<_>, Vec<_>) =
+            (0..proving_key.circuit_size as usize)
+                .map(|i| {
+                    // Skip the disabled head region: for ZK, the read tags there hold masking
+                    // randomness, which must not contribute to the inverses (the head rows of
+                    // lookup_inverses receive their own masking when the polynomial is committed).
+                    if i < TRACE_OFFSET {
+                        return (T::ArithmeticShare::default(), T::ArithmeticShare::default());
+                    }
+                    let q_lookup = &q_lookup_poly[i];
+                    let lookup_read_tag = &lookup_read_tags[i];
+                    // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
+                    // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
+                    //     continue;
+                    // }
+                    debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
+                    let mul = T::mul_with_public(
+                        C::ScalarField::one() - q_lookup,
+                        lookup_read_tag.to_owned(),
+                    );
+                    let q_mul_read_tag = T::add_with_public(q_lookup.to_owned(), mul, id);
+
+                    // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
+                    let read_term = Self::compute_lookup_term(challenges, id, polynomials, i);
+                    let write_term = Self::compute_table_term(challenges, polynomials, i);
+                    (T::mul_with_public(write_term, read_term), q_mul_read_tag)
+                })
+                .unzip();
+
+        self.memory.lookup_inverses = Polynomial::new(lookup_inverses);
         // Invert before applying the secret activity bit. Inversion opens a randomly
         // scaled denominator and therefore reveals its zero positions. Including
         // q_lookup + (1 - q_lookup) * read_tag here would disclose which private
@@ -275,6 +314,7 @@ impl<
         // Outside the publicly disabled head, d is a product of terms containing
         // gamma, so a zero denominator is a challenge collision rather than a
         // deterministic encoding of the read tag.
+
         CoUtils::batch_invert_leaking_zeros::<T, C, N>(
             self.memory.lookup_inverses.as_mut(),
             self.net,
@@ -302,9 +342,11 @@ impl<
         // Similarly, the denominator contains an extra σ⁰ᵢ = −(i+1) term that does not appear in the numerator.
         // We expect the values of W⁰ᵢ and W¹ᵢ to be equal to xᵢ.
         // The expected accumulated product would therefore be equal to
+
         //   ∏ᵢ (γ + W¹ᵢ + β⋅ID¹ᵢ)        ∏ᵢ (γ + xᵢ + β⋅(n+i) )
         //  -----------------------  =  ------------------------
         //   ∏ᵢ (γ + W⁰ᵢ + β⋅σ⁰ᵢ )        ∏ᵢ (γ + xᵢ - β⋅(i+1) )
+
         // At the start of the loop for each xᵢ where i = 0, 1, …, m-1,
         // we have
         //      numerator_acc   = γ + β⋅(n+i) = γ + β⋅n + β⋅i
@@ -314,6 +356,7 @@ impl<
         // Note: The public inputs may be offset from the 0th index of the wires, for example due to the inclusion of an
         // initial zero row or Goblin-style ECC op gates. Accordingly, the indices i in the above formulas are given by i =
         // [0, m-1] + offset, i.e. i = offset, 1 + offset, …, m - 1 + offset.
+
         let mut num = C::ScalarField::one();
         let mut denom = C::ScalarField::one();
         let separator = PERMUTATION_ARGUMENT_VALUE_SEPARATOR;
@@ -374,6 +417,7 @@ impl<
         tracing::trace!("compute grand product");
 
         // Barretenberg uses multithreading here
+
         // Set the domain over which the grand product must be computed. This may be less than the dyadic circuit size, e.g
         // the permutation grand product does not need to be computed beyond the index of the last active wire
         let domain_size = proving_key.final_active_wire_idx + 1;
@@ -384,6 +428,7 @@ impl<
         // In Barretenberg circuit size is taken from the q_c polynomial
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
+
         // TACEO TODO could batch those 4 as well
         let denom1 = Self::batched_grand_product_num_denom(
             self.net,
@@ -440,6 +485,7 @@ impl<
 
         // Step (2)
         // Compute the accumulating product of the numerator and denominator terms.
+
         // TACEO TODO could batch here as well
         // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds
         let numerator = CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?;
@@ -512,17 +558,33 @@ impl<
 
         // Commit to the first three wire polynomials of the instance
         // We only commit to the fourth wire polynomial after adding memory records
+
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.w_l_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_r_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_o_mut())?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_l_mut(),
+                zk_site::OINK_MASK_W_L,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_r_mut(),
+                zk_site::OINK_MASK_W_R,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.w_o_mut(),
+                zk_site::OINK_MASK_W_O,
+            )?;
         };
 
-        let w_l = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_l().as_ref(), crs);
-        let w_r = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_r().as_ref(), crs);
-        let w_o = CoUtils::commit::<T, C>(proving_key.polynomials.witness.w_o().as_ref(), crs);
-        let open = T::open_point_many(&[w_l, w_r, w_o], self.net, self.state)?;
+        let open = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                proving_key.polynomials.witness.w_l().as_ref(),
+                proving_key.polynomials.witness.w_r().as_ref(),
+                proving_key.polynomials.witness.w_o().as_ref(),
+            ],
+            crs,
+            self.net,
+            self.state,
+        )?;
 
         let w_l: C::Affine = open[0].into();
         let w_r: C::Affine = open[1].into();
@@ -546,10 +608,16 @@ impl<
         }
 
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?;
-        let masking_poly_commitment_shared = CoUtils::commit::<T, C>(masking_poly.as_ref(), crs);
+        let masking_poly = if let Some(blinding) = self.zk_blinding {
+            // TESTING ONLY: promote deterministic values in coefficient order.
+            let values = blinding
+                .site_fields::<C::ScalarField>(zk_site::OINK_GEMINI_MASKING_POLY, polynomial_size);
+            SharedPolynomial::new(T::promote_to_trivial_shares(self.state.id(), &values))
+        } else {
+            SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?
+        };
         let masking_poly_commitment =
-            T::open_point(masking_poly_commitment_shared, self.net, self.state)?;
+            CoUtils::commit_and_open::<T, C, N>(masking_poly.as_ref(), crs, self.net, self.state)?;
         transcript.send_point_to_verifier::<C>(
             "Gemini:masking_poly_comm".to_string(),
             masking_poly_commitment.into(),
@@ -618,31 +686,32 @@ impl<
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_counts_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_tags_mut())?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.lookup_read_counts_mut(),
+                zk_site::OINK_MASK_LOOKUP_READ_COUNTS,
+            )?;
+            self.mask_polynomial(
+                proving_key.polynomials.witness.lookup_read_tags_mut(),
+                zk_site::OINK_MASK_LOOKUP_READ_TAGS,
+            )?;
             // we do std::mem::take here to avoid borrowing issues with self
             let mut w_4_tmp = std::mem::take(&mut self.memory.w_4);
-            self.mask_polynomial(&mut w_4_tmp)?;
+            self.mask_polynomial(&mut w_4_tmp, zk_site::OINK_MASK_W_4)?;
             std::mem::swap(&mut self.memory.w_4, &mut w_4_tmp);
         };
 
         // Commit to lookup argument polynomials and the finalized (i.e. with memory records) fourth wire polynomial
-        let lookup_read_counts = CoUtils::commit::<T, C>(
-            proving_key
-                .polynomials
-                .witness
-                .lookup_read_counts()
-                .as_ref(),
+        let opened = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                proving_key
+                    .polynomials
+                    .witness
+                    .lookup_read_counts()
+                    .as_ref(),
+                proving_key.polynomials.witness.lookup_read_tags().as_ref(),
+                self.memory.w_4.as_ref(),
+            ],
             crs,
-        );
-        let lookup_read_tags = CoUtils::commit::<T, C>(
-            proving_key.polynomials.witness.lookup_read_tags().as_ref(),
-            crs,
-        );
-        let w_4 = CoUtils::commit::<T, C>(self.memory.w_4.as_ref(), crs);
-
-        let opened = T::open_point_many(
-            &[lookup_read_counts, lookup_read_tags, w_4],
             self.net,
             self.state,
         )?;
@@ -680,6 +749,7 @@ impl<
         self.compute_logderivative_inverses(proving_key)?;
 
         // We moved the committing and opening of the lookup inverses to be at the same time as z_perm
+
         // Round is done since ultra_honk is no goblin flavor
         Ok(())
     }
@@ -700,19 +770,24 @@ impl<
         if self.has_zk == ZeroKnowledge::Yes {
             // we do std::mem::take here to avoid borrowing issues with self
             let mut lookup_inverses_mut = std::mem::take(&mut self.memory.lookup_inverses);
-            self.mask_polynomial(&mut lookup_inverses_mut)?;
+            self.mask_polynomial(&mut lookup_inverses_mut, zk_site::OINK_MASK_LOOKUP_INVERSES)?;
             std::mem::swap(&mut self.memory.lookup_inverses, &mut lookup_inverses_mut);
             let mut z_perm_mut = std::mem::take(&mut self.memory.z_perm);
-            self.mask_polynomial(&mut z_perm_mut)?;
+            self.mask_polynomial(&mut z_perm_mut, zk_site::OINK_MASK_Z_PERM)?;
             std::mem::swap(&mut self.memory.z_perm, &mut z_perm_mut);
         };
 
         // This is from the previous round, but we open it here with z_perm
-        let lookup_inverses = CoUtils::commit::<T, C>(self.memory.lookup_inverses.as_ref(), crs);
 
-        let z_perm = CoUtils::commit::<T, C>(self.memory.z_perm.as_ref(), crs);
-
-        let open = T::open_point_many(&[lookup_inverses, z_perm], self.net, self.state)?;
+        let open = CoUtils::commit_and_open_many::<T, C, N>(
+            &[
+                self.memory.lookup_inverses.as_ref(),
+                self.memory.z_perm.as_ref(),
+            ],
+            crs,
+            self.net,
+            self.state,
+        )?;
 
         let lookup_inverses: C::Affine = open[0].into();
         let z_perm: C::Affine = open[1].into();
@@ -731,20 +806,25 @@ impl<
         tracing::trace!("Oink prove");
 
         // Add circuit size public input size and public inputs to transcript
+
         Self::send_vk_hash_and_public_inputs(transcript, proving_key, verifying_key)?;
 
         self.commit_to_masking_poly(transcript, proving_key, crs)?;
 
         // Compute first three wire commitments
+
         self.commit_to_wires(transcript, proving_key, crs)?;
 
         // Compute sorted list accumulator and commitment
+
         self.commit_to_lookup_counts_and_w4(transcript, proving_key, crs)?;
 
         // Fiat-Shamir: beta & gamma
+
         self.commit_to_logderiv_inverses(transcript, proving_key)?;
 
         // Compute grand product(s) and commitments.
+
         self.commit_to_z_perm(transcript, proving_key, crs)?;
 
         // Generate relation separators alphas for sumcheck/combiner computation
