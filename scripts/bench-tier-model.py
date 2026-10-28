@@ -1,57 +1,20 @@
 #!/usr/bin/env python3
-"""Distance-tier transfer-time model (ch. 24 §3a measurement backlog item).
+"""Estimate transfer time from per-peer received-byte histograms.
 
-Takes the per-round received-byte histogram the CO_NOIR_NET_STATS_JSON /
-CO_NOIR_NET_STATS_JSON_PKGEN files started carrying alongside `rounds` and
-`blocked_recv_ms` (2026-07-26 bench-granularity extension: see
-mpc_net::RoundCounters's doc for exactly what a "round" is and why
-`len(recv_bytes_histogram)` can be >= `rounds`) and estimates, PER PHASE,
-how long the observed communication would take under three synchronous
-network tiers:
+The local, LAN, and WAN tiers use (10 Gbps, 0.1 ms), (1 Gbps, 2 ms), and
+(100 Mbps, 40 ms), respectively. The histogram estimate sums
+max(RTT, bytes / bandwidth) across blocking receive groups. A message-count
+estimate also reports max(messages * RTT, bytes / bandwidth) and their sum.
+These are model scenarios, not measured network times or guaranteed bounds:
+queued messages, pipelining, protocol dependencies, and congestion affect them.
 
-    Local : 10 Gbps,  0.1 ms RTT   (same machine / same rack)
-    LAN   : 1 Gbps,   2 ms RTT     (same datacentre)
-    WAN   : 100 Mbps, 40 ms RTT    (cross-region)
+The prove snapshot includes proving-key generation. To derive prove_proper,
+subtract the matching pkgen histogram prefix; mismatches produce a warning and
+skip that peer. Estimates take the maximum across peers and parties, then the
+median across repetitions. Files without histograms are skipped.
 
-Model (as specified, ch. 24 §3a): for each tier, estimated_seconds =
-Σ_rounds max(RTT, bytes_r / bandwidth) -- every round pays at least one
-RTT (the synchronisation cost), or the serialization/transfer time if that
-dominates (a big round on a slow/high-bandwidth link). This is a coarse,
-first-cut estimate: real networks pipeline sends ahead of blocking waits,
-TCP slow-start/congestion control isn't modelled, and the three tiers here
-are a simplified cut of ch. 24 §3a's fuller same-rack/same-DC/
-same-continent/cross-continent taxonomy -- a future extension, not
-implemented here. VALIDATE against real netem runs before treating these
-numbers as more than an order-of-magnitude guide (ch. 24 §3a's own caveat).
-
-Phases modelled directly from the netstats files: witext, pkgen, prove
-(REP3/SHAMIR's `prove` snapshot is CUMULATIVE pk-gen+prove -- see
-bench-results/README.md), translate (Shamir's translate-witness step).
-PLUS a synthetic `prove_proper` phase, computed here (not by the CLI):
-subtract the pkgen snapshot's per-peer histogram from the matching prove
-snapshot's histogram. This subtraction is exact, not an approximation --
-the pkgen snapshot is taken from the SAME live counters that keep
-accumulating into the final snapshot, so pkgen's histogram is guaranteed
-to be a PREFIX of prove's histogram (verified: `finalize()` only ever
-appends, a snapshot never truncates or resets what's already there); the
-tail after that prefix is exactly prove-proper's own rounds. A prefix
-mismatch (would indicate a broken pairing, e.g. mismatched reps) is
-detected and that peer's prove_proper is skipped with a warning rather
-than silently producing a wrong number.
-
-Combining rule (documented, not obvious from the spec alone): a netstats
-JSON can report more than one peer per party (e.g. REP3's two ring
-neighbours don't produce interleaved round sequences we can merge
-precisely) -- we take the MAX across peers within a party (the party is
-gated by whichever connection is slower) and then the MAX across the three
-parties in a rep (wall-clock phase time is gated by the slowest party,
-matching how bench-0_5.sh times MPC cells). Across reps: MEDIAN, matching
-the "medians across reps" rule in bench-results/README.md.
-
-Usage: bench-tier-model.py <run-dir>   # e.g. bench-results/2026-07-26
-Writes <run-dir>/tiers.csv. Silently skips any netstats file that lacks
-`recv_bytes_histogram` (i.e. was captured before this extension landed) --
-old run dirs are safe to point this at, they just produce no rows.
+Usage: bench-tier-model.py <run-dir>
+Writes <run-dir>/tiers.csv.
 """
 
 import csv
@@ -81,26 +44,8 @@ def tier_seconds(histogram: list, bandwidth_bps: float, rtt_s: float) -> float:
 
 
 def party_estimate(peers: dict, tier_name: str) -> tuple:
-    """Element-wise worst over this party's peer connections:
-    (pipelined_seconds, rounds, recv_bytes, recv_msgs, dep_lo, dep_hi).
-
-    Two different round notions feed two different estimates (both kept —
-    they bracket reality):
-    - `rounds` (blocking-boundary count) feeds `pipelined_seconds`
-      (Σ_r max(RTT, bytes_r/bw) over the histogram). At loopback,
-      independent messages pipeline, so this UNDERCOUNTS dependency depth
-      (measured: poseidon_2e17 prove has 204 recv_msgs but only ~74
-      blocking rounds) — treat it as the OPTIMISTIC/pipelined estimate.
-    - `recv_msgs` is the true per-peer dependency-round proxy for the
-      CURRENT serial protocol (validated in bench-results/README.md v2.1:
-      prove-proper recv_msgs matches the in-process fence pins exactly,
-      and pk-gen is one blocking mul_many round per big-quad constraint —
-      ch. 24 §4 L8). It feeds the conservative bracket:
-        dep_lo = max(msgs·RTT, bytes/bw)   (latency- or bandwidth-bound)
-        dep_hi = msgs·RTT + bytes/bw       (no overlap at all)
-      True WAN cost for today's code lies in [dep_lo, dep_hi]; the
-      pipelined estimate is a lower anchor that assumes loopback-grade
-      overlap survives the added latency (it mostly won't).
+    """Maximum per-peer estimates: histogram time, rounds, bytes, messages,
+    and the two message-count transfer scenarios described in the module doc.
     """
     bandwidth_bps, rtt_s = TIERS[tier_name]
     best = (0.0, 0, 0, 0, 0.0, 0.0)
@@ -173,7 +118,7 @@ def main(run_dir: Path) -> None:
     elif n_with_histogram == 0:
         print(
             f"{n_seen} netstats files found in {netstats_dir}, none carry "
-            "recv_bytes_histogram (captured before the ch. 24 §3a extension "
+            "recv_bytes_histogram (histogram capture "
             "landed) -- tiers.csv will be empty",
             file=sys.stderr,
         )

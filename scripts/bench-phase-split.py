@@ -1,71 +1,20 @@
 #!/usr/bin/env python3
-"""Resolve every prover's measured pipeline into SETUP / WITNESS / PROVE buckets.
+"""Resolve measured prover pipelines into setup, witness, and prove buckets.
 
-Replaces bench-retro-phase-split.py (v2.1-v3), which split only the MPC cell,
-and split it at the binary's own "Build proving key took" log line. That is a
-CODE boundary, not a precomputability boundary, and the difference is large:
+SETUP is circuit-only work: structural circuit building, precomputed
+polynomials and their commitments, circuit parsing, and CRS loading.
+WITNESS is per-proof builder work over witness values, lookup read counts,
+memory records, and wire population. PROVE covers commitments to witness
+polynomials, grand products, sumcheck, and PCS. Allocation and self-verification
+are reported separately; bb and plaindriver self-verify, while co-noir does not.
 
-  * "pk-gen" is dominated by per-proof MPC over the shared witness. On
-    sha256 2^16, 128.2 s of the 139.8 s pk-gen is construct_lookup_read_counts
-    (secret table indices -> one-hot vectors over MPC rounds) and 11.6 s is the
-    builder's sha gadget over shared values. The circuit-only slice is 31 ms.
-  * On poseidon the circuit-only slice is a larger fraction (9.9% at 2^20) but
-    tiny in absolute terms (307 ms of a 74.9 s pipeline).
-
-So a chart that offers to "exclude proving-key generation" removes almost
-entirely per-proof cost, while a chart that wants to answer "what does a node
-pay per proof, given it already holds everything derivable from the circuit?"
-must remove something much smaller. This script measures the latter.
-
-Buckets (identical definition for all four provers):
-
-  SETUP    circuit-only, precomputable once per circuit, identical for every
-           user and every proof: ACIR parse, structural circuit build, selector
-           / permutation (sigma,id) / lookup-table polynomials, the commitments
-           to them (= the VK), CRS load.
-  WITNESS  per-proof work before the prover proper: MPC work over shared witness
-           values, lookup read counts and tags, memory records, wire polynomial
-           population, witness-file/ACVM input handling.
-  PROVE    per-proof prover proper: witness-polynomial commitments, grand
-           products, sumcheck, PCS.
-
-Two further columns are kept out of those buckets on purpose, because folding
-them in would overstate what precomputation can buy:
-
-  ALLOC        allocating and zeroing the polynomial arena and copy-cycle table.
-               Not circuit setup and not mathematically per-proof: a long-lived
-               node can pool the buffers. Amortisable, so shown separately.
-  SELFVERIFY   bb and plaindriver both verify the proof they just produced
-               (bb: bbapi_ultra_honk.cpp "Sanity-check the generated proof";
-               plaindriver: its own verify phase). co-noir's prove does not.
-               Reported so the baselines can be compared without it.
-
-Sources, per prover (all measurements, no modelling):
-
-  bb           setup   = pk-build line in the write_vk log, i.e.
-                         "CircuitProve: Proving key computed in N ms" with an
-                         EMPTY witness -> the structural build alone
-               witness = same line in the prove log, minus the above
-               prove   = prove cell wall minus the prove-log pk-build
-               (bb needed no new instrumentation: it has always logged this.)
-  plaindriver  from its [phase-timing] lines (v4 runs it with
-               CO_NOIR_PHASE_TIMINGS=1): read_circuit, read_crs,
-               vkgen/commit_precomputed and the pkgen/* setup slice are SETUP;
-               build_circuit + the rest of pkgen/prover_instance are WITNESS;
-               prove_total is PROVE.
-  REP3/SHAMIR  pk-gen and prove-proper still come from the two tracing lines
-               (authoritative, and comparable with every earlier run); the
-               pkgen/* sub-phases then resolve pk-gen into its setup slice, its
-               allocation cost and its per-proof remainder.
-
-The once-per-circuit setup cells live in results.csv, not here:
-  protocol=bb      phase=vkgen   -> bb write_vk
-  protocol=co-noir phase=vkgen   -> co-noir create-vk (new in v4; v2/v3 ran it
-                                    untimed, so the MPC path's setup cost was
-                                    missing from the dataset entirely)
+The script uses bb's proving-key timing lines and the Rust provers' tracing and
+phase-timing lines. MPC timings use the slowest party. Unclassified proving-key
+work stays in the per-proof remainder. Once-per-circuit vkgen wall times remain
+in results.csv; this breakdown describes the work inside proving cells.
 
 Usage: bench-phase-split.py <run-dir>
-Writes <run-dir>/phase-split.csv and prints per-config medians.
+Writes <run-dir>/phase-split.csv and prints per-configuration medians.
 """
 
 import csv
@@ -96,8 +45,7 @@ PD_SETUP_PHASES = ("read_circuit", "read_crs", "vkgen/commit_precomputed")
 # Setup work in the MPC prove cell that sits OUTSIDE the pk-gen and prove timers:
 # ACIR parse, a second full structural circuit build (compute_circuit_size builds
 # and finalizes the circuit with an empty witness just to size the CRS), the CRS
-# load and the VK read. Before v4 these were invisible — a residual of the cell
-# wall — which charged per-circuit setup to per-proof cost.
+# load and the VK read. These are circuit setup rather than per-proof work.
 MPC_SETUP_PHASES = ("setup/acir_parse", "setup/compute_circuit_size",
                     "setup/crs_load", "setup/vk_read")
 MPC_WITNESS_PHASES = ("witness/deserialize_shares",)

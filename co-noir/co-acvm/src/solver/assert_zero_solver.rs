@@ -113,32 +113,7 @@ where
         );
         let simplified = self.simplify_expression(expr)?;
         tracing::trace!("simplified expr:     {:?}", simplified);
-        // if we are here, we do not have any mul terms
-        debug_assert!(simplified.mul_terms.is_empty());
-        debug_assert!(
-            simplified.linear_combinations.len() <= 4,
-            "we need to simplify!!!"
-        );
-        // also if we are here and have more than one linear combination, we
-        // cannot solve the expression
-        if simplified.linear_combinations.is_empty() {
-            // we are done
-            tracing::trace!("nothing to do for us");
-            Ok(())
-        } else if simplified.linear_combinations.len() == 1 {
-            //we can solve it!
-            tracing::trace!("solving equation...");
-            let (q_l, w_l) = simplified.linear_combinations[0].clone();
-            let witness = self.driver.solve_equation(q_l, simplified.q_c)?;
-            self.witness().insert(w_l, witness);
-            tracing::trace!("we did it!");
-            Ok(())
-        } else {
-            Err(eyre::eyre!(
-                "too many unknowns. not solvable for expression: {:?}",
-                expr
-            ))?
-        }
+        self.finish_assert_zero(simplified)
     }
 
     /// Level-batched counterpart of [`Self::evaluate_mul_terms`]. Instead of

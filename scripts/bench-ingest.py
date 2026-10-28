@@ -81,7 +81,7 @@ SELECT m1.run_id, m1.circuit, m1.zk,
 FROM medians m1
 JOIN medians m2 ON m2.run_id=m1.run_id AND m2.circuit=m1.circuit
                AND m2.zk=m1.zk AND m2.protocol='bb' AND m2.phase='prove'
-LEFT JOIN features f ON f.circuit=m1.circuit
+LEFT JOIN features f ON f.run_id=m1.run_id AND f.circuit=m1.circuit
 WHERE m1.protocol='REP3' AND m1.phase='prove';
 """
 

@@ -14,17 +14,17 @@
 //!   (initial ABI/input witnesses live at level 0), and assigns each opcode
 //!   `level = 1 + max(produced_at[inputs])`, recording `produced_at` for its
 //!   outputs. Opcodes that share a level are provably mutually independent (no
-//!   output of one is an input of another), so their network calls can later be
-//!   batched into a single round per level.
+//!   output of one is an input of another). The executor batches shared products
+//!   within a level; equation solves still run serially.
 //!
 //! * [`attribute_rounds`] — a taint analysis that replays the arithmetic
 //!   solver's control flow on a `shared`/`public` lattice (every witness
-//!   derived from a private input is `shared`) and counts the exact network
+//!   derived from a private input is `shared`) and models the arithmetic network
 //!   rounds the serial solve pays, split across shared×shared multiplications
 //!   (`solve_mul_term`) and shared-coefficient divisions/inversions
 //!   (`solve_equation`). It then computes the round count the level-batched
-//!   solve would pay (≤3 rounds per level), which sizes the round-collapse
-//!   factor `f` before any protocol code is written.
+//!   solve pays (products batched; equation solves serial), which sizes the round-collapse
+//!   factor `f` for the current executor.
 //!
 //! ## Which opcode kinds are precisely modelled vs treated as barriers
 //!
@@ -434,8 +434,8 @@ fn simulate_assert_zero<F: PrimeField>(
     (mul_rounds, kind, Some((w, out_shared)))
 }
 
-/// Exact network-round attribution for the witness extension, both as the
-/// serial solver pays it today and as the level-batched (Design A) solve would.
+/// Arithmetic round attribution for the serial and level-batched solvers.
+/// Black-box, Brillig, memory, and final output-opening rounds are excluded.
 #[derive(Debug, Clone)]
 pub struct RoundAttribution {
     /// shared×shared `solve_mul_term` calls (each = 1 reshare round).
@@ -448,7 +448,7 @@ pub struct RoundAttribution {
     pub div_rounds: usize,
     /// Total serial rounds = mul_rounds + inv_rounds + 2·div_rounds.
     pub serial_rounds: usize,
-    /// Rounds the level-batched solve would pay (≤3 per level).
+    /// Rounds for batched products followed by serial equation solves.
     pub batched_rounds: usize,
     /// DAG depth (number of levels).
     pub depth: usize,
@@ -479,7 +479,8 @@ impl RoundAttribution {
 }
 
 /// Replay the arithmetic solver on the taint lattice, level by level, counting
-/// the exact serial rounds and the batched (Design A) rounds.
+/// serial and level-batched arithmetic rounds. Only products are batched;
+/// inversions and divisions remain serial within each level.
 ///
 /// `shared_initial` is the set of ABI witness indices that are private (shared)
 /// under the MPC protocol; every witness derived from them becomes shared.
@@ -506,8 +507,8 @@ pub fn attribute_rounds<F: PrimeField>(
 
     for level in &schedule.levels {
         let mut lvl_mul = false;
-        let mut lvl_inv = false;
-        let mut lvl_div = false;
+        let mut lvl_inv = 0usize;
+        let mut lvl_div = 0usize;
         let mut lvl_mul_count = 0usize;
         // Outputs are committed only after the whole level, matching the fact
         // that opcodes in a level are independent.
@@ -525,13 +526,12 @@ pub fn attribute_rounds<F: PrimeField>(
                     match kind {
                         SolveKind::Inv => {
                             inv_rounds += 1;
-                            lvl_inv = true;
+                            lvl_inv += 1;
                             solve_equation_calls += 1;
                         }
                         SolveKind::Div => {
                             div_rounds += 1;
-                            lvl_inv = true;
-                            lvl_div = true;
+                            lvl_div += 1;
                             solve_equation_calls += 1;
                         }
                         SolveKind::LocalPublic | SolveKind::LocalShared => {
@@ -566,9 +566,8 @@ pub fn attribute_rounds<F: PrimeField>(
             known.insert(w, t);
         }
 
-        // One mul_many for all shared×shared products, one inv_vec for all
-        // inversions, one mul_many for the shared/shared division post-multiplies.
-        batched_rounds += (lvl_mul as usize) + (lvl_inv as usize) + (lvl_div as usize);
+        // solve_level batches products, then calls finish_assert_zero serially.
+        batched_rounds += usize::from(lvl_mul) + lvl_inv + 2 * lvl_div;
         max_muls_per_level = max_muls_per_level.max(lvl_mul_count);
     }
 
@@ -655,7 +654,7 @@ pub fn format_report<F: PrimeField>(
         attr.max_muls_per_level
     ));
     s.push_str(&format!(
-        "  batched rounds (Design A, ≤3/level): {}\n",
+        "  batched arithmetic rounds: {}\n",
         attr.batched_rounds
     ));
     s.push_str(&format!(

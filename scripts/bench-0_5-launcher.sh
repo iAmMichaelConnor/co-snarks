@@ -1,47 +1,23 @@
 #!/usr/bin/env bash
-# Detached launcher for bench-0_5.sh: runs the matrix serially, then
-# aggregates for the explorer and drops a BENCH_DONE sentinel line.
-#
-# There is deliberately NO quiet-gate: this box is a sysbox on a shared
-# mainframe, so /proc/loadavg is HOST-wide (other tenants included) and a
-# "wait for load < N" gate can starve forever chasing neighbours' load
-# (it did, 2026-07-24). Instead: run when convenient; every CSV row is
-# stamped with host_load1m so each absolute number carries its own noise
-# context; use medians + same-window ratios for fine comparisons.
+# Run the serial matrix and derive report, phase, and transfer-model outputs.
+# host_load1m is host-wide and may include other tenants; it is recorded rather
+# than used as a load gate. Compare repeated runs from the same time window.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# v2 (2026-07-24, Mike): results live INSIDE the repo so runs are visible in
-# git status and committable alongside the code that produced them.
 OUT="${BENCH_OUT:-$ROOT/bench-results/$(date +%Y-%m-%d)}"
-# Same-day rerun guard (added 2026-07-26 after a near-clobber of a committed
-# run dir): never write into a dir that already holds a completed run.
 if [[ -z "${BENCH_OUT:-}" && -s "$OUT/results.csv" ]]; then
-  OUT="$OUT-$(date +%H%M)"
+  OUT="$OUT-$(date +%H%M%S)"
 fi
 mkdir -p "$OUT"
 LOG="$OUT/launcher.log"
-
-echo "$(date -Is) launcher started (host load1m=$(awk '{print $1}' /proc/loadavg) — HOST-wide, incl. other tenants)" >>"$LOG"
+echo "$(date -Is) launcher started (host load1m=$(awk '{print $1}' /proc/loadavg))" >>"$LOG"
 BENCH_OUT="$OUT" bash "$ROOT/scripts/bench-0_5.sh" >>"$LOG" 2>&1
 rc=$?
 echo "$(date -Is) bench finished rc=$rc" >>"$LOG"
-# Aggregate into the explorer's data shape (medians, loopback only, nulls
-# where unmeasured) so the next session bakes it in + redeploys the same
-# artifact URL (ch. 22 §5/V7). Never fabricates: absent cells stay modeled.
-python3 "$ROOT/scripts/bench-to-site.py" "$OUT/results.csv" "$OUT/site-anchors.json" >>"$LOG" 2>&1 \
-  && echo "$(date -Is) site-anchors.json + RESULTS.md written" >>"$LOG"
-# v4: resolve every prover's pipeline into setup / witness / prove buckets.
-# (v2.1-v3 used bench-retro-phase-split.py, which only split the MPC cell into
-# pk-gen + prove-proper at the binary's log line — a code boundary, not the
-# precomputability boundary. The v3.x run dirs keep the phase-split.csv that
-# tool produced; nothing re-derives them.)
-python3 "$ROOT/scripts/bench-phase-split.py" "$OUT" >>"$LOG" 2>&1 \
-  && echo "$(date -Is) phase-split.csv written" >>"$LOG"
-# Bench-granularity extension (2026-07-26, ch. 24 §3a): distance-tier
-# transfer-time model from the per-round byte histograms CO_NOIR_NET_STATS_JSON
-# now carries. Safe on older run dirs too (skips netstats files without a
-# histogram, producing an empty tiers.csv).
-python3 "$ROOT/scripts/bench-tier-model.py" "$OUT" >>"$LOG" 2>&1 \
-  && echo "$(date -Is) tiers.csv written" >>"$LOG"
-echo "BENCH_DONE rc=$rc out=$OUT   (bake: read $OUT/site-anchors.json into the explorer's ANCHOR block, then redeploy)" >>"$LOG"
-exit $rc
+if [[ $rc -eq 0 ]]; then
+  python3 "$ROOT/scripts/bench-to-site.py" "$OUT/results.csv" "$OUT/site-anchors.json" >>"$LOG" 2>&1 || rc=$?
+  python3 "$ROOT/scripts/bench-phase-split.py" "$OUT" >>"$LOG" 2>&1 || rc=$?
+  python3 "$ROOT/scripts/bench-tier-model.py" "$OUT" >>"$LOG" 2>&1 || rc=$?
+fi
+echo "BENCH_DONE rc=$rc out=$OUT" >>"$LOG"
+exit "$rc"

@@ -4,7 +4,7 @@
 Reads results.csv (columns: circuit,protocol,zk,rep,phase,seconds,rc),
 takes the MEDIAN across reps of the successful (rc==0) rows per
 (circuit, protocol, zk, phase), and writes site-anchors.json — the shape
-the co-SNARK explorer bakes in for its MEASURED anchors (ch. 22 §5/V7).
+the co-SNARK explorer uses for its measured anchors.
 
 It never invents numbers: a (circuit,config) cell absent or all-failed in
 the CSV is emitted as null, so the site keeps MODELING that point (badged
@@ -25,7 +25,7 @@ def main():
 
     # (circuit, protocol, zk, phase) -> [seconds...] for rc==0 rows only
     buckets = defaultdict(list)
-    rss = defaultdict(list)   # same key -> [max_rss_kb...] (v2 column, optional)
+    rss = defaultdict(list)   # same key -> [max_rss_kb...] (optional column)
     contended = "CONTENDED" in src  # launcher renames the CSV if the box was busy
     with open(src, newline="") as f:
         for row in csv.DictReader(f):
@@ -63,7 +63,7 @@ def main():
         except (ValueError, OSError):
             manifest = {}
 
-    # ---- v2: comms stats (netstats/<circuit>_REP3_<phase>_r<rep>_p<party>.json)
+    # ---- comms stats (netstats/<circuit>_REP3_<phase>_r<rep>_p<party>.json)
     # R proxy = recv_msgs from the busiest single peer at party 0 (the REP3
     # protocol is synchronous; the per-peer recv chain bounds the sequential
     # round count that WAN latency multiplies). Bytes = party 0 total sent.
@@ -101,7 +101,7 @@ def main():
         except (ValueError, OSError):
             return None
 
-    # ---- v2: circuit features (features/<circuit>.circuit-info.json etc.)
+    # ---- circuit features (features/<circuit>.circuit-info.json etc.)
     def load_features(circuit):
         out = {}
         p = os.path.join(run_dir, "features", f"{circuit}.circuit-info.json")
@@ -169,7 +169,7 @@ def main():
     # person can read on waking, independent of any downstream bake step).
     import os
     md_path = os.path.join(os.path.dirname(out) or ".", "RESULTS.md")
-    lines = ["# PLAN 0.5 benchmark — results", ""]
+    lines = ["# co-SNARK benchmark results", ""]
     if contended:
         lines += ["> ⚠ **CONTENDED run** — the box was busy (10 h idle-wait "
                   "cap hit); treat these as upper bounds, not clean numbers.", ""]
@@ -238,10 +238,8 @@ def main():
             lines += ["", "**Shape**: " + " · ".join(feat) + "."]
         lines += [""]
     lines += ["---", "",
-              "Correctness (measured, not here): proofs byte-identical to bb — "
-              "`compare_mpc.sh`, VK byte-KATs. This file times the honest path only.",
-              "", "Next: bake `site-anchors.json` into the co-SNARK explorer "
-              "(project-docs ch.22 V7) and redeploy the same artifact URL."]
+              "This report measures the honest proving path. Consult verification "
+              "cells and the comparison test suite for correctness evidence."]
     with open(md_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 

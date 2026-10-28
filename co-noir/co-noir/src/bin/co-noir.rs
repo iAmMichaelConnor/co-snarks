@@ -968,7 +968,7 @@ fn write_net_stats_json_pkgen_snapshot(nets: &[&TcpNetwork]) {
 /// `results.csv`. All ADDITIVE: the four original fields
 /// (`sent_bytes`/`recv_bytes`/`sent_msgs`/`recv_msgs`) and the top-level
 /// `phase`/`my_id`/`peers` shape are unchanged, so existing readers
-/// (`bench-to-site.py`, `bench-ingest.py`, `bench-retro-phase-split.py`,
+/// (`bench-to-site.py`, `bench-ingest.py`, `bench-phase-split.py`,
 /// the T2-proper fence tests) keep working untouched. Backends that don't
 /// track rounds (none currently reachable from this CLI, which only uses
 /// `TcpNetwork`) would report `rounds: 0` / an empty histogram, exactly
