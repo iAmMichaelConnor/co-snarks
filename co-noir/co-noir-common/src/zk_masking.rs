@@ -8,7 +8,9 @@
 //! REP3 ZK proof must be byte-identical. Seeding the ZK blinding obviously destroys the
 //! zero-knowledge property (the masking values become predictable), so this must never be
 //! reachable from the co-noir CLI or any production entry point. Activation is
-//! explicit-API-only via `prove_with_seeded_zk_blinding` on the provers.
+//! available only with the `test-utils` feature via `prove_with_seeded_zk_blinding`
+//! on the provers. The private seed field and gated constructors prevent constructing
+//! this source in ordinary builds; the type remains available for internal prover plumbing.
 //!
 //! # Draw discipline
 //!
@@ -84,12 +86,14 @@ pub struct SeededZkBlinding {
 
 impl SeededZkBlinding {
     /// Builds the source from a full 32-byte master seed.
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn from_seed(seed: [u8; 32]) -> Self {
         Self { seed }
     }
 
     /// Convenience for tests: expands a `u64` into a 32-byte master seed (little-endian,
     /// repeated -- distinct `u64`s give distinct master seeds).
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn from_u64(seed: u64) -> Self {
         let mut out = [0u8; 32];
         for (chunk, _) in out.chunks_mut(8).zip(0..4) {

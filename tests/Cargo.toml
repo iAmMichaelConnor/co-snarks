@@ -53,6 +53,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [dev-dependencies]
+co-ultrahonk = { version = "0.6.0", path = "../co-noir/co-ultrahonk", features = ["test-utils"] }
 paste.workspace = true
 rayon.workspace = true
 sha3.workspace = true

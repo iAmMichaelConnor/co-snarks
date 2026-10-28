@@ -367,7 +367,7 @@ pub fn joint_input_arithmetic<F: FieldUint, N: Network>(
     let n_bits = F::MODULUS_BIT_SIZE as usize;
 
     // x1 is known by both garblers, we can do a shortcut to share it without communication.
-    // See https://eprint.iacr.org/2019/1168.pdf, p18, last paragraph of "Joint Yao Input".
+    // See https://eprint.iacr.org/2018/403.pdf, p18, last paragraph of "Joint Yao Input".
     let mut x1 = (0..n_bits)
         .map(|_| WireMod2::from_block(state.rngs.generate_shared::<Block>(state.id), 2))
         .collect_vec();

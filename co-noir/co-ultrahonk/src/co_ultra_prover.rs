@@ -140,6 +140,7 @@ where
     /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
     /// It must never be used in production and is deliberately not reachable from the
     /// co-noir CLI.
+    #[cfg(any(test, feature = "test-utils"))]
     #[expect(clippy::type_complexity)]
     pub fn prove_with_seeded_zk_blinding<N: Network>(
         net: &N,
@@ -239,6 +240,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
     /// It must never be used in production and is deliberately not reachable from the
     /// co-noir CLI.
+    #[cfg(any(test, feature = "test-utils"))]
     #[expect(clippy::type_complexity)]
     pub fn prove_with_seeded_zk_blinding(
         proving_key: ProvingKey<PlainUltraHonkDriver, C>,
