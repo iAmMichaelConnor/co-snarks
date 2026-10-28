@@ -63,6 +63,12 @@ fn plain_test<H: TranscriptHasher<TranscriptFieldType>>(
         assert_eq!(proof, read_proof);
     }
 
+    let mut extended = H::to_buffer(proof.inner_as_ref());
+    extended.extend_from_slice(&[0u8; 32]);
+    let extended = HonkProof::new(H::from_buffer(&extended));
+    let rejected = UltraHonk::<_, H>::verify(extended, &public_inputs, &verifying_key, has_zk);
+    assert!(rejected.is_err(), "proof with trailing data was accepted");
+
     let is_valid =
         UltraHonk::<_, H>::verify(proof, &public_inputs, &verifying_key, has_zk).unwrap();
     assert!(is_valid);
