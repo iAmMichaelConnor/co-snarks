@@ -200,6 +200,22 @@ impl<T: Default> UltraTraceBlocks<T> {
     pub fn get_pub_inputs(&self) -> &T {
         &self.pub_inputs
     }
+
+    /// The blocks in trace order, paired with their names. Read-only; intended for
+    /// reporting/inspection (e.g. per-block row counts).
+    pub fn get_named(&self) -> [(&'static str, &T); 9] {
+        [
+            ("pub_inputs", &self.pub_inputs),
+            ("lookup", &self.lookup),
+            ("arithmetic", &self.arithmetic),
+            ("delta_range", &self.delta_range),
+            ("elliptic", &self.elliptic),
+            ("memory", &self.memory),
+            ("nnf", &self.nnf),
+            ("poseidon2_external", &self.poseidon2_external),
+            ("poseidon2_internal", &self.poseidon2_internal),
+        ]
+    }
 }
 
 pub type UltraTraceBlock<F> = ExecutionTraceBlock<F, NUM_WIRES, NUM_SELECTORS>;
@@ -848,9 +864,7 @@ impl<F: PrimeField> WitnessOrConstant<F> {
 
         // If a witness is not provided (we are in a write_vk scenario) we ensure the coordinates correspond to a valid
         // point to avoid erroneous failures during circuit construction. We only do this if the coordinates are
-        // non-constant since otherwise no variable indices exist. Note that there is no need to assign the infinite flag
-        // because native on-curve checks will always pass as long x and y coordinates correspond to a valid point on
-        // Grumpkin.
+        // non-constant since otherwise no variable indices exist.
         let g1_y = F::from(BigUint::new(vec![
             2185176876, 2201994381, 4044886676, 757534021, 111435107, 3474153077, 2,
         ]));
@@ -876,10 +890,8 @@ impl<F: PrimeField> WitnessOrConstant<F> {
             )?;
         }
 
-        // Use public constructor which auto-detects infinity from (0, 0) coordinates, matching bb's
-        // equivalent `to_grumpkin_point` — any ACIR-supplied infinity witness for this point is
-        // otherwise unused (co-snarks reconstructs it independently where needed, e.g. via
-        // `point_is_infinity` in the blackbox solver), so it is not threaded through here.
+        // Use the public constructor which auto-detects infinity from (0, 0) coordinates
+        // (the point at infinity is encoded as (0, 0) since Noir v1.0.0-beta.22).
         CycleGroupCT::new(point_x, point_y, true, builder, driver)
     }
 

@@ -75,8 +75,10 @@ impl<
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
 
+        let phase_start = std::time::Instant::now();
         let oink = CoOink::new(net, state, has_zk, zk_blinding);
         let oink_result = oink.prove(&mut proving_key, &mut transcript, crs, verifying_key)?;
+        crate::phase_timing("oink", phase_start);
 
         let circuit_size = proving_key.circuit_size;
         let log_dyadic_circuit_size = proving_key.circuit_size.next_power_of_two().ilog2() as usize;
@@ -86,13 +88,17 @@ impl<
             log_dyadic_circuit_size
         };
 
+        let phase_start = std::time::Instant::now();
         let mut memory =
             ProverMemory::from_memory_and_polynomials(oink_result, proving_key.polynomials);
         memory.gate_challenges = Self::generate_gate_challenges(&mut transcript, virtual_log_n);
+        crate::phase_timing("memory_handoff", phase_start);
 
+        let phase_start = std::time::Instant::now();
         let decider = CoDecider::new(net, state, memory, has_zk, zk_blinding);
-
-        decider.prove(circuit_size, crs, transcript, virtual_log_n)
+        let proof = decider.prove(circuit_size, crs, transcript, virtual_log_n);
+        crate::phase_timing("decider_total", phase_start);
+        proof
     }
 }
 
@@ -134,6 +140,7 @@ where
     /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
     /// It must never be used in production and is deliberately not reachable from the
     /// co-noir CLI.
+    #[cfg(any(test, feature = "test-utils"))]
     #[expect(clippy::type_complexity)]
     pub fn prove_with_seeded_zk_blinding<N: Network>(
         net: &N,
@@ -233,6 +240,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
     /// the blinding makes the masking predictable, i.e. the proof is NOT zero-knowledge.
     /// It must never be used in production and is deliberately not reachable from the
     /// co-noir CLI.
+    #[cfg(any(test, feature = "test-utils"))]
     #[expect(clippy::type_complexity)]
     pub fn prove_with_seeded_zk_blinding(
         proving_key: ProvingKey<PlainUltraHonkDriver, C>,
@@ -297,7 +305,7 @@ where
     let num_zk_randomness = if has_zk == ZeroKnowledge::No {
         0
     } else {
-        n // Dense Gemini mask draws
+        co_noir_common::zk_masking::gemini_masking_support(n).len() // Gemini mask draws
         + 8 * NUM_MASKED_ROWS as usize // mask_polynomial: w_l/w_r/w_o, read_counts/read_tags/w_4, lookup_inverses/z_perm
         + 1 // ZKSumcheckData constant_term
         + virtual_log_n * C::LIBRA_UNIVARIATES_LENGTH // generate_libra_univariates (all virtual rounds)

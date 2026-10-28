@@ -319,34 +319,60 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.create_big_mul_add_gate(mul_quad, false);
     }
 
-    pub(crate) fn create_big_quad_constraint(
+    /// Pass 1 of the batched big-quad construction (see `build_constraints`):
+    /// resolves this constraint's product operand pairs — (a, b) of every
+    /// intermediate gate — and appends them to the circuit-wide `lhs`/`rhs`
+    /// vectors, in exactly the order the per-constraint `driver.mul_many`
+    /// used to receive them. Returns the number of pairs appended.
+    ///
+    /// The `b`-index IS_CONSTANT replacement is performed here (it used to
+    /// happen while collecting `rhs` for the per-constraint `mul_many`), so
+    /// the caller must pass the SAME mutated constraint to
+    /// [`Self::create_big_quad_constraint_with_products`] afterwards.
+    ///
+    /// Hoisting the operand resolution above all gate building is sound
+    /// because the `a`/`b` indices of every big-quad constraint refer to
+    /// pre-existing witnesses (the ACIR witness map); the only wire produced
+    /// during gate building that feeds back into a big-quad gate is the
+    /// intra-constraint next-`d` chaining handled in pass 2, which never
+    /// appears as an `a`/`b` product operand.
+    pub(crate) fn collect_big_quad_product_operands(
+        &self,
+        big_constraint: &mut BigQuadConstraint<P::ScalarField>,
+        lhs: &mut Vec<T::AcvmType>,
+        rhs: &mut Vec<T::AcvmType>,
+    ) -> usize {
+        let num_products = big_constraint.len() - 1;
+        for gate in big_constraint.iter().take(num_products) {
+            assert_ne!(
+                gate.a,
+                u32::MAX,
+                "mul_quad_ gate cannot have IS_CONSTANT for witness a. An error here probably means a conversion issue in acir_to_constraint_buf."
+            );
+            lhs.push(self.get_variable(gate.a as usize));
+        }
+        for gate in big_constraint.iter_mut().take(num_products) {
+            self.replace_and_check_zero_scaling(&mut gate.b, &gate.b_scaling);
+            rhs.push(self.get_variable(gate.b as usize));
+        }
+        num_products
+    }
+
+    /// Pass 2 of the batched big-quad construction: identical to the old
+    /// per-constraint `create_big_quad_constraint` gate building, except the
+    /// intermediate products arrive precomputed (one circuit-wide
+    /// `driver.mul_many` in `build_constraints` instead of one network round
+    /// per constraint). `big_constraint` must be the same instance that
+    /// passed through [`Self::collect_big_quad_product_operands`] (its `b`
+    /// indices already have IS_CONSTANT replaced), and `products` must be its
+    /// `num_products` results in order.
+    pub(crate) fn create_big_quad_constraint_with_products(
         &mut self,
         driver: &mut T,
         big_constraint: &mut BigQuadConstraint<P::ScalarField>,
-    ) -> eyre::Result<()> {
-        let num_products = big_constraint.len() - 1;
-        let lhs = big_constraint
-            .iter()
-            .take(num_products)
-            .map(|gate| {
-                assert_ne!(
-                    gate.a,
-                    u32::MAX,
-                    "mul_quad_ gate cannot have IS_CONSTANT for witness a. An error here probably means a conversion issue in acir_to_constraint_buf."
-                );
-                self.get_variable(gate.a as usize)
-            })
-            .collect::<Vec<_>>();
-        let rhs = big_constraint
-            .iter_mut()
-            .take(num_products)
-            .map(|gate| {
-                self.replace_and_check_zero_scaling(&mut gate.b, &gate.b_scaling);
-                self.get_variable(gate.b as usize)
-            })
-            .collect::<Vec<_>>();
-        let products = driver.mul_many(&lhs, &rhs)?;
-
+        products: Vec<T::AcvmType>,
+    ) {
+        debug_assert_eq!(products.len(), big_constraint.len() - 1);
         for (j, term1) in products.into_iter().enumerate() {
             // Replace IS_CONSTANT indices with zero indices
             let (c_scaling, d_scaling) = (big_constraint[j].c_scaling, big_constraint[j].d_scaling);
@@ -389,8 +415,6 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             // Create final gate
             self.create_big_mul_add_gate(last, false);
         }
-
-        Ok(())
     }
 
     fn set_zero_idx(&self, mul_quad: &mut MulQuad<P::ScalarField>) {
@@ -1012,13 +1036,21 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.num_gates
     }
 
-    pub(crate) fn get_tables_size(&self) -> usize {
+    /// Total number of rows occupied by the lookup table data of all tables used by
+    /// the circuit.
+    pub fn get_tables_size(&self) -> usize {
         let mut tables_size = 0;
         for table in self.lookup_tables.iter() {
             tables_size += table.len();
         }
 
         tables_size
+    }
+
+    /// Number of distinct plookup tables used by the circuit. Read-only; intended for
+    /// reporting/inspection.
+    pub fn num_lookup_tables(&self) -> usize {
+        self.lookup_tables.len()
     }
 
     fn get_lookups_size(&self) -> usize {
@@ -2186,11 +2218,25 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 shared_indices.push(T::get_shared(&record.index).expect("Shared index checked"));
             }
         }
-        for index in shared_indices {
-            let one_hot = driver.one_hot_vector_from_shared_index(index, len)?;
-            eyre::ensure!(one_hot.len() >= len, "ROM one-hot vector is too short");
-            for (count, bit) in counts.iter_mut().zip(one_hot) {
-                driver.add_assign(count, T::AcvmType::from(bit));
+        let mut remaining = shared_indices.as_slice();
+        while !remaining.is_empty() {
+            let chunk_len = co_acvm::mpc::lookup_read_count_batch_len::<P::ScalarField>(
+                driver.lookup_read_count_batch_size(),
+                std::iter::repeat_n(len, remaining.len()),
+            );
+            let (chunk, rest) = remaining.split_at(chunk_len);
+            remaining = rest;
+            let lens = vec![len; chunk.len()];
+            let one_hots = driver.one_hot_vector_from_shared_index_many(chunk, &lens)?;
+            eyre::ensure!(
+                one_hots.len() == chunk.len(),
+                "ROM one-hot batch length mismatch"
+            );
+            for one_hot in one_hots {
+                eyre::ensure!(one_hot.len() >= len, "ROM one-hot vector is too short");
+                for (count, bit) in counts.iter_mut().zip(one_hot) {
+                    driver.add_assign(count, T::AcvmType::from(bit));
+                }
             }
         }
         for (row, count) in table_rows.into_iter().zip(counts) {
@@ -4336,9 +4382,45 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         // When an expression doesn't fit into a single width-4 gate, we split it across multiple gates and we leverage
         // w4_shift to use the least possible number of intermediate witnesses. See the documentation of
         // split_into_mul_quad_gates for more information.
-        for big_constraint in constraint_system.big_quad_constraints.iter() {
-            self.create_big_quad_constraint(driver, &mut big_constraint.clone())?;
+        //
+        // The intermediate products of ALL big-quad constraints are computed in a
+        // single driver.mul_many (one network round for the whole circuit) instead
+        // of one mul_many per constraint (one round EACH — O(#constraints)
+        // sequential round-trips, the dominant pk-gen latency term over WAN).
+        // Constraints are mutually independent: the only sequential dependency is
+        // the intra-constraint next-w4 chaining, handled per constraint in pass 2.
+        // The concatenated operand order equals the order of the replaced
+        // per-constraint calls, so each REP3 party draws the identical masking
+        // sequence and the resulting shares are bit-identical to the unbatched
+        // protocol (payloads unchanged; the per-constraint frames merge into one).
+        let mut big_constraints = constraint_system.big_quad_constraints.clone();
+        let mut big_quad_lhs = Vec::new();
+        let mut big_quad_rhs = Vec::new();
+        let product_counts = big_constraints
+            .iter_mut()
+            .map(|big_constraint| {
+                self.collect_big_quad_product_operands(
+                    big_constraint,
+                    &mut big_quad_lhs,
+                    &mut big_quad_rhs,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut products = if big_constraints.is_empty() {
+            Vec::new()
+        } else {
+            driver.mul_many(&big_quad_lhs, &big_quad_rhs)?
         }
+        .into_iter();
+        for (big_constraint, num_products) in izip!(big_constraints.iter_mut(), product_counts) {
+            let constraint_products = products.by_ref().take(num_products).collect::<Vec<_>>();
+            self.create_big_quad_constraint_with_products(
+                driver,
+                big_constraint,
+                constraint_products,
+            );
+        }
+        debug_assert!(products.next().is_none());
 
         // Add logic constraint
         for constraint in constraint_system.logic_constraints.iter() {
@@ -4695,9 +4777,8 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         // Grumpkin, so we don't need to assert on curve.
         let input_result = CycleGroupCT::new(input_result_x, input_result_y, false, self, driver)?;
 
-        // Reconstruct points and scalars. ACIR represents each point as an (x, y) pair (point at
-        // infinity encoded as (0, 0), auto-detected inside `to_grumpkin_point`) and each scalar as
-        // a (lo, hi) pair, so both arrays have the same length: 2 elements per point/scalar.
+        // Reconstruct points and scalars
+        // Ensure that the number of points and scalars are consistent (2 field elements per point, 2 per scalar)
         assert!(
             input.points.len() == input.scalars.len(),
             "MultiScalarMul input size mismatch"
@@ -4757,6 +4838,10 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         Ok(())
     }
 
+    // The is_infinite inputs were removed with Noir v1.0.0-beta.22 (the point at infinity is now
+    // encoded as (0, 0)). EcAdd/MSM gate-count parity vs bb (ec_operations.cpp,
+    // multi_scalar_mul.cpp, witness_constant.cpp) was re-verified empirically: EC_ADD 80->76 and
+    // MSM 3559->3557 match bb at the pin, and embedded_curve_add is proof/VK byte-identical.
     fn create_ec_add_constraint(
         &mut self,
         constraint: &EcAdd<P::ScalarField>,
@@ -5311,6 +5396,86 @@ mod rom_logup_tests {
                 }))
                 .is_err(),
                 "invalid ROM case {case} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rom_logup_shared_counts_preserve_chunk_boundaries_and_singletons() {
+        use co_acvm::Rep3AcvmType;
+        use mpc_core::protocols::rep3::{
+            combine_field_elements, conversion::A2BType, share_field_elements,
+        };
+        use mpc_net::local::LocalNetwork;
+        use rand::{SeedableRng, rngs::StdRng};
+        for batch_size in [Some(1), Some(3), None] {
+            let mut rng = StdRng::seed_from_u64(0x726f6d);
+            let values = [
+                Fr::from(2u64),
+                Fr::zero(),
+                Fr::from(2u64),
+                Fr::one(),
+                Fr::zero(),
+            ];
+            let shares = share_field_elements(&values, &mut rng);
+            let workers: Vec<_> = LocalNetwork::new_3_parties()
+                .into_iter()
+                .zip(shares)
+                .map(|(net, shares)| {
+                    std::thread::spawn(move || {
+                        let mut driver =
+                            Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                        driver.set_lookup_read_count_batch_size(batch_size);
+                        let mut b = Rep3CoBuilder::<Bn254G1, _>::init(0, vec![], vec![], false);
+                        for size in [3usize, 1] {
+                            let rom = b.create_rom_array(size);
+                            for i in 0..size {
+                                let value =
+                                    b.add_variable(Rep3AcvmType::Public(Fr::from((10 + i) as u64)));
+                                b.set_rom_element(rom, i, value);
+                            }
+                            let read_shares = if size == 3 {
+                                &shares[..4]
+                            } else {
+                                &shares[4..]
+                            };
+                            for share in read_shares {
+                                let index = b.add_variable(Rep3AcvmType::Shared(*share));
+                                b.read_rom_array(rom, index, &mut driver).unwrap();
+                            }
+                            let public_index =
+                                b.add_variable(Rep3AcvmType::Public(Fr::from((size - 1) as u64)));
+                            b.read_rom_array(rom, public_index, &mut driver).unwrap();
+                        }
+                        b.process_rom_arrays(&mut driver).unwrap();
+                        let mut result = Vec::new();
+                        for rom_id in 0..2 {
+                            for record in b.rom_arrays[rom_id]
+                                .records
+                                .clone()
+                                .into_iter()
+                                .filter(|r| !r.is_read)
+                            {
+                                let index = b.blocks.memory.w_o()[record.gate_index];
+                                let count = b.get_variable(index as usize);
+                                if rom_id == 0 {
+                                    assert!(
+                                        matches!(count, Rep3AcvmType::Shared(_)),
+                                        "private multiplicity became public"
+                                    );
+                                }
+                                result.push(driver.get_as_shared(&count));
+                            }
+                        }
+                        result
+                    })
+                })
+                .collect();
+            let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+            assert_eq!(
+                combine_field_elements(&results[0], &results[1], &results[2]),
+                [1u64, 1, 3, 2].map(Fr::from),
+                "batch size {batch_size:?}"
             );
         }
     }

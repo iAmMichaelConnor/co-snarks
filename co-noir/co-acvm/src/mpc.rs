@@ -16,6 +16,42 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
+/// Maximum default number of shared lookup indices per batch.
+pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
+
+/// Select the next shared-lookup batch from public table lengths.
+///
+/// Bounded batches respect both the requested gate count and a padded-entry
+/// budget. Counting gates alone can combine many large tables into field-vector
+/// frames above the default transport limit. Reserve half that limit for field
+/// entries, leaving room for framing and intermediate protocol data. Read-tag
+/// products, including each participating table's carry, use no more entries
+/// than the new one-hot vectors in the batch.
+///
+/// A table larger than the budget is processed alone, as in the singular path.
+/// `None` preserves the explicitly unbounded mode. All inputs are public and
+/// must agree across parties, since the batch boundaries determine the rounds.
+pub fn lookup_read_count_batch_len<F: PrimeField>(
+    max_gates: Option<usize>,
+    table_lengths: impl Iterator<Item = usize>,
+) -> usize {
+    let Some(max_gates) = max_gates else {
+        return table_lengths.count();
+    };
+    let max_entries = (mpc_net::DEFAULT_MAX_FRAME_LENGTH / 2) / F::ZERO.uncompressed_size();
+    let mut entries = 0usize;
+    let mut count = 0;
+    for len in table_lengths.take(max_gates.max(1)) {
+        let padded = len.next_power_of_two();
+        if count > 0 && padded > max_entries.saturating_sub(entries) {
+            break;
+        }
+        entries = entries.saturating_add(padded);
+        count += 1;
+    }
+    count
+}
+
 /// A trait representing the MPC operations required for extending the secret-shared Noir witness in MPC.
 /// The operations are generic over public and private (i.e., secret-shared) inputs.
 pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
@@ -139,6 +175,56 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         rhs: Self::AcvmType,
     ) -> eyre::Result<Self::AcvmType>;
 
+    /// Whether this driver benefits from level-batched witness extension: the
+    /// solver groups the opcode DAG into independence levels and issues one
+    /// batched network round per level instead of one per opcode. The default
+    /// is `false` (the serial, opcode-at-a-time solve loop), which the plain and
+    /// Shamir drivers keep. REP3 overrides this to `true`.
+    fn use_level_batched_witext(&self) -> bool {
+        false
+    }
+
+    /// Chunk size for the batched lookup read-count construction
+    /// (`construct_lookup_read_counts`): the number of shared-index lookup gates
+    /// whose one-hot vectors are materialised together in one batch.
+    ///
+    /// `None` = all gates in a single batch (fewest communication rounds, but peak
+    /// memory ∝ total lookup work — on a lookup-dense circuit such as sha256 ≥ 2^18
+    /// this materialises hundreds of GB of one-hot vectors and OOMs the host).
+    /// `Some(k)` = process at most `k` gates per chunk, further bounded by padded
+    /// table entries through [`lookup_read_count_batch_len`]. The result (read counts and
+    /// read tags) is byte-identical for every `k` — only the number of reshares, and
+    /// hence the individual share splits, differ (the reconstructed values do not).
+    /// The default is `None`; the REP3 and Shamir drivers override it to a bounded
+    /// value ([`DEFAULT_LOOKUP_READ_COUNT_BATCH`]) so a lookup-dense circuit cannot
+    /// OOM the host (single-prover/plain has no reshares, so batching is irrelevant
+    /// there and it keeps `None`). All parties in one proving session MUST use the
+    /// same value — the chunk count IS the reshare-round count, so a mismatch would
+    /// desync the parties' sends/receives.
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        None
+    }
+
+    /// Batch-solve a set of `c·lhs·rhs` products that the solver has proven are
+    /// mutually independent (no product's operands depend on another's result),
+    /// returning `c·lhs·rhs` for each term in input order.
+    ///
+    /// The default loops [`Self::solve_mul_term`] — the per-opcode path the plain
+    /// and Shamir drivers keep. REP3 overrides this to collect every
+    /// shared×shared product into a single reshare, collapsing one network round
+    /// per solve level. The returned values are identical to the serial loop's;
+    /// only the number of network rounds (and, for REP3, the per-element masking
+    /// draw order) changes.
+    fn solve_mul_terms(
+        &mut self,
+        terms: Vec<(F, Self::AcvmType, Self::AcvmType)>,
+    ) -> eyre::Result<Vec<Self::AcvmType>> {
+        terms
+            .into_iter()
+            .map(|(c, lhs, rhs)| self.solve_mul_term(c, lhs, rhs))
+            .collect()
+    }
+
     /// Solves the equation \[q_l\] * w_l + \[c\] = 0, by computing \[-c\]/\[q_l\] and returning the result.
     fn solve_equation(
         &mut self,
@@ -194,6 +280,25 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         index: Self::ArithmeticShare,
         len: usize,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>>;
+
+    /// Creates shared one-hot-encoded vectors from the given shared indices, where
+    /// `indices[i]` indexes a table of `lens[i]` entries (the two slices zip; each result
+    /// vector has `lens[i].next_power_of_two()` entries, exactly like
+    /// [`Self::one_hot_vector_from_shared_index`]). Implementations that can batch the
+    /// underlying communication across the whole slice should override this; the default
+    /// simply loops the singular method.
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        debug_assert_eq!(indices.len(), lens.len());
+        indices
+            .iter()
+            .zip(lens.iter())
+            .map(|(index, len)| self.one_hot_vector_from_shared_index(index.to_owned(), *len))
+            .collect()
+    }
 
     /// Writes to a shared LUT from a given shared one-hot-encoded vector.
     fn write_to_shared_lut_from_ohv(
@@ -394,6 +499,26 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )>;
+
+    /// Offers the driver the chance to precompute, in one shot, every plookup read the builder's
+    /// sha256 gadget (`co-builder sha_compression.rs::sha256_block`) will request for ONE
+    /// compression call, so the per-read
+    /// [`slice_and_get_sparse_table_with_rotation_values`](Self::slice_and_get_sparse_table_with_rotation_values)
+    /// / [`slice_and_get_sparse_normalization_values`](Self::slice_and_get_sparse_normalization_values)
+    /// calls can be served from a cache instead of each running their own MPC kernel.
+    ///
+    /// Called exactly once at the top of `sha256_block` with the gadget's 24 input VALUES
+    /// (`h_init[0..8]`, `w_in[0..16]`). Purely an optimization hook: the returned values served
+    /// from any cache MUST be identical to what the per-read methods would produce, and drivers
+    /// are free to ignore the hint entirely. The DEFAULT is a no-op (plain and Shamir drivers
+    /// never cache).
+    fn precompute_sha256_block(
+        &mut self,
+        _h_init: &[Self::AcvmType; 8],
+        _w_in: &[Self::AcvmType; 16],
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
 
     /// Slices input1 and input2 into a vector of basis_bits bits each, XORs all values and rotates the results by rotation. Thereby, in total only total_bitsize bits per input are considered.
     #[expect(clippy::type_complexity)]

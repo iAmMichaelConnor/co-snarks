@@ -61,6 +61,7 @@ impl UltraRecursiveVerifier {
 
         // No IPA accumulator on the UltraRecursiveFlavor
 
+        let stage_start = std::time::Instant::now();
         OinkRecursiveVerifier::verify(
             &mut key,
             &mut transcript,
@@ -69,6 +70,8 @@ impl UltraRecursiveVerifier {
             num_public_inputs,
             driver,
         )?;
+        crate::phase_timing("recursion/oink", stage_start);
+        let stage_start = std::time::Instant::now();
 
         // Execute Sumcheck Verifier and extract multivariate opening point u = (u_0, ..., u_{d-1}) and purported
         // multivariate evaluations at u
@@ -147,6 +150,9 @@ impl UltraRecursiveVerifier {
             )?;
         }
 
+        crate::phase_timing("recursion/sumcheck", stage_start);
+        let stage_start = std::time::Instant::now();
+
         // Execute Shplemini to produce a batch opening claim subsequently verified by a univariate PCS
         let mut consistency_checked = true;
         let mut unshifted_commitments = Vec::with_capacity(
@@ -207,6 +213,8 @@ impl UltraRecursiveVerifier {
             driver,
         )?;
 
+        crate::phase_timing("recursion/shplemini", stage_start);
+        let stage_start = std::time::Instant::now();
         let pairing_points = KZG::reduce_verify_batch_opening_claim(
             &mut opening_claim,
             &mut transcript,
@@ -214,10 +222,13 @@ impl UltraRecursiveVerifier {
             driver,
         )?;
 
+        crate::phase_timing("recursion/kzg", stage_start);
+        let stage_start = std::time::Instant::now();
         let mut inputs =
             PairingPoints::reconstruct_from_public(&key.public_inputs, builder, driver)?;
 
         inputs.aggregate::<H>(pairing_points, builder, driver)?;
+        crate::phase_timing("recursion/aggregate", stage_start);
 
         Ok(inputs)
     }

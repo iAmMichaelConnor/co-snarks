@@ -30,7 +30,9 @@ use co_noir_common::{
     mpc::NoirUltraHonkProver,
     polynomials::polynomial::RowDisablingPolynomial,
 };
+use mpc_core::MpcState as _;
 use mpc_net::Network;
+use rayon::prelude::*;
 use ultrahonk::{
     NUM_ALPHAS,
     prelude::{GateSeparatorPolynomial, Univariate},
@@ -257,36 +259,99 @@ impl SumcheckRound {
         polynomials: &AllEntities<Vec<T::ArithmeticShare>, Vec<P::ScalarField>>,
         alphas: &[P::ScalarField; NUM_ALPHAS],
     ) -> HonkProofResult<SumcheckRoundOutput<T, P, SIZE>> {
-        // Barretenberg uses multithreading here
-
-        // Construct extended edge containers
-
-        // we have the round size and then reduce it by power of two steps
-        // what can we mt here?
-        // Accumulate the contribution from each sub-relation across each edge of the hyper-cube
-        // Construct extended edge containers
-
+        // Accumulate the contribution from each sub-relation across each edge of the hyper-cube.
         //
+        // The per-edge work (extending the polynomial pair at each edge to univariates and
+        // batching the relation operands) is pure local data movement for every driver, so it is
+        // farmed out to rayon in contiguous edge chunks.
+        //
+        // What happens to a chunk's batch depends on the driver:
+        //
+        // * Plain driver: every relation kernel is pure local field arithmetic — the network is
+        //   never touched and the state carries no randomness the kernels consume — so each chunk
+        //   also runs the relation accumulation itself, into its own accumulator. The per-chunk
+        //   accumulators are merged by element-wise field addition afterwards. Each edge
+        //   contributes its MAX_PARTIAL_RELATION_LENGTH evaluations to the same accumulator slots
+        //   no matter which chunk it lands in, and field addition is exact, associative and
+        //   commutative, so the merged result is bit-identical to a sequential accumulation
+        //   regardless of chunk count or thread schedule.
+        //
+        // * MPC drivers: the per-chunk batches are concatenated in edge order and handed to the
+        //   relations exactly once, on the caller thread — byte-identical to the batch the
+        //   previous sequential loop built. The operand order seen by mul_many/local_mul_vec
+        //   (and hence MPC scheduling and randomness consumption) is unchanged, and no net/state
+        //   access ever crosses threads.
+        //
+        // The plain driver is the only NoirUltraHonkProver whose share type is the raw scalar
+        // field (REP3/Shamir shares are distinct wrapper types), which is what this runtime
+        // check identifies.
+        let is_plain = std::any::TypeId::of::<T::ArithmeticShare>()
+            == std::any::TypeId::of::<P::ScalarField>();
         let batch_size = MAX_ROUND_SIZE_PER_BATCH;
         let mut start = 0;
         let mut univariate_accumulators = AllRelationAccHalfShared::<T, P>::default();
         while start < self.round_size {
             let end = (start + batch_size).min(self.round_size);
-            let mut all_entities = AllEntitiesBatchRelations::new();
-            for edge_idx in (start..end).step_by(2) {
-                let mut extended_edges = ProverUnivariates::<T, P>::default();
-                Self::extend_edges(&mut extended_edges, polynomials, edge_idx);
-                let scaling_factor =
-                    gate_separators.beta_products[(edge_idx >> 1) * gate_separators.periodicity];
-                all_entities.fold_and_filter(extended_edges, scaling_factor);
+            let edge_indices = (start..end).step_by(2).collect::<Vec<_>>();
+            // A few chunks per thread for load balancing: edges skip relations row-dependently,
+            // so contiguous chunks carry uneven amounts of work.
+            let num_chunks = 4 * rayon::current_num_threads().max(1);
+            let chunk_size = edge_indices.len().div_ceil(num_chunks).max(1);
+
+            let build_chunk_batch = |chunk: &[usize]| {
+                let mut batch = AllEntitiesBatchRelations::<T, P>::new();
+                for &edge_idx in chunk {
+                    let mut extended_edges = ProverUnivariates::<T, P>::default();
+                    Self::extend_edges(&mut extended_edges, polynomials, edge_idx);
+                    let scaling_factor = gate_separators.beta_products
+                        [(edge_idx >> 1) * gate_separators.periodicity];
+                    batch.fold_and_filter(extended_edges, scaling_factor);
+                }
+                batch
+            };
+
+            if is_plain {
+                // Forking the plain state is free and side-effect free (it neither holds nor
+                // advances any RNG the relation kernels use); it only satisfies the per-chunk
+                // `&mut state` signature.
+                let num_actual_chunks = edge_indices.len().div_ceil(chunk_size);
+                let mut chunk_states = Vec::with_capacity(num_actual_chunks);
+                for _ in 0..num_actual_chunks {
+                    chunk_states.push(state.fork(0)?);
+                }
+                let partial_accumulators = edge_indices
+                    .par_chunks(chunk_size)
+                    .zip(chunk_states.into_par_iter())
+                    .map(|(chunk, mut chunk_state)| {
+                        let batch = build_chunk_batch(chunk);
+                        let mut chunk_accumulators = AllRelationAccHalfShared::<T, P>::default();
+                        Self::accumulate_relation_univariates_batch(
+                            net,
+                            &mut chunk_state,
+                            &mut chunk_accumulators,
+                            &batch,
+                            relation_parameters,
+                        )?;
+                        Ok(chunk_accumulators)
+                    })
+                    .collect::<HonkProofResult<Vec<_>>>()?;
+                for chunk_accumulators in partial_accumulators {
+                    univariate_accumulators.merge_from(chunk_accumulators);
+                }
+            } else {
+                let partial_batches = edge_indices
+                    .par_chunks(chunk_size)
+                    .map(build_chunk_batch)
+                    .collect::<Vec<_>>();
+                let all_entities = AllEntitiesBatchRelations::concat(partial_batches);
+                Self::accumulate_relation_univariates_batch(
+                    net,
+                    state,
+                    &mut univariate_accumulators,
+                    &all_entities,
+                    relation_parameters,
+                )?;
             }
-            Self::accumulate_relation_univariates_batch(
-                net,
-                state,
-                &mut univariate_accumulators,
-                &all_entities,
-                relation_parameters,
-            )?;
             start = end;
         }
         let univariate_accumulators = univariate_accumulators.reshare(net, state)?;
