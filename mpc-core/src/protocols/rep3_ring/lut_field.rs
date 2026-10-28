@@ -252,6 +252,90 @@ impl<F: FieldUint> Rep3FieldLookupTable<F> {
         conversion::bit_inject_from_bits_to_field_many::<F, _>(&e, net, state)
     }
 
+    /// Creates shared one-hot-encoded vectors from the given shared indices (`indices[i]`
+    /// indexes a table of `lens[i]` entries), batching ALL communication across the whole
+    /// slice into a constant number of rounds:
+    /// - (i) ONE Direct [`rep3::conversion::a2b_many`] bit-decomposition for every index
+    ///   (the singular path above goes through `a2b_selector`, whose default is one garbled
+    ///   Yao adder circuit PER index — size-linear garbling with nothing to amortise, see
+    ///   the L0a/b measurement);
+    /// - (ii) ONE level-synchronous [`gadgets::ohv::ohv_many`], which collapses the OHV
+    ///   recursion from `Σ_g (k_g − 1)` rounds to `k_max − 1`;
+    /// - (iii) [`conversion::bit_inject_from_bits_to_field_many`] over all indices'
+    ///   concatenated OHV bits, split into frames of at most `INJECT_CHUNK` elements to
+    ///   bound peak per-frame memory at large scale (see the note on the constant).
+    ///
+    /// Values are identical to calling [`Self::ohv_from_index`] per index: both a2b variants
+    /// produce a binary sharing of the same field value, `ohv_many` reproduces the per-index
+    /// doubling algebra verbatim, and bit injection is elementwise (chunking preserves both
+    /// the values and the per-bit draw order because injection is independent per bit).
+    pub fn ohv_from_index_many<N: Network>(
+        indices: &[Rep3PrimeFieldShare<F>],
+        lens: &[usize],
+        net: &N,
+        state: &mut Rep3State,
+    ) -> eyre::Result<Vec<Vec<Rep3PrimeFieldShare<F>>>> {
+        assert_eq!(indices.len(), lens.len());
+        if indices.is_empty() {
+            // No communication at all for an empty batch (callers with only public
+            // indices must not move any comms fence).
+            return Ok(Vec::new());
+        }
+
+        // (i) ONE batched bit-decomposition round-trip set for all indices.
+        let bits_many = rep3::conversion::a2b_many(indices, net, state)?;
+
+        // Extract each index's `k` low bits (LSB first) as bit-shares — local, no comms.
+        // `k <= 32` always holds (larger tables panic, matching the singular path).
+        let mut bits_per_gate: Vec<Vec<Rep3RingShare<Bit>>> = Vec::with_capacity(bits_many.len());
+        for (bits, len) in bits_many.iter().zip(lens.iter()) {
+            let k = len.next_power_of_two().ilog2() as usize;
+            assert!(k <= 32, "Table is too large");
+            let a = u32::cast_from_uint(&bits.a);
+            let b = u32::cast_from_uint(&bits.b);
+            let ring = Rep3RingShare::new(a, b);
+            bits_per_gate.push((0..k).map(|i| ring.get_bit(i)).collect());
+        }
+
+        // (ii) ONE level-synchronous batched OHV recursion across ALL indices.
+        let es = gadgets::ohv::ohv_many(&bits_per_gate, net, state)?;
+
+        let mut chunk_sizes = Vec::with_capacity(es.len());
+        let mut all_bits: Vec<Rep3RingShare<Bit>> = Vec::new();
+        for e in es {
+            chunk_sizes.push(e.len());
+            all_bits.extend(e);
+        }
+
+        // (iii) bit injection over all OHV bits, chunked. At the sha256_2e16 scale the
+        // single frame would be ~3.7 GB; capping at INJECT_CHUNK elements bounds it to
+        // ~0.5 GB/frame (16.78M * 32 B) while leaving every KAT circuit (< ~8M OHV bits)
+        // a single frame — so no small-circuit fence moves. Chunking is value- and
+        // draw-order-preserving: each bit's injection is independent and the chunks are
+        // consumed in order.
+        const INJECT_CHUNK: usize = 1 << 24;
+        let injected: Vec<Rep3PrimeFieldShare<F>> = if all_bits.len() <= INJECT_CHUNK {
+            conversion::bit_inject_from_bits_to_field_many::<F, _>(&all_bits, net, state)?
+        } else {
+            let mut out = Vec::with_capacity(all_bits.len());
+            for chunk in all_bits.chunks(INJECT_CHUNK) {
+                out.extend(conversion::bit_inject_from_bits_to_field_many::<F, _>(
+                    chunk, net, state,
+                )?);
+            }
+            out
+        };
+
+        // Split back per index (each chunk has lens[i].next_power_of_two() entries,
+        // exactly like the singular path's output).
+        let mut res = Vec::with_capacity(chunk_sizes.len());
+        let mut injected = injected.into_iter();
+        for size in chunk_sizes {
+            res.push(injected.by_ref().take(size).collect());
+        }
+        Ok(res)
+    }
+
     /// Writes to a shared lookup table with the index already being transformed into the shared one-hot-encoded vector
     pub fn write_to_shared_lut_from_ohv<N: Network>(
         ohv: &[Rep3PrimeFieldShare<F>],

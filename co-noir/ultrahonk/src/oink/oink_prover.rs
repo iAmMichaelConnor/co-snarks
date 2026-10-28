@@ -93,7 +93,12 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         }
 
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = Polynomial::<C::ScalarField>::random(polynomial_size, &mut self.rng);
+        let support = co_noir_common::zk_masking::gemini_masking_support(polynomial_size);
+        let random_values = Polynomial::<C::ScalarField>::random(support.len(), &mut self.rng);
+        let mut masking_poly = Polynomial::new(vec![C::ScalarField::zero(); polynomial_size]);
+        for (index, value) in support.into_iter().zip(random_values.as_ref()) {
+            masking_poly[index] = *value;
+        }
         let masking_commitment = Utils::commit(masking_poly.as_ref(), &proving_key.crs)?;
         transcript.send_point_to_verifier::<C>(
             "Gemini:masking_poly_comm".to_string(),

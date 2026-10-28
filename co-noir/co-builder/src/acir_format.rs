@@ -414,7 +414,10 @@ impl<F: PrimeField> AcirFormat<F> {
             .collect();
 
         // Map to a pair of: BlockConstraint, and list of opcodes associated with that BlockConstraint
-        // TACEO TODO: THIS IS NOT DETERMINISTIC IN Barrettenberg (use of unordered_map), thus some tests may produce different circuits! We need to make it deterministic though since the MPC parties may produce different circuits and MPC will fail...
+        // NOTE: bb's C++ uses an unordered_map here (iteration order build-dependent); we use a
+        // BTreeMap keyed by the public block_id so all MPC parties derive an identical circuit
+        // regardless of hash-map randomization. Do not revert to HashMap: the resulting gate order
+        // feeds the circuit/VK, and parties with different orders cannot run MPC together.
         let mut block_id_to_block_constraint: BTreeMap<u32, (BlockConstraint<F>, Vec<usize>)> =
             BTreeMap::new();
         for (i, gate) in circuit.opcodes.into_iter().enumerate() {

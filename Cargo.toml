@@ -41,11 +41,11 @@ noirc-artifacts = { version = "1.0.0-rc.3", git = "https://github.com/noir-lang/
 ark-bls12-377 = "0.6"
 ark-bls12-381 = "0.6"
 ark-bn254 = "0.6"
-ark-ec = { version = "0.6", default-features = false }
+ark-ec = { version = "0.6", default-features = false, features = ["std", "parallel"] }
 ark-groth16 = { version = "0.6" }
-ark-ff = { version = "0.6", features = ["asm"] }
+ark-ff = { version = "0.6", features = ["asm", "parallel"] }
 ark-grumpkin = "0.6"
-ark-poly = "0.6"
+ark-poly = { version = "0.6", features = ["parallel"] }
 ark-relations = "0.6"
 ark-serialize = { version = "0.6", features = ["derive", "std"] }
 ark-std = { version = "0.6", features = ["std"] }
@@ -96,3 +96,7 @@ debug = true
 overflow-checks = false
 # [profile.ci-dev.build-override]
 # opt-level = 3
+
+# Keep useful symbols in release profiles for phase and allocation profiling.
+[profile.release]
+debug = 1

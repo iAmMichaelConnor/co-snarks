@@ -3663,6 +3663,541 @@ mod field_share {
         let is_result = rep3::combine_field_elements(&result1, &result2, &result3);
         assert_eq!(is_result, should_result);
     }
+
+    // ------------------------------------------------------------------------------------------
+    // L0e U2 referee: the one-shot sha256 sparse-trace kernel
+    // (mpc_core::...::yao::sha256_sparse_trace) must produce, for identical shared inputs,
+    // (a) arithmetic bit shares that open to EXACTLY the cleartext sparse-trace bits (U1
+    //     referee, `sha256_block_sparse_trace_cleartext`), and
+    // (b) derived per-read `(values, key_a_slices, key_b_slices)` tuples that open to EXACTLY
+    //     the values of the 369 per-read kernels the driver calls today
+    //     (`get_sparse_table_with_rotation_values` / `get_sparse_normalization_values` with the
+    //     driver's parameters from co-builder plookup.rs:1476-1592, plus the driver's public
+    //     base-power post-processing from co-acvm rep3.rs:1750-1793).
+    // The plain read keys are computed independently below (digit linear forms of §2 of the L0e
+    // design) and the final compression state is cross-checked against the sha2 crate, so a
+    // transcription error in the key flow cannot pass silently.
+    // ------------------------------------------------------------------------------------------
+
+    #[derive(Clone, Copy)]
+    enum SparseTraceKey {
+        /// 32-bit key of a rotation-kind read
+        Rotation(u32),
+        /// sparse-form key of a normalization-kind read
+        Normalization(ark_bn254::Fr),
+    }
+
+    /// Mirrors the value flow of the builder gadget `sha256_block` (all-shared case) and returns
+    /// the (table, key) of each of the 369 plookup reads in the gadget's read order. Cross-checks
+    /// the final compression state against the independent sha2 crate.
+    fn sparse_trace_plain_keys(
+        h_init: [u32; 8],
+        w_in: [u32; 16],
+    ) -> Vec<(
+        mpc_core::protocols::rep3::yao::sha256_sparse_trace::Sha256SparseTraceTable,
+        SparseTraceKey,
+    )> {
+        use ark_ff::One;
+        use mpc_core::protocols::rep3::yao::sha256_sparse_trace::Sha256SparseTraceTable::*;
+        type Fr = ark_bn254::Fr;
+
+        // The three normalization maps (co-builder plookup.rs:169-222) and the round constants
+        // (sha_compression.rs:113-124); the sha2 cross-check below referees the transcription.
+        const MAJ_TABLE: [u64; 16] = [0, 0, 1, 1, 1, 1, 2, 2, 0, 0, 1, 1, 1, 1, 2, 2];
+        const CH_TABLE: [u64; 28] = [
+            0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 2, 1, 2, 2, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 2, 1, 2, 2,
+        ];
+        const WIT_TABLE: [u64; 16] = [0, 1, 0, 1, 1, 2, 1, 2, 0, 1, 0, 1, 1, 2, 1, 2];
+        const ROUND_CONSTANTS: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+            0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+            0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+            0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+            0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+            0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+            0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+            0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+            0xc67178f2,
+        ];
+
+        let bit = |x: u32, i: usize| ((x >> (i % 32)) & 1) as u64;
+        let mut keys = Vec::with_capacity(369);
+
+        // init sparse-form reads (sha_compression.rs:132-139)
+        keys.push((MajInput, SparseTraceKey::Rotation(h_init[1])));
+        keys.push((MajInput, SparseTraceKey::Rotation(h_init[2])));
+        keys.push((ChInput, SparseTraceKey::Rotation(h_init[5])));
+        keys.push((ChInput, SparseTraceKey::Rotation(h_init[6])));
+
+        // message schedule (extend_witness) with the lazy conversion order
+        let mut w = [0u32; 64];
+        w[..16].copy_from_slice(&w_in);
+        let mut converted = [false; 64];
+        for i in 16..64 {
+            for j in [i - 15, i - 2] {
+                if !converted[j] {
+                    keys.push((WitnessInput, SparseTraceKey::Rotation(w[j])));
+                    converted[j] = true;
+                }
+            }
+            let (wl, wr) = (w[i - 15], w[i - 2]);
+            let mut key = Fr::zero();
+            let mut weight = Fr::one();
+            let base16 = Fr::from(16u64);
+            let mut value = 0u64;
+            for k in 0..32 {
+                // base-16 digit k of the WitnessOutput key: sigma1 popcount + 4 * sigma0
+                // popcount (shr terms absent past the word boundary)
+                let left =
+                    bit(wl, k + 7) + bit(wl, k + 18) + if k + 3 < 32 { bit(wl, k + 3) } else { 0 };
+                let right = bit(wr, k + 17)
+                    + bit(wr, k + 19)
+                    + if k + 10 < 32 { bit(wr, k + 10) } else { 0 };
+                let digit = right + 4 * left;
+                key += weight * Fr::from(digit);
+                weight *= base16;
+                value += WIT_TABLE[digit as usize] << k;
+            }
+            keys.push((WitnessOutput, SparseTraceKey::Normalization(key)));
+            w[i] = ((value + w[i - 16] as u64 + w[i - 7] as u64) & 0xFFFF_FFFF) as u32;
+        }
+
+        // round loop
+        let [mut a, mut b, mut c, mut d_reg, mut e, mut f, mut g, mut h] = h_init;
+        for (i, k_const) in ROUND_CONSTANTS.iter().enumerate() {
+            // choose: ChInput(e) then ChOutput
+            keys.push((ChInput, SparseTraceKey::Rotation(e)));
+            let base28 = Fr::from(28u64);
+            let mut ch_key = Fr::zero();
+            let mut weight = Fr::one();
+            let mut ch_value = 0u64;
+            for k in 0..32 {
+                let digit = bit(e, k)
+                    + 2 * bit(f, k)
+                    + 3 * bit(g, k)
+                    + 7 * (bit(e, k + 6) + bit(e, k + 11) + bit(e, k + 25));
+                ch_key += weight * Fr::from(digit);
+                weight *= base28;
+                ch_value += CH_TABLE[digit as usize] << k;
+            }
+            keys.push((ChOutput, SparseTraceKey::Normalization(ch_key)));
+
+            // majority: MajInput(a) then MajOutput
+            keys.push((MajInput, SparseTraceKey::Rotation(a)));
+            let base16 = Fr::from(16u64);
+            let mut maj_key = Fr::zero();
+            let mut weight = Fr::one();
+            let mut maj_value = 0u64;
+            for k in 0..32 {
+                let digit = bit(a, k)
+                    + bit(b, k)
+                    + bit(c, k)
+                    + 4 * (bit(a, k + 2) + bit(a, k + 13) + bit(a, k + 22));
+                maj_key += weight * Fr::from(digit);
+                weight *= base16;
+                maj_value += MAJ_TABLE[digit as usize] << k;
+            }
+            keys.push((MajOutput, SparseTraceKey::Normalization(maj_key)));
+
+            // temp1 and the register shift; add_normalize_unsafe reduces mod 2^32
+            let temp1 = ch_value + h as u64 + w[i] as u64 + *k_const as u64;
+            let e_new = ((d_reg as u64 + temp1) & 0xFFFF_FFFF) as u32;
+            let a_new = ((temp1 + maj_value) & 0xFFFF_FFFF) as u32;
+            h = g;
+            g = f;
+            f = e;
+            e = e_new;
+            d_reg = c;
+            c = b;
+            b = a;
+            a = a_new;
+        }
+
+        // final-state cross-check against an independent sha256 implementation
+        let mut state = h_init;
+        let mut block = [0u8; 64];
+        for (i, word) in w_in.iter().enumerate() {
+            block[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        sha2::block_api::compress256(&mut state, &[block]);
+        let ours = [a, b, c, d_reg, e, f, g, h];
+        for i in 0..8 {
+            assert_eq!(
+                ((h_init[i] as u64 + ours[i] as u64) & 0xFFFF_FFFF) as u32,
+                state[i],
+                "plain key flow diverged from sha2 at output word {i}"
+            );
+        }
+
+        assert_eq!(keys.len(), 369);
+        keys
+    }
+
+    /// Runs the REAL per-read kernels the driver calls today (batch-of-1, in read order, on
+    /// freshly shared keys with key_b = 0) and returns each read's opened
+    /// `(values.., key_a_slices, key_b_slices)` tuple vectors after the driver's public
+    /// post-processing: rotation reads -> `[sparse, rotated_sparse, key_a_slices, key_b_slices]`,
+    /// normalization reads -> `[values, key_a_slices, key_b_slices]`.
+    fn sparse_trace_singular_kernel_reads(
+        keys: &[(
+            mpc_core::protocols::rep3::yao::sha256_sparse_trace::Sha256SparseTraceTable,
+            SparseTraceKey,
+        )],
+    ) -> Vec<Vec<Vec<ark_bn254::Fr>>> {
+        use ark_ff::One;
+        use mpc_core::protocols::rep3::yao::sha256_sparse_trace::Sha256SparseTraceTable;
+        type Fr = ark_bn254::Fr;
+
+        let mut rng = thread_rng();
+        let key_vals = keys
+            .iter()
+            .map(|(_, key)| match key {
+                SparseTraceKey::Rotation(v) => Fr::from(*v),
+                SparseTraceKey::Normalization(f) => *f,
+            })
+            .collect_vec();
+        let zero_vals = vec![Fr::zero(); keys.len()];
+        let a_shares = rep3::share_field_elements(&key_vals, &mut rng);
+        let b_shares = rep3::share_field_elements(&zero_vals, &mut rng);
+        let kinds = keys.iter().map(|(kind, _)| *kind).collect_vec();
+
+        let nets = LocalNetwork::new_3_parties();
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+
+        for (net, tx, xs, ys) in izip!(
+            nets.into_iter(),
+            [tx1, tx2, tx3],
+            a_shares.into_iter(),
+            b_shares.into_iter(),
+        ) {
+            let kinds = kinds.clone();
+            std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let mut outputs = Vec::with_capacity(kinds.len());
+                for (kind, x, y) in izip!(kinds, xs, ys) {
+                    let res = if kind.is_rotation() {
+                        yao::get_sparse_table_with_rotation_values(
+                            x,
+                            y,
+                            &net,
+                            &mut state,
+                            &kind.driver_slice_sizes(),
+                            kind.rotations(),
+                            kind.driver_total_bitsize(),
+                        )
+                        .unwrap()
+                    } else {
+                        let table_type = match kind {
+                            Sha256SparseTraceTable::MajOutput => SHA256Table::Majority,
+                            Sha256SparseTraceTable::ChOutput => SHA256Table::Choose,
+                            Sha256SparseTraceTable::WitnessOutput => SHA256Table::WitnessExtension,
+                            _ => unreachable!(),
+                        };
+                        yao::get_sparse_normalization_values(
+                            x,
+                            y,
+                            &net,
+                            &mut state,
+                            &kind.driver_slice_sizes(),
+                            kind.base(),
+                            kind.driver_total_bitsize(),
+                            &table_type,
+                        )
+                        .unwrap()
+                    };
+                    outputs.push(res);
+                }
+                tx.send(outputs)
+            });
+        }
+
+        let result1 = rx1.recv().unwrap();
+        let result2 = rx2.recv().unwrap();
+        let result3 = rx3.recv().unwrap();
+
+        let mut reads = Vec::with_capacity(kinds.len());
+        for (kind, r1, r2, r3) in izip!(kinds, result1, result2, result3) {
+            let opened = rep3::combine_field_elements(&r1, &r2, &r3);
+            let num_slices = kind.num_slices();
+            if kind.is_rotation() {
+                // driver post-processing (co-acvm rep3.rs:1750-1793): first the key slices,
+                // then per slice 32 + 32 bits recombined with the public base powers
+                let key_a = opened[..num_slices].to_vec();
+                let key_b = opened[num_slices..2 * num_slices].to_vec();
+                let base = Fr::from(kind.base());
+                let mut res0 = Vec::with_capacity(num_slices);
+                let mut res1 = Vec::with_capacity(num_slices);
+                for chunk in opened[2 * num_slices..].chunks_exact(64) {
+                    let mut sum0 = Fr::zero();
+                    let mut sum1 = Fr::zero();
+                    let mut weight = Fr::one();
+                    for (b0, b1) in chunk[..32].iter().zip(chunk[32..].iter()) {
+                        sum0 += *b0 * weight;
+                        sum1 += *b1 * weight;
+                        weight *= base;
+                    }
+                    res0.push(sum0);
+                    res1.push(sum1);
+                }
+                assert_eq!(res0.len(), num_slices);
+                reads.push(vec![res0, res1, key_a, key_b]);
+            } else {
+                // driver post-processing (co-acvm rep3.rs:1819-1839): thirds
+                assert_eq!(opened.len(), 3 * num_slices);
+                let key_a = opened[..num_slices].to_vec();
+                let key_b = opened[num_slices..2 * num_slices].to_vec();
+                let values = opened[2 * num_slices..].to_vec();
+                reads.push(vec![values, key_a, key_b]);
+            }
+        }
+        reads
+    }
+
+    /// Runs the U2 one-shot kernel + local recombination on freshly shared inputs; returns the
+    /// opened 42,016 bit values, the opened per-read tuple vectors (same shapes as
+    /// [`sparse_trace_singular_kernel_reads`]), the slowest party's kernel wall time, and a
+    /// per-party comms report (bytes/messages/rounds deltas measured around the kernel call).
+    fn sparse_trace_kernel_run(
+        h_init: [u32; 8],
+        w_in: [u32; 16],
+    ) -> (
+        Vec<ark_bn254::Fr>,
+        Vec<Vec<Vec<ark_bn254::Fr>>>,
+        std::time::Duration,
+        String,
+    ) {
+        use mpc_core::protocols::rep3::yao::sha256_sparse_trace as sst;
+        type Fr = ark_bn254::Fr;
+
+        let mut rng = thread_rng();
+        let mut input_vals = Vec::with_capacity(24);
+        input_vals.extend(h_init.iter().map(|&x| Fr::from(x)));
+        input_vals.extend(w_in.iter().map(|&x| Fr::from(x)));
+        let shares = rep3::share_field_elements(&input_vals, &mut rng);
+
+        let nets = LocalNetwork::new_3_parties();
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+
+        for (net, tx, inputs) in izip!(nets.into_iter(), [tx1, tx2, tx3], shares.into_iter()) {
+            std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let h: [rep3::Rep3PrimeFieldShare<Fr>; 8] = inputs[..8].try_into().unwrap();
+                let w: [rep3::Rep3PrimeFieldShare<Fr>; 16] = inputs[8..].try_into().unwrap();
+
+                let before = net.get_connection_stats();
+                let start = std::time::Instant::now();
+                let bits = sst::sha256_block_sparse_trace_kernel(&h, &w, &net, &mut state).unwrap();
+                let kernel_time = start.elapsed();
+                let after = net.get_connection_stats();
+
+                // local recombination (no comms)
+                let reads = sst::sha256_block_sparse_trace_recombine_reads(&bits);
+                let read_vecs = reads
+                    .into_iter()
+                    .map(|read| match read {
+                        sst::Sha256SparseTraceRead::Rotation {
+                            sparse,
+                            rotated_sparse,
+                            key_a_slices,
+                            key_b_slices,
+                            ..
+                        } => vec![sparse, rotated_sparse, key_a_slices, key_b_slices],
+                        sst::Sha256SparseTraceRead::Normalization {
+                            values,
+                            key_a_slices,
+                            key_b_slices,
+                            ..
+                        } => vec![values, key_a_slices, key_b_slices],
+                    })
+                    .collect_vec();
+
+                let mut comms = String::new();
+                for (peer, (sent_after, recv_after)) in after.iter() {
+                    let (sent_before, recv_before) = before.get(peer).unwrap_or((0, 0));
+                    let (ms_after, mr_after) = after.get_msgs(peer).unwrap_or((0, 0));
+                    let (ms_before, mr_before) = before.get_msgs(peer).unwrap_or((0, 0));
+                    let rounds_after = after.get_rounds(peer).map(|r| r.rounds).unwrap_or(0);
+                    let rounds_before = before.get_rounds(peer).map(|r| r.rounds).unwrap_or(0);
+                    comms += &format!(
+                        "    party {} -> peer {peer}: sent {} B / {} msgs, recv {} B / {} msgs, blocking-recv rounds {}\n",
+                        net.id(),
+                        sent_after - sent_before,
+                        ms_after - ms_before,
+                        recv_after - recv_before,
+                        mr_after - mr_before,
+                        rounds_after - rounds_before,
+                    );
+                }
+
+                tx.send((bits, read_vecs, kernel_time, comms))
+            });
+        }
+
+        let (bits1, reads1, time1, comms1) = rx1.recv().unwrap();
+        let (bits2, reads2, time2, comms2) = rx2.recv().unwrap();
+        let (bits3, reads3, time3, comms3) = rx3.recv().unwrap();
+
+        let opened_bits = rep3::combine_field_elements(&bits1, &bits2, &bits3);
+        let mut opened_reads = Vec::with_capacity(reads1.len());
+        for (r1, r2, r3) in izip!(reads1, reads2, reads3) {
+            let mut vecs = Vec::with_capacity(r1.len());
+            for (v1, v2, v3) in izip!(r1, r2, r3) {
+                vecs.push(rep3::combine_field_elements(&v1, &v2, &v3));
+            }
+            opened_reads.push(vecs);
+        }
+
+        let kernel_time = time1.max(time2).max(time3);
+        let comms = format!("{comms1}{comms2}{comms3}");
+        (opened_bits, opened_reads, kernel_time, comms)
+    }
+
+    /// One full referee case; returns a human-readable timing/comms report.
+    fn sparse_trace_referee_case(
+        case: &str,
+        h_init: [u32; 8],
+        w_in: [u32; 16],
+        red_check: bool,
+    ) -> String {
+        use ark_ff::One;
+        use mpc_core::protocols::rep3::yao::sha256_sparse_trace as sst;
+        type Fr = ark_bn254::Fr;
+
+        // the 369 plain read keys (kinds referee the schedule; sha2 cross-check inside)
+        let keys = sparse_trace_plain_keys(h_init, w_in);
+        let schedule = sst::sha256_block_sparse_trace_read_schedule();
+        assert_eq!(schedule.len(), keys.len(), "[{case}] read count");
+        for (i, ((table_schedule, _), (table_plain, _))) in
+            schedule.iter().zip(keys.iter()).enumerate()
+        {
+            assert_eq!(table_schedule, table_plain, "[{case}] read {i} table kind");
+        }
+
+        // U1 cleartext expectation for the very same input values
+        let mut input_vals = Vec::with_capacity(24);
+        input_vals.extend(h_init.iter().map(|&x| Fr::from(x)));
+        input_vals.extend(w_in.iter().map(|&x| Fr::from(x)));
+        let zeros = vec![Fr::zero(); 24];
+        let (expected_bits, _) =
+            GarbledCircuits::sha256_block_sparse_trace_cleartext::<Fr>(&input_vals, &zeros)
+                .expect("cleartext evaluation works");
+
+        // the U2 kernel (3-party) and the 369 singular kernels (3-party) on the same values
+        let (opened_bits, derived_reads, kernel_time, comms) =
+            sparse_trace_kernel_run(h_init, w_in);
+        let expected_reads = sparse_trace_singular_kernel_reads(&keys);
+
+        // referee (a): every injected bit share opens to the exact cleartext trace bit
+        assert_eq!(opened_bits.len(), expected_bits.len(), "[{case}] bit count");
+        for (i, (opened, expected)) in opened_bits.iter().zip(expected_bits.iter()).enumerate() {
+            assert!(
+                *opened == Fr::zero() || *opened == Fr::one(),
+                "[{case}] output bit {i} is not a bit"
+            );
+            assert_eq!(
+                *opened,
+                Fr::from(*expected),
+                "[{case}] output bit {i} differs from the U1 cleartext trace"
+            );
+        }
+
+        // referee (b): every derived read tuple opens to the singular kernels' values
+        assert_eq!(derived_reads.len(), expected_reads.len());
+        for (i, ((table, _), derived, expected)) in
+            izip!(schedule.iter(), derived_reads.iter(), expected_reads.iter()).enumerate()
+        {
+            assert_eq!(
+                derived.len(),
+                expected.len(),
+                "[{case}] read {i} ({table:?}) tuple arity"
+            );
+            for (v, (derived_vec, expected_vec)) in derived.iter().zip(expected.iter()).enumerate()
+            {
+                assert_eq!(
+                    derived_vec.len(),
+                    expected_vec.len(),
+                    "[{case}] read {i} ({table:?}) tuple element {v} length"
+                );
+                for (s, (derived_val, expected_val)) in
+                    derived_vec.iter().zip(expected_vec.iter()).enumerate()
+                {
+                    assert_eq!(
+                        derived_val, expected_val,
+                        "[{case}] read {i} ({table:?}) tuple element {v} slice {s}: derived \
+                         recombination differs from the singular kernel"
+                    );
+                }
+            }
+        }
+
+        // red validation (weight sensitivity): recombining the first read's first slice with a
+        // FLIPPED base weight (17 instead of 16) must NOT match the singular kernel. Only
+        // meaningful when the slice has set bits, so it is enabled for the all-ones case.
+        if red_check {
+            let first_read_bits = &opened_bits[..32]; // init MajInput read on h_init[1]
+            let mut good = Fr::zero();
+            let mut bad = Fr::zero();
+            let mut good_weight = Fr::one();
+            let mut bad_weight = Fr::one();
+            for bit in first_read_bits.iter().take(11) {
+                good += *bit * good_weight;
+                bad += *bit * bad_weight;
+                good_weight *= Fr::from(16u64);
+                bad_weight *= Fr::from(17u64);
+            }
+            assert_eq!(
+                good, expected_reads[0][0][0],
+                "[{case}] red-validation sanity: correct weights must match"
+            );
+            assert_ne!(
+                bad, expected_reads[0][0][0],
+                "[{case}] red-validation: a flipped recombination weight must be caught"
+            );
+        }
+
+        format!(
+            "[{case}] one-shot sparse-trace kernel: {kernel_time:?} (slowest party) vs 369 \
+             singular kernels; kernel comms deltas:\n{comms}"
+        )
+    }
+
+    /// L0e U2 referee (design §5.4): value-equality of the one-shot sparse-trace kernel against
+    /// the 369 per-read kernels AND bit-exactness against the U1 cleartext trace, for all-zero,
+    /// all-ones, and seeded-random inputs. HEAVY: the singular-kernel side replays today's full
+    /// per-compression GC cost (~2 min per case at loopback, cases run in parallel); run with
+    /// --release.
+    #[test]
+    #[ignore = "L0e referee, ~2 min: run explicitly before landing any L0e unit and at milestone gates"]
+    fn rep3_sha256_block_sparse_trace_kernel_referee() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x10E02u64);
+
+        let mut cases: Vec<(String, [u32; 8], [u32; 16], bool)> = vec![
+            ("all-zero".to_string(), [0; 8], [0; 16], false),
+            ("all-ones".to_string(), [u32::MAX; 8], [u32::MAX; 16], true),
+        ];
+        for i in 0..3 {
+            let h: [u32; 8] = array::from_fn(|_| rng.r#gen());
+            let w: [u32; 16] = array::from_fn(|_| rng.r#gen());
+            cases.push((format!("random-{i}"), h, w, false));
+        }
+
+        let handles = cases
+            .into_iter()
+            .map(|(case, h, w, red)| {
+                std::thread::spawn(move || sparse_trace_referee_case(&case, h, w, red))
+            })
+            .collect_vec();
+        for handle in handles {
+            let report = handle.join().expect("case thread panicked");
+            println!("{report}");
+        }
+    }
 }
 
 mod curve_share {

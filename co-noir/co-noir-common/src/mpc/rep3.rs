@@ -4,8 +4,7 @@ use crate::honk_curve::NUM_LIMB_BITS;
 use crate::honk_proof::TranscriptFieldType;
 use ark_ff::One;
 use ark_ff::PrimeField;
-use ark_ff::{Field, Zero};
-use itertools::izip;
+use ark_ff::Zero;
 use mpc_core::protocols::rep3::Rep3UintShare;
 use mpc_core::protocols::rep3::conversion;
 use mpc_core::uint::{FieldUint, UintBackend};
@@ -20,6 +19,17 @@ use rayon::prelude::*;
 use std::any::TypeId;
 #[derive(Debug)]
 pub struct Rep3UltraHonkDriver;
+
+// Keep the half-share optimization while using the same curve-specific backend
+// as full replicated commitments. HonkCurve hides the short-Weierstrass config.
+fn msm_public_points_half<P: HonkCurve<TranscriptFieldType>>(
+    points: &[P::Affine],
+    scalars: &[Rep3PrimeFieldShare<P::ScalarField>],
+) -> P {
+    debug_assert_eq!(points.len(), scalars.len());
+    let a: Vec<_> = scalars.iter().map(|share| share.a).collect();
+    P::fast_msm(points, &a)
+}
 
 impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for Rep3UltraHonkDriver
 where
@@ -125,7 +135,12 @@ where
         net: &N,
         state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        arithmetic::mul_vec(a, b, net, state)
+        // Parallel local multiply with a single pre-squeezed mask draw, then one
+        // reshare round — the same schedule as `arithmetic::mul_vec` (identical
+        // message counts and opened values), but the local work runs on rayon
+        // (`with_min_len(1024)` keeps small inputs on one thread).
+        let local = arithmetic::local_mul_vec(a, b, state);
+        arithmetic::reshare_vec(local, net)
     }
 
     fn add_with_public(
@@ -221,15 +236,21 @@ where
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
 
         if y.iter().any(|y| y.is_zero()) {
             eyre::bail!("Cannot compute inverse of zero",);
         }
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            *a = r * y.inverse().unwrap();
-        }
+        // The opened y values are public, so we can Montgomery-batch-invert them. Batch
+        // inversion yields exactly the per-element inverses the previous serial loop
+        // computed (we bailed on zeros above), so the resulting shares are identical.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
@@ -242,16 +263,19 @@ where
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
 
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            if y.is_zero() {
-                *a = Self::ArithmeticShare::default();
-            } else {
-                *a = r * y.inverse().unwrap();
-            }
-        }
+        // The opened y values are public, so we can Montgomery-batch-invert them.
+        // `batch_inversion` skips zeros in place (they stay zero), and `r * 0` is the
+        // all-zero share, which is exactly `ArithmeticShare::default()` — so the fold-in
+        // below needs no zero branch and matches the previous serial loop bit-for-bit.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
@@ -263,6 +287,35 @@ where
         let (a, b): (Vec<_>, Vec<_>) = scalars.iter().map(|share| (share.a, share.b)).unzip();
         let (res_a, res_b) = rayon::join(|| P::fast_msm(points, &a), || P::fast_msm(points, &b));
         Rep3PointShare::new(res_a, res_b)
+    }
+
+    // L0d half-share override: MSM only the `a` summand (one Pippenger instead
+    // of two) and open by broadcasting the partial results. Identical opened
+    // point, identical knowledge (each partial sum is learnable from the
+    // opened value and a party's own summands — the same information the
+    // reshare-based open reveals); comms shape changes from one ring reshare
+    // to a 3-way broadcast per open call (fences re-pinned for this).
+    fn commit_and_open<N: Network>(
+        points: &[P::Affine],
+        scalars: &[Self::ArithmeticShare],
+        net: &N,
+        _state: &mut Self::State,
+    ) -> eyre::Result<P> {
+        let half = msm_public_points_half::<P>(points, scalars);
+        pointshare::open_half_point(half, net)
+    }
+
+    fn commit_and_open_many<N: Network>(
+        points: &[P::Affine],
+        scalars: &[&[Self::ArithmeticShare]],
+        net: &N,
+        _state: &mut Self::State,
+    ) -> eyre::Result<Vec<P>> {
+        let halves = scalars
+            .iter()
+            .map(|poly| msm_public_points_half::<P>(&points[..poly.len()], poly))
+            .collect::<Vec<_>>();
+        pointshare::open_half_point_many(&halves, net)
     }
 
     fn point_add(a: &Self::PointShare, b: &Self::PointShare) -> Self::PointShare {
@@ -365,5 +418,99 @@ where
             })
             .collect();
         conversion::b2a_many(&res, net, state)
+    }
+}
+
+#[cfg(test)]
+mod half_commitment_tests {
+    use super::*;
+    use ark_ec::AffineRepr;
+    use ark_ff::UniformRand;
+    use mpc_core::protocols::rep3::share_field_elements;
+    use mpc_net::local::LocalNetwork;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    fn check_half_commitment<P: HonkCurve<TranscriptFieldType>>()
+    where
+        P::ScalarField: FieldUint,
+        P::BaseField: FieldUint<Uint = <P::ScalarField as FieldUint>::Uint>,
+    {
+        let mut rng = StdRng::seed_from_u64(0x48414c46);
+        // Includes the batch-affine backend's large-window path, infinity,
+        // repeated/opposite bases, and zero/one/maximal canonical scalars.
+        let n = 4096;
+        let mut points = P::normalize_batch(&(0..n).map(|_| P::rand(&mut rng)).collect::<Vec<_>>());
+        points[0] = P::Affine::zero();
+        points[1] = P::generator().into_affine();
+        points[2] = points[1];
+        points[3] = (-P::generator()).into_affine();
+        let mut values: Vec<_> = (0..n).map(|_| P::ScalarField::rand(&mut rng)).collect();
+        values[0] = P::ScalarField::zero();
+        values[1] = P::ScalarField::one();
+        values[2] = -P::ScalarField::one();
+        values[3] = P::ScalarField::one();
+        let shares = share_field_elements(&values, &mut rng);
+        let lengths = [0, 1, 2, 31, 32, n];
+        let expected: Vec<_> = lengths
+            .iter()
+            .map(|&len| P::msm_unchecked(&points[..len], &values[..len]))
+            .collect();
+        let workers: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                let points = points.clone();
+                let expected = expected.clone();
+                std::thread::spawn(move || {
+                    let mut state = Rep3State::new(&net, Default::default()).unwrap();
+                    for (&len, expected) in lengths.iter().zip(&expected) {
+                        let point_slice = &points[..len];
+                        let scalar_slice = &shares[..len];
+                        assert_eq!(
+                            msm_public_points_half::<P>(point_slice, scalar_slice),
+                            pointshare::msm_public_points_half::<P>(point_slice, scalar_slice)
+                        );
+                        let full =
+                            <Rep3UltraHonkDriver as NoirUltraHonkProver<P>>::msm_public_points(
+                                point_slice,
+                                scalar_slice,
+                            );
+                        assert_eq!(pointshare::open_point(&full, &net).unwrap(), *expected);
+                        let half_open =
+                            <Rep3UltraHonkDriver as NoirUltraHonkProver<P>>::commit_and_open(
+                                point_slice,
+                                scalar_slice,
+                                &net,
+                                &mut state,
+                            )
+                            .unwrap();
+                        assert_eq!(half_open, *expected);
+                    }
+                    let polynomials: Vec<_> = lengths.iter().map(|&len| &shares[..len]).collect();
+                    let batched =
+                        <Rep3UltraHonkDriver as NoirUltraHonkProver<P>>::commit_and_open_many(
+                            &points,
+                            &polynomials,
+                            &net,
+                            &mut state,
+                        )
+                        .unwrap();
+                    assert_eq!(batched, expected);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn half_commitments_match_replicated_and_plain_bn254() {
+        check_half_commitment::<ark_bn254::G1Projective>();
+    }
+
+    #[test]
+    fn half_commitments_match_replicated_and_plain_grumpkin() {
+        check_half_commitment::<ark_grumpkin::Projective>();
     }
 }

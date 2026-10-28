@@ -168,11 +168,10 @@ impl<F: PrimeField> Blake3Hasher<F> {
         )?;
 
         /*
-         * At this point in the algorithm, a malicious prover could tweak the add_normalise function in `blake_util.hpp` to
-         * create unexpected overflow in the state matrix. At the end of the `compress_pre()` function, there might be
-         * overflows in the elements of the first and third rows of the state matrix. But this wouldn't be a problem because
-         * in the below loop, while reading from the lookup table, we ensure that the overflow is ignored and the result is
-         * constrained to 32 bits.
+         * At this point in the algorithm the add_normalise step can leave unexpected overflow in the state matrix: at the
+         * end of `compress_pre()` the elements of the first and third rows of the state matrix may overflow. That is fine
+         * because the loop below, while reading from the lookup table, ignores the overflow and constrains the result to
+         * 32 bits.
          */
         for i in 0..(BLAKE3_STATE_SIZE >> 1) {
             let lookup = Plookup::get_lookup_accumulators_ct(

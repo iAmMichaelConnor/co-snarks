@@ -123,17 +123,22 @@ impl<
         zk_sumcheck_data: Option<SharedZKSumcheckData<T, P>>,
     ) -> HonkProofResult<()> {
         if self.has_zk == ZeroKnowledge::No {
+            let phase_start = std::time::Instant::now();
             let prover_opening_claim =
                 self.shplemini_prove(transcript, circuit_size, crs, sumcheck_output, None)?;
-
-            co_noir_common::compute_co_opening_proof(
+            crate::phase_timing("pcs/shplemini_batching", phase_start);
+            let phase_start = std::time::Instant::now();
+            let res = co_noir_common::compute_co_opening_proof(
                 self.net,
                 self.state,
                 prover_opening_claim,
                 transcript,
                 crs,
-            )
+            );
+            crate::phase_timing("pcs/opening_proof", phase_start);
+            res
         } else {
+            let phase_start = std::time::Instant::now();
             let small_subgroup_ipa_prover = SharedSmallSubgroupIPAProver::<T, P>::new(
                 self.net,
                 self.state,
@@ -147,7 +152,8 @@ impl<
                 self.zk_blinding,
             )?;
             let witness_polynomials = small_subgroup_ipa_prover.into_witness_polynomials();
-
+            crate::phase_timing("pcs/small_subgroup_ipa", phase_start);
+            let phase_start = std::time::Instant::now();
             let prover_opening_claim = self.shplemini_prove(
                 transcript,
                 circuit_size,
@@ -155,14 +161,17 @@ impl<
                 sumcheck_output,
                 Some(witness_polynomials),
             )?;
-
-            co_noir_common::compute_co_opening_proof(
+            crate::phase_timing("pcs/shplemini_batching", phase_start);
+            let phase_start = std::time::Instant::now();
+            let res = co_noir_common::compute_co_opening_proof(
                 self.net,
                 self.state,
                 prover_opening_claim,
                 transcript,
                 crs,
-            )
+            );
+            crate::phase_timing("pcs/opening_proof", phase_start);
+            res
         }
     }
 
@@ -176,13 +185,14 @@ impl<
         tracing::trace!("Decider prove");
 
         // Run sumcheck subprotocol.
-
+        let phase_start = std::time::Instant::now();
         let (sumcheck_output, zk_sumcheck_data) =
             self.execute_relation_check_rounds(&mut transcript, crs, circuit_size, virtual_log_n)?;
+        crate::phase_timing("sumcheck", phase_start);
 
         // Fiat-Shamir: rho, y, x, z
         // Execute Zeromorph multilinear PCS
-
+        let phase_start = std::time::Instant::now();
         self.execute_pcs_rounds(
             &mut transcript,
             circuit_size,
@@ -190,9 +200,11 @@ impl<
             sumcheck_output,
             zk_sumcheck_data,
         )?;
+        crate::phase_timing("pcs_total", phase_start);
 
+        let phase_start = std::time::Instant::now();
         let proof = transcript.get_proof();
-
+        crate::phase_timing("transcript_get_proof", phase_start);
         Ok(proof)
     }
 }

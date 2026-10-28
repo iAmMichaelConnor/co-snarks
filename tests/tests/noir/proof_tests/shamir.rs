@@ -60,6 +60,7 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
                 witness,
                 &net,
                 &prover_crs,
+                None,
             )
             .unwrap();
             let (proof, public_inputs) = ShamirCoUltraHonk::<_, H>::prove(
@@ -121,6 +122,22 @@ fn poseidon_proof_test_keccak256() {
     const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_kec";
     proof_test::<Keccak256>("poseidon", 3, 1, ZeroKnowledge::No, PROOF_FILE);
     proof_test::<Keccak256>("poseidon", 3, 1, ZeroKnowledge::Yes, PROOF_FILE);
+}
+
+/// Permanent >3-party Shamir regression. The Shamir
+/// randomness accounting (`ultrahonk_num_randomness` in
+/// `co-ultrahonk/src/co_ultra_prover.rs`) is ONLY exercised at >3 parties: the
+/// 3-party path uses on-the-fly correlated randomness (`num_pairs = 0`), so the
+/// 3-party tests above never touch it. This 5-party / threshold-2 case runs the
+/// accounting for real, in both non-ZK and ZK (ZK is where the step-④ rework
+/// added the virtual-round / libra / masking draws). A miscount fails at
+/// runtime (preprocessing under/over-allocates Beaver pairs), so this test
+/// guards that fix from silent regression. Kept small (poseidon) to stay fast.
+#[test]
+fn poseidon_proof_test_poseidon2sponge_5party_threshold2() {
+    const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_pos";
+    proof_test::<Poseidon2Sponge>("poseidon", 5, 2, ZeroKnowledge::No, PROOF_FILE);
+    proof_test::<Poseidon2Sponge>("poseidon", 5, 2, ZeroKnowledge::Yes, PROOF_FILE);
 }
 
 #[test]

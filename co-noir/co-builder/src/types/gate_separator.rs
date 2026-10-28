@@ -70,6 +70,8 @@ impl<P: CurveGroup> GateSeparatorPolynomial<P> {
     ) -> eyre::Result<()> {
         let one = FieldCT::from(P::ScalarField::ONE);
 
+        // Operand order matters for parity: bb computes challenge × (β − 1), putting the
+        // challenge in the mul gate's left wire (gate_separator.hpp).
         let current_univariate_eval = round_challenge
             .multiply(
                 &self.current_element().sub(&one, builder, driver),

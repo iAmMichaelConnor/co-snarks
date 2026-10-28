@@ -123,6 +123,16 @@ impl<F: PrimeField> SHA256<F> {
             0xc67178f2,
         ];
 
+        // Hand the driver all 24 input VALUES so it may precompute this compression call's
+        // plookup reads in one shot (REP3 runs a single sparse-trace GC instead of one small GC
+        // per read; the default impl is a no-op). Cached reads are value-identical to the
+        // per-read driver kernels, so nothing else in this gadget changes.
+        let h_init_values: [T::AcvmType; 8] =
+            array::from_fn(|i| h_init[i].get_value(builder, driver));
+        let input_values: [T::AcvmType; 16] =
+            array::from_fn(|i| input[i].get_value(builder, driver));
+        driver.precompute_sha256_block(&h_init_values, &input_values)?;
+
         // Match bb: these are not otherwise lookup-constrained in this function.
         h_init[3].create_range_constraint(32, builder, driver)?;
         h_init[7].create_range_constraint(32, builder, driver)?;
@@ -553,6 +563,12 @@ fn get_choose_rotation_multipliers<F: PrimeField>() -> [F; 3] {
         column_2_row_3_multiplier,
     ]
 }
+
+// U1 referee tests for the one-shot sha256 sparse-trace garbled circuit (L0e). A child module of
+// this file because it re-verifies the private rotation-multiplier functions below.
+#[cfg(test)]
+#[path = "sha_compression_sparse_trace_tests.rs"]
+mod sha_compression_sparse_trace_tests;
 
 fn get_majority_rotation_multipliers<F: PrimeField>() -> [F; 3] {
     let base: u64 = 16;

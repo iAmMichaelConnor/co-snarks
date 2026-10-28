@@ -9,6 +9,10 @@ homepage.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Deterministic ZK proving for cross-driver tests only.
+test-utils = ["co-noir-common/test-utils"]
+
 [dependencies]
 ark-ec.workspace = true
 ark-ff.workspace = true
@@ -25,6 +29,7 @@ rayon.workspace = true
 co-noir-common = { version = "0.2.0", path = "../co-noir-common" }
 
 [dev-dependencies]
+co-noir-common = { version = "0.2.0", path = "../co-noir-common", features = ["test-utils"] }
 ark-serialize.workspace = true
 bytes.workspace = true
 mpc-net = { version = "0.5.0", path = "../../mpc-net", features = ["local"] }

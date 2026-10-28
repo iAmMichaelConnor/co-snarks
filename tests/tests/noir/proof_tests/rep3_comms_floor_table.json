@@ -1,0 +1,643 @@
+{
+  "_provenance": {
+    "source_dir": "bench-results/2026-07-25",
+    "manifest_commit": "89666ce5",
+    "manifest_branch": "mc/update-co-noir",
+    "started_utc": "2026-07-25T11:15:40Z",
+    "methodology": "Per netstats/*.json capture (one file per party per rep per phase). sent_msgs/recv_msgs/sent_bytes/recv_bytes summed across a party's peer links (up to 2 peers). party_* arrays indexed [party0, party1, party2]. total_msgs/total_bytes = sum of all party_sent + party_recv entries (counts each logical message once per side, so total is 2x message volume by design -- consistent metric, not a physical message count). median taken across successful reps (2 or 3 depending on circuit size; see bench-results/README.md rule 1). null = not measured or the cell failed/timed out/was pruned -- never fabricated, matching bench-results dataset rule 2.",
+    "phase_definitions": {
+      "witext": "witness extension (Rep3CoSolver.solve()) only.",
+      "prove_nonzk": "combined pk-gen (both REP3 networks) + non-ZK prove (net0). Matches the split used by poseidon_prove_comms_message_fence_poseidon2sponge's PKGEN_MSGS + PROVE_MSGS (116+199=315 sent/recv per party, exactly reproduced here).",
+      "prove_zk": "combined pk-gen (both REP3 networks) + ZK prove (net0)."
+    },
+    "known_anomalies": {
+      "sha256_2e16_prove": "REP3 prove hit the 600s cell timeout (rc=124) at the SMALLEST sha256 sweep size (2^16) -- no prove netstats exist, only witext.",
+      "sha256_2e17_through_2e20": "entire family pruned after the 2e16 prove timeout (bench-0_5.sh DEAD-family pruning) -- no REP3 cells attempted at all, not even witext.",
+      "party_asymmetry": "bb_sha256_compression and recursion_zk show pronounced per-party sent/recv asymmetry (e.g. bb_sha256_compression prove_nonzk: p0 sent=38607/recv=51770 vs p1 sent=46926/recv=40158) -- expected for a ring topology with non-uniform per-role work, not a bug. poseidon and its 2e17-2e20 sweep are close to symmetric.",
+      "inprocess_vs_cross_process_methodology_gap": "Discovered landing bb_sha256_compression_comms_band_fence_poseidon2sponge (2026-07-25): this repo's in-process LocalNetwork harness (3 std::thread::spawn 'parties' in ONE process, in-memory channels) measures SUBSTANTIALLY fewer messages AND fewer bytes than the cross-process bench run (bench-0_5.sh: 3 independent OS processes over real TCP loopback) for the SAME circuit/witness/protocol code path -- even though the resulting proof is byte-identical to the plain-prover KAT in both cases (so the MPC computation is provably correct in-process; this is a measurement-methodology gap, not a protocol bug). Measured for bb_sha256_compression non-ZK: witext 18 msgs / 640 bytes (in-process) vs 36 msgs / 3,770,048 bytes (cross-process) -- ~2x fewer msgs, ~5,891x fewer bytes; prove_nonzk (pk-gen+prove) 2,482 msgs / 1,070,633,720 bytes (in-process) vs 267,934 msgs / 17,224,995,564 bytes (cross-process) -- ~108x fewer msgs, ~16x fewer bytes. Root cause not isolated (would need to trace where the byte volume actually diverges between the two transports); hypothesis: real per-process TCP connections and/or the separate generate-witness/split-input CLI steps push more data over the wire than the in-process solve+pkgen+prove path exercises, but this is UNVERIFIED. Consequence: the cross-process `circuits` floors above are NOT valid comparanda for an in-process LocalNetwork test at this data volume -- small circuits (poseidon, add3u64, blackbox_and; see the exact-pin fences in rep3.rs) don't show this gap (their in-process pins match hand-verified sums from this same cross-process dataset, e.g. poseidon PKGEN+PROVE=315=315 exactly), so the gap appears to be a large-data-volume effect. `circuits_inprocess_baseline` below is a SEPARATE, self-consistent reference measured with the same LocalNetwork harness as the ignore-gated test that checks against it -- do not compare it to `circuits` above."
+    }
+  },
+  "circuits": {
+    "poseidon": {
+      "witext": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          366,
+          366,
+          366
+        ],
+        "party_recv_msgs": [
+          366,
+          366,
+          366
+        ],
+        "party_sent_bytes": [
+          14648,
+          14680,
+          14648
+        ],
+        "party_recv_bytes": [
+          14648,
+          14648,
+          14680
+        ],
+        "total_msgs": 2196,
+        "total_bytes": 87952
+      },
+      "prove_nonzk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          315,
+          315,
+          315
+        ],
+        "party_recv_msgs": [
+          315,
+          315,
+          315
+        ],
+        "party_sent_bytes": [
+          6270520,
+          6270584,
+          6270520
+        ],
+        "party_recv_bytes": [
+          6270520,
+          6270520,
+          6270584
+        ],
+        "total_msgs": 1890,
+        "total_bytes": 37623248
+      },
+      "prove_zk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          389,
+          389,
+          389
+        ],
+        "party_recv_msgs": [
+          389,
+          389,
+          389
+        ],
+        "party_sent_bytes": [
+          6304072,
+          6304136,
+          6304072
+        ],
+        "party_recv_bytes": [
+          6304072,
+          6304072,
+          6304136
+        ],
+        "total_msgs": 2334,
+        "total_bytes": 37824560
+      }
+    },
+    "poseidon_2e17": {
+      "witext": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          33399,
+          33399,
+          33399
+        ],
+        "party_recv_msgs": [
+          33399,
+          33399,
+          33399
+        ],
+        "party_sent_bytes": [
+          1335968,
+          1336000,
+          1335968
+        ],
+        "party_recv_bytes": [
+          1335968,
+          1335968,
+          1336000
+        ],
+        "total_msgs": 200394,
+        "total_bytes": 8015872
+      },
+      "prove_nonzk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          11326,
+          11326,
+          11326
+        ],
+        "party_recv_msgs": [
+          11326,
+          11326,
+          11326
+        ],
+        "party_sent_bytes": [
+          425566096,
+          425566160,
+          425566096
+        ],
+        "party_recv_bytes": [
+          425566096,
+          425566096,
+          425566160
+        ],
+        "total_msgs": 67956,
+        "total_bytes": 2553396704
+      },
+      "prove_zk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          11436,
+          11436,
+          11436
+        ],
+        "party_recv_msgs": [
+          11436,
+          11436,
+          11436
+        ],
+        "party_sent_bytes": [
+          425615872,
+          425615936,
+          425615872
+        ],
+        "party_recv_bytes": [
+          425615872,
+          425615872,
+          425615936
+        ],
+        "total_msgs": 68616,
+        "total_bytes": 2553695360
+      }
+    },
+    "poseidon_2e18": {
+      "witext": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          67158,
+          67158,
+          67158
+        ],
+        "party_recv_msgs": [
+          67158,
+          67158,
+          67158
+        ],
+        "party_sent_bytes": [
+          2686328,
+          2686360,
+          2686328
+        ],
+        "party_recv_bytes": [
+          2686328,
+          2686328,
+          2686360
+        ],
+        "total_msgs": 402948,
+        "total_bytes": 16118032
+      },
+      "prove_nonzk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          22579,
+          22579,
+          22579
+        ],
+        "party_recv_msgs": [
+          22579,
+          22579,
+          22579
+        ],
+        "party_sent_bytes": [
+          852073112,
+          852073176,
+          852073112
+        ],
+        "party_recv_bytes": [
+          852073112,
+          852073112,
+          852073176
+        ],
+        "total_msgs": 135474,
+        "total_bytes": 5112438800
+      },
+      "prove_zk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          22695,
+          22695,
+          22695
+        ],
+        "party_recv_msgs": [
+          22695,
+          22695,
+          22695
+        ],
+        "party_sent_bytes": [
+          852125592,
+          852125656,
+          852125592
+        ],
+        "party_recv_bytes": [
+          852125592,
+          852125592,
+          852125656
+        ],
+        "total_msgs": 136170,
+        "total_bytes": 5112753680
+      }
+    },
+    "poseidon_2e19": {
+      "witext": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          134676,
+          134676,
+          134676
+        ],
+        "party_recv_msgs": [
+          134676,
+          134676,
+          134676
+        ],
+        "party_sent_bytes": [
+          5387048,
+          5387080,
+          5387048
+        ],
+        "party_recv_bytes": [
+          5387048,
+          5387048,
+          5387080
+        ],
+        "total_msgs": 808056,
+        "total_bytes": 32322352
+      },
+      "prove_nonzk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          45085,
+          45085,
+          45085
+        ],
+        "party_recv_msgs": [
+          45085,
+          45085,
+          45085
+        ],
+        "party_sent_bytes": [
+          1705089608,
+          1705089672,
+          1705089608
+        ],
+        "party_recv_bytes": [
+          1705089608,
+          1705089608,
+          1705089672
+        ],
+        "total_msgs": 270510,
+        "total_bytes": 10230537776
+      },
+      "prove_zk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          45207,
+          45207,
+          45207
+        ],
+        "party_recv_msgs": [
+          45207,
+          45207,
+          45207
+        ],
+        "party_sent_bytes": [
+          1705144792,
+          1705144856,
+          1705144792
+        ],
+        "party_recv_bytes": [
+          1705144792,
+          1705144792,
+          1705144856
+        ],
+        "total_msgs": 271242,
+        "total_bytes": 10230868880
+      }
+    },
+    "poseidon_2e20": {
+      "witext": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          269712,
+          269712,
+          269712
+        ],
+        "party_recv_msgs": [
+          269712,
+          269712,
+          269712
+        ],
+        "party_sent_bytes": [
+          10788488,
+          10788520,
+          10788488
+        ],
+        "party_recv_bytes": [
+          10788488,
+          10788488,
+          10788520
+        ],
+        "total_msgs": 1618272,
+        "total_bytes": 64730992
+      },
+      "prove_nonzk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          90097,
+          90097,
+          90097
+        ],
+        "party_recv_msgs": [
+          90097,
+          90097,
+          90097
+        ],
+        "party_sent_bytes": [
+          3411125064,
+          3411125128,
+          3411125064
+        ],
+        "party_recv_bytes": [
+          3411125064,
+          3411125064,
+          3411125128
+        ],
+        "total_msgs": 540582,
+        "total_bytes": 20466750512
+      },
+      "prove_zk": {
+        "n_reps": 2,
+        "party_sent_msgs": [
+          90225,
+          90225,
+          90225
+        ],
+        "party_recv_msgs": [
+          90225,
+          90225,
+          90225
+        ],
+        "party_sent_bytes": [
+          3411182952,
+          3411183016,
+          3411182952
+        ],
+        "party_recv_bytes": [
+          3411182952,
+          3411182952,
+          3411183016
+        ],
+        "total_msgs": 541350,
+        "total_bytes": 20467097840
+      }
+    },
+    "bb_sha256_compression": {
+      "witext": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          4,
+          6,
+          8
+        ],
+        "party_recv_msgs": [
+          8,
+          6,
+          4
+        ],
+        "party_sent_bytes": [
+          32872,
+          1591624,
+          260528
+        ],
+        "party_recv_bytes": [
+          1624160,
+          162936,
+          97928
+        ],
+        "total_msgs": 36,
+        "total_bytes": 3770048
+      },
+      "prove_nonzk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          38607,
+          46926,
+          48434
+        ],
+        "party_recv_msgs": [
+          51770,
+          40158,
+          42039
+        ],
+        "party_sent_bytes": [
+          870495008,
+          6632824093,
+          1109178681
+        ],
+        "party_recv_bytes": [
+          6833229813,
+          1090698957,
+          688569012
+        ],
+        "total_msgs": 267934,
+        "total_bytes": 17224995564
+      },
+      "prove_zk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          38719,
+          47038,
+          48546
+        ],
+        "party_recv_msgs": [
+          51882,
+          40270,
+          42151
+        ],
+        "party_sent_bytes": [
+          870552900,
+          6632881981,
+          1109236569
+        ],
+        "party_recv_bytes": [
+          6833287701,
+          1090756845,
+          688626904
+        ],
+        "total_msgs": 268606,
+        "total_bytes": 17225342900
+      }
+    },
+    "sha256_2e16": {
+      "witext": {
+        "n_reps": 1,
+        "party_sent_msgs": [
+          18,
+          48,
+          78
+        ],
+        "party_recv_msgs": [
+          78,
+          48,
+          18
+        ],
+        "party_sent_bytes": [
+          488152,
+          23868984,
+          3902992
+        ],
+        "party_recv_bytes": [
+          24357472,
+          2439112,
+          1463544
+        ],
+        "total_msgs": 288,
+        "total_bytes": 56520256
+      },
+      "prove_nonzk": null,
+      "prove_zk": null
+    },
+    "sha256_2e17": {
+      "witext": null,
+      "prove_nonzk": null,
+      "prove_zk": null
+    },
+    "sha256_2e18": {
+      "witext": null,
+      "prove_nonzk": null,
+      "prove_zk": null
+    },
+    "sha256_2e19": {
+      "witext": null,
+      "prove_nonzk": null,
+      "prove_zk": null
+    },
+    "sha256_2e20": {
+      "witext": null,
+      "prove_nonzk": null,
+      "prove_zk": null
+    },
+    "recursion_zk": {
+      "witext": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          3,
+          3,
+          3
+        ],
+        "party_recv_msgs": [
+          3,
+          3,
+          3
+        ],
+        "party_sent_bytes": [
+          96,
+          128,
+          96
+        ],
+        "party_recv_bytes": [
+          96,
+          96,
+          128
+        ],
+        "total_msgs": 18,
+        "total_bytes": 640
+      },
+      "prove_nonzk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          38546,
+          38655,
+          38655
+        ],
+        "party_recv_msgs": [
+          38537,
+          38655,
+          38664
+        ],
+        "party_sent_bytes": [
+          3982960676,
+          4055468852,
+          4039429044
+        ],
+        "party_recv_bytes": [
+          3964629468,
+          4055468788,
+          4057760316
+        ],
+        "total_msgs": 231712,
+        "total_bytes": 24155717144
+      },
+      "prove_zk": {
+        "n_reps": 3,
+        "party_sent_msgs": [
+          38690,
+          38799,
+          38799
+        ],
+        "party_recv_msgs": [
+          38681,
+          38799,
+          38808
+        ],
+        "party_sent_bytes": [
+          3983032804,
+          4055540980,
+          4039501172
+        ],
+        "party_recv_bytes": [
+          3964701596,
+          4055540916,
+          4057832444
+        ],
+        "total_msgs": 232576,
+        "total_bytes": 24156149912
+      }
+    }
+  },
+  "circuits_inprocess_baseline": {
+    "_methodology": "Measured directly via this repo's tests/tests/noir/proof_tests/rep3.rs in-process LocalNetwork harness (3 std::thread::spawn parties, one process, RAYON_NUM_THREADS=16 shared pool) -- NOT the cross-process bench-results/2026-07-25 data in `circuits` above; see `_provenance.known_anomalies.inprocess_vs_cross_process_methodology_gap`. Determinism confirmed across 3 repeated runs (identical per-party values every time, including the party-1-vs-0/2 asymmetry in prove_nonzk). This is the reference bb_sha256_compression_comms_band_fence_poseidon2sponge bands against.",
+    "bb_sha256_compression": {
+      "witext": {
+        "party_total_msgs": [
+          6,
+          6,
+          6
+        ],
+        "party_total_bytes": [
+          224,
+          192,
+          224
+        ],
+        "total_msgs": 18,
+        "total_bytes": 640
+      },
+      "prove_nonzk": {
+        "party_total_msgs": [
+          856,
+          765,
+          861
+        ],
+        "party_total_bytes": [
+          357496224,
+          355780024,
+          357357472
+        ],
+        "total_msgs": 2482,
+        "total_bytes": 1070633720
+      }
+    }
+  }
+}

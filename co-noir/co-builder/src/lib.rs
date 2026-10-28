@@ -12,6 +12,13 @@ pub mod transcript_ct;
 pub mod types;
 pub(crate) mod ultra_builder;
 
+/// Coarse wall-clock phase timings for proving-key construction, enabled with
+/// `CO_NOIR_PHASE_TIMINGS=1`. Re-exported from `co_noir_common` so the
+/// proving-key phases share one emitter (and one output format) with the
+/// prover-side timings in `co-ultrahonk`: a single run yields both halves of the
+/// pipeline, and the bench can attribute each phase to setup or per-proof work.
+pub use co_noir_common::phase_timing::{phase_timing, phase_timing_secs, phase_timings_enabled};
+
 pub fn get_constraint_system_from_artifact(
     program_artifact: &ProgramArtifact,
 ) -> AcirFormat<ark_bn254::Fr> {

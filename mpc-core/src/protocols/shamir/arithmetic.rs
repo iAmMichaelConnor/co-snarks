@@ -162,13 +162,20 @@ pub fn inv_vec<F: PrimeField, N: Network>(
     let r = (0..a.len())
         .map(|_| state.rand(net))
         .collect::<eyre::Result<Vec<_>>>()?;
-    let y = mul_open_vec(a, &r, net, state)?;
+    let mut y = mul_open_vec(a, &r, net, state)?;
     if y.iter().any(|y| y.is_zero()) {
         eyre::bail!("Cannot compute inverse of zero");
     }
 
-    // we can unwrap as we checked that none of the y is zero
-    Ok(izip!(r, y).map(|(r, y)| r * y.inverse().unwrap()).collect())
+    // The opened y values are public, so we can Montgomery-batch-invert them. Batch
+    // inversion yields exactly the per-element inverses the previous serial loop computed
+    // (we bailed on zeros above), so the resulting shares are identical.
+    ark_ff::batch_inversion(&mut y);
+    Ok(r.par_iter()
+        .zip_eq(y.par_iter())
+        .with_min_len(1024)
+        .map(|(r, y)| *r * *y)
+        .collect())
 }
 
 /// Performs negation of a share

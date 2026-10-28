@@ -3,12 +3,18 @@ use ark_ec::CurveGroup;
 use ark_ff::{Field, One, Zero};
 use mpc_core::MpcState;
 use mpc_net::Network;
+use rayon::prelude::*;
 use std::{
     fmt::Debug,
     ops::{Index, IndexMut},
 };
 
 use crate::mpc::NoirUltraHonkProver;
+
+/// Minimum vector length for which the elementwise polynomial ops below go through rayon.
+/// Below this, the per-task overhead outweighs the win (the hot callers operate on 2^16..2^20
+/// coefficients; e.g. Libra/small-subgroup polynomials of a few hundred stay serial).
+const MIN_PAR_LEN: usize = 1 << 13;
 
 pub struct SharedPolynomial<T: NoirUltraHonkProver<P>, P: CurveGroup> {
     pub coefficients: Vec<T::ArithmeticShare>,
@@ -33,25 +39,55 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
         Self { coefficients }
     }
 
+    // The elementwise ops below (add/sub/add-scaled) are purely local (communication- and
+    // randomness-free) linear share operations for every driver, so large vectors are farmed
+    // out to rayon. Each output element depends only on the input elements at the same index,
+    // so the results are bit-identical to the serial loops regardless of chunking.
+
     pub fn add_assign_slice(&mut self, other: &[T::ArithmeticShare]) {
-        // Barrettenberg uses multithreading here
-        for (des, src) in self.coefficients.iter_mut().zip(other.iter()) {
-            *des = T::add(*des, *src);
+        if self.coefficients.len().min(other.len()) >= MIN_PAR_LEN {
+            self.coefficients
+                .par_iter_mut()
+                .zip(other.par_iter())
+                .for_each(|(des, src)| {
+                    *des = T::add(*des, *src);
+                });
+        } else {
+            for (des, src) in self.coefficients.iter_mut().zip(other.iter()) {
+                *des = T::add(*des, *src);
+            }
         }
     }
 
     pub fn sub_assign_slice(&mut self, other: &[T::ArithmeticShare]) {
-        // Barrettenberg uses multithreading here
-        for (des, src) in self.coefficients.iter_mut().zip(other.iter()) {
-            *des = T::sub(*des, *src);
+        if self.coefficients.len().min(other.len()) >= MIN_PAR_LEN {
+            self.coefficients
+                .par_iter_mut()
+                .zip(other.par_iter())
+                .for_each(|(des, src)| {
+                    *des = T::sub(*des, *src);
+                });
+        } else {
+            for (des, src) in self.coefficients.iter_mut().zip(other.iter()) {
+                *des = T::sub(*des, *src);
+            }
         }
     }
 
     pub fn add_scaled_slice(&mut self, src: &[T::ArithmeticShare], scalar: &P::ScalarField) {
-        // Barrettenberg uses multithreading here
-        for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
-            let tmp = T::mul_with_public(*scalar, *src);
-            *des = T::add(*des, tmp);
+        if self.coefficients.len().min(src.len()) >= MIN_PAR_LEN {
+            self.coefficients
+                .par_iter_mut()
+                .zip(src.par_iter())
+                .for_each(|(des, src)| {
+                    let tmp = T::mul_with_public(*scalar, *src);
+                    *des = T::add(*des, tmp);
+                });
+        } else {
+            for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
+                let tmp = T::mul_with_public(*scalar, *src);
+                *des = T::add(*des, tmp);
+            }
         }
     }
 
@@ -65,10 +101,19 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
         src: &[P::ScalarField],
         scalar: &P::ScalarField,
     ) {
-        // Barrettenberg uses multithreading here
-        for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
-            let tmp = *scalar * src;
-            *des = T::add_with_public(tmp, *des, id);
+        if self.coefficients.len().min(src.len()) >= MIN_PAR_LEN {
+            self.coefficients
+                .par_iter_mut()
+                .zip(src.par_iter())
+                .for_each(|(des, src)| {
+                    let tmp = *scalar * src;
+                    *des = T::add_with_public(tmp, *des, id);
+                });
+        } else {
+            for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
+                let tmp = *scalar * src;
+                *des = T::add_with_public(tmp, *des, id);
+            }
         }
     }
 
@@ -146,8 +191,15 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
     }
 
     pub fn mul_assign(&mut self, rhs: P::ScalarField) {
-        for l in self.coefficients.iter_mut() {
-            *l = T::mul_with_public(rhs, *l);
+        // Elementwise and purely local for every driver (see note above the slice ops).
+        if self.coefficients.len() >= MIN_PAR_LEN {
+            self.coefficients.par_iter_mut().for_each(|l| {
+                *l = T::mul_with_public(rhs, *l);
+            });
+        } else {
+            for l in self.coefficients.iter_mut() {
+                *l = T::mul_with_public(rhs, *l);
+            }
         }
     }
 
