@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Parallel acceptance sweep (ch. 15 §4.9a): the full compare.sh +
+# Parallel acceptance sweep: the full compare.sh +
 # compare_mpc.sh matrix, sharded over disjoint circuit subsets that run
 # CONCURRENTLY. Within a shard, compare.sh (plain) runs before
 # compare_mpc.sh (REP3) because both write the same per-circuit artifact
@@ -7,7 +7,7 @@
 # (per-circuit artifacts + scoped cleanup_circuit; per-shard CONFIG_DIR
 # gives each shard its own REP3 mesh ports).
 #
-# Meticulousness guarantees:
+# Coverage checks:
 #  - circuit lists are extracted from the compare scripts themselves, so a
 #    circuit added upstream is automatically included;
 #  - the shard partition is ASSERTED to cover the full union exactly

@@ -1,68 +1,12 @@
 #!/usr/bin/env bash
-# bb_verify_standing.sh — PLAN 4.4 standing test: co-noir MPC-generated
-# UltraHonk proofs must verify under the REAL bb binary.
+# Verify co-noir MPC proofs with the independent BB oracle.
+# Default: REP3 Poseidon, ZK/non-ZK, co-noir/BB keys, and proof/public-input
+# tamper rejection by both verifiers. --full adds public recursion and SHAMIR.
+# Recursive proof bytes can differ due to masking; acceptance by the external
+# verifier checks protocol agreement without requiring identical proof bytes.
 #
-# WHY: same-verifier self-checks (co-noir proves, co-noir verifies) and
-# byte-KATs (diff our proof against bb's) cannot catch a divergence between
-# co-noir's native Rust verifier and bb's verifier (e.g. F1 in
-# project-docs/26-uh-implementation-bug-findings.md: co-noir's verifier
-# omitted the public-input pairing-point accumulator aggregation bb
-# performs). Feeding our MPC-generated proof to the real bb `verify` binary
-# is the strongest parity oracle we have, and for ZK/recursion proofs (whose
-# bytes are legitimately prover-specific due to random masking, so a byte
-# diff can never apply) it is the ONLY parity guarantee. See PLAN.md 4.4.
-#
-# What exists already: co-noir/co-noir/examples/compare_mpc.sh
-# (run_proof_verification) does a 4-way our/their-proof x our/their-key bb
-# cross-check for poseidon+keccak x ZK/non-ZK — but only inside the slow
-# `--full` acceptance gate (TEST_SLOWER_CIRCUITS path), so a silent drop
-# there is invisible day to day. This script promotes the core of that
-# check (our-proof x {our,bb}-key, the actual bb-verifies-our-MPC-proof
-# property) to a fast, always-runnable, standing test, and adds the
-# negative direction (tampered proof / public input MUST be rejected by
-# both bb and co-noir).
-#
-# Command shapes below are deliberately mirrored from compare_mpc.sh
-# (same co-noir subcommands, same bb --scheme/--oracle_hash/--disable_zk
-# flags) for consistency with the existing acceptance-gate scripts.
-#
-# Tiers:
-#   (default)  FAST — poseidon circuit, REP3 3-party build-and-generate-proof,
-#              non-ZK + ZK, our VK AND a bb-written VK -> bb verify must
-#              PASS (4 checks); plus a byte-flipped-proof and a
-#              tampered-public-input negative, checked against BOTH bb
-#              verify and co-noir verify (4 checks). Target: a couple of
-#              minutes including a cold co-noir build.
-#   --full     FULL — everything FAST does, PLUS: native recursion and
-#              REP3 recursion_zk proofs -> bb verify (+ one
-#              byte-flip tamper negative each, checked against bb AND
-#              co-noir verify), and a Shamir-generated poseidon proof
-#              (REP3-split, then translate-witness REP3->SHAMIR, matching
-#              examples/run_full_poseidon_with_shamir.sh) -> bb verify.
-#              recursion{,_zk} are ~2^20-row circuits (bench-results/
-#              README.md: REP3 prove ~65-85s for recursion_zk ZK-mode at
-#              this size) so FULL is genuinely slow; run to completion.
-#
-# Isolation (never touch shared/committed state):
-#   - Own network mesh on ports 12000-12002 (CONFIG_DIR, overridable), NOT
-#     the default 10000-10002 examples/configs/ uses -- other agents on
-#     this shared box may have that bound. Not the 10100+ range
-#     scripts/acceptance-parallel.sh shards into either.
-#   - Every circuit is copied into a private mktemp workdir before any
-#     artifact-producing command runs; examples/test_vectors/<name>/ is
-#     never written to (only read from), so this can run concurrently with
-#     other agents' compare_mpc.sh / acceptance-parallel.sh without
-#     clobbering their in-flight artifacts.
-#
-# Usage:
-#   ./bb_verify_standing.sh          # FAST tier
-#   ./bb_verify_standing.sh --full   # FAST + FULL additions
-#
-# Env overrides: BARRETENBERG_BINARY (oracle path, default from
-# versions.env), CONFIG_DIR (mesh config dir, default: private 12000-12002
-# copy under the run's temp workdir), RAYON_NUM_THREADS (per-party thread
-# cap), KEEP_WORKDIR=1 (never delete the temp workdir, even on success --
-# for debugging).
+# Runs in a private temporary directory with a separate mesh (ports 12000-12002).
+# Overrides: BARRETENBERG_BINARY, CONFIG_DIR, RAYON_NUM_THREADS, KEEP_WORKDIR=1.
 set -uo pipefail  # no -e: we accumulate pass/fail across many checks
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -402,10 +346,8 @@ if [[ $want_full -eq 1 ]]; then
   # private-recursion tests cover both inner flavors with all inner inputs shared.
   # Their Prover.toml already bakes in a fixed inner HONK proof/vk/vk_hash
   # (std::verify_proof_with_type) -- no separate inner-proving step needed.
-  # Proof bytes here are legitimately prover-specific even without ZK on
-  # the outer proof (random masking offset generator, PLAN item 2.9), so
-  # this is the ONLY parity guarantee for these circuits -- exactly what
-  # PLAN 4.4 is for. ----
+  # Random masking makes proof bytes prover-specific even for non-ZK outer
+  # proofs. Check acceptance with the independent verifier.
   for rname in recursion recursion_zk; do
     RCIRC="$WORKDIR/circuits/$rname"
     copy_circuit "$rname"
