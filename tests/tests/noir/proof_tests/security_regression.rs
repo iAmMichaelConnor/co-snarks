@@ -1,0 +1,974 @@
+//! Security-regression tests.
+//!
+//! Each test pins a hardening fix at the verifier / deserialization boundary.
+//! These are NEGATIVE tests: they assert the verifier REJECTS (cleanly, without
+//! panicking) a malformed input that a previous version of co-noir mishandled.
+//! They exercise the soundness/robustness surface, not the happy path.
+
+use crate::proof_tests::CRS_PATH_G1;
+use crate::proof_tests::CRS_PATH_G2;
+use ark_bn254::Bn254;
+use ark_ff::PrimeField;
+use ark_ff::Zero;
+use co_acvm::PlainAcvmSolver;
+use co_builder::prelude::constraint_system_from_reader;
+use co_builder::prelude::HonkRecursion;
+use co_builder::prelude::UltraCircuitBuilder;
+use co_noir::UltraHonk;
+use co_noir_common::crs::parse::CrsParser;
+use co_noir_common::crs::ProverCrs;
+use co_noir_common::honk_proof::HonkProofError;
+use co_noir_common::honk_proof::TranscriptFieldType;
+use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
+use co_noir_common::transcript::{Poseidon2Sponge, TranscriptHasher};
+use co_noir_common::types::Bn254G1;
+use co_noir_common::types::ZeroKnowledge;
+use noir_types::{HonkProof, SerializeF, U256};
+use num_bigint::BigUint;
+use std::fs::File;
+
+const CIRCUIT_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.json";
+const WITNESS_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.gz";
+
+/// Build a real poseidon2 proof (ZK or non-ZK) plus its verifying key, so each
+/// test can tamper with a genuine artifact rather than a hand-rolled one.
+fn build_artifacts_with(
+    has_zk: ZeroKnowledge,
+) -> (
+    HonkProof<ark_bn254::Fr>,
+    Vec<ark_bn254::Fr>,
+    VerifyingKey<Bn254>,
+) {
+    build_artifacts_for_hasher::<Poseidon2Sponge>(has_zk)
+}
+
+fn build_artifacts_for_hasher<H: TranscriptHasher<TranscriptFieldType>>(
+    has_zk: ZeroKnowledge,
+) -> (
+    HonkProof<H::DataType>,
+    Vec<H::DataType>,
+    VerifyingKey<Bn254>,
+) {
+    let constraint_system =
+        constraint_system_from_reader(File::open(CIRCUIT_FILE).unwrap()).unwrap();
+    let witness = noir_types::witness_from_reader(File::open(WITNESS_FILE).unwrap()).unwrap();
+    let mut driver = PlainAcvmSolver::new();
+
+    let recursion_crs_size = constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>();
+    let recursion_crs = if recursion_crs_size > 0 {
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, recursion_crs_size, has_zk).unwrap()
+    } else {
+        ProverCrs::default()
+    };
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness,
+        HonkRecursion::UltraHonk,
+        &recursion_crs,
+        &mut driver,
+    )
+    .unwrap();
+    let crs_size = builder.compute_dyadic_size();
+    let crs =
+        CrsParser::<Bn254G1>::get_crs::<Bn254>(CRS_PATH_G1, CRS_PATH_G2, crs_size, has_zk).unwrap();
+    let (prover_crs, verifier_crs) = crs.split();
+
+    let (proving_key, verifying_key) = builder
+        .create_keys::<Bn254>(prover_crs.into(), verifier_crs, &mut driver)
+        .unwrap();
+
+    let (proof, public_inputs) =
+        UltraHonk::<_, H>::prove(proving_key, has_zk, &verifying_key.inner_vk).unwrap();
+    (proof, public_inputs, verifying_key)
+}
+
+/// Non-ZK convenience wrapper.
+fn build_artifacts() -> (
+    HonkProof<ark_bn254::Fr>,
+    Vec<ark_bn254::Fr>,
+    VerifyingKey<Bn254>,
+) {
+    build_artifacts_with(ZeroKnowledge::No)
+}
+
+/// Sanity: the untampered artifact verifies. Guards against the negative tests
+/// silently passing because the whole flow is broken.
+#[test]
+fn baseline_valid_proof_accepts() {
+    let (proof, public_inputs, vk) = build_artifacts();
+    let ok = UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No)
+        .unwrap();
+    assert!(ok, "untampered proof must verify");
+}
+
+/// Trailing data. A proof carrying extra field elements past the last
+/// one the verifier reads must be REJECTED. Before the `assert_fully_consumed`
+/// check, co-noir accepted such a proof (bb rejects it) — Phase 0 finding 1.
+#[test]
+fn trailing_proof_data_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts();
+
+    // Append one junk field element after the genuine proof.
+    let mut inner = proof.inner();
+    inner.push(ark_bn254::Fr::zero());
+    let tampered = HonkProof::new(inner);
+
+    let res =
+        UltraHonk::<_, Poseidon2Sponge>::verify(tampered, &public_inputs, &vk, ZeroKnowledge::No);
+    // Must not accept: either a clean Err (proof-not-fully-consumed) or Ok(false).
+    assert!(
+        !matches!(res, Ok(true)),
+        "verifier accepted a proof with trailing data: {res:?}"
+    );
+    assert!(res.is_err(), "trailing data should be a hard parse error");
+}
+
+/// Off-curve point, proof side. Corrupting a coordinate of the KZG `W`
+/// commitment (the final point in the proof) must yield a clean rejection, not
+/// the ark-ec `is_on_curve` panic — Phase 0 finding 2.
+#[test]
+fn offcurve_proof_point_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts();
+
+    // The last transmitted point is KZG:W; perturbing one of its coordinate
+    // limbs moves it off the curve with overwhelming probability.
+    let mut inner = proof.inner();
+    let n = inner.len();
+    inner[n - 1] += ark_bn254::Fr::from(1u64);
+    let tampered = HonkProof::new(inner);
+
+    // A panic here fails the test — which is exactly the regression we guard.
+    let res =
+        UltraHonk::<_, Poseidon2Sponge>::verify(tampered, &public_inputs, &vk, ZeroKnowledge::No);
+    assert!(
+        !matches!(res, Ok(true)),
+        "verifier accepted an off-curve proof point: {res:?}"
+    );
+}
+
+/// Off-curve point, VK side. A verification key whose commitment bytes
+/// decode to an off-curve point must be rejected by `from_buffer` with a clean
+/// error, not a panic — Phase 0 finding 2.
+#[test]
+fn offcurve_vk_commitment_rejected() {
+    let (_proof, _public_inputs, vk) = build_artifacts();
+
+    // Round-trip the VK to its barretenberg byte layout, then corrupt a byte
+    // inside the first precomputed commitment's coordinates. Layout: 3 header
+    // field elements (32 B each) = 96 B, then commitments (128 B each: x0 x1
+    // y0 y1). Offset 100 lands in the first commitment's x-coordinate.
+    let mut buf = vk.inner_vk.to_buffer();
+    buf[100] ^= 0x01;
+
+    let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+    assert!(
+        res.is_err(),
+        "VK parser accepted an off-curve commitment instead of erroring"
+    );
+}
+
+/// Downcast a `catch_unwind` payload to a printable message. Panic payloads
+/// are `Box<dyn Any + Send>`; in practice `panic!`/`assert!`/`unwrap` all
+/// produce either `&'static str` or `String`.
+fn describe_panic_payload(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
+/// `UltraHonk::verify`, but a panic on malformed input is caught and returned
+/// as `Err(message)` instead of aborting the whole sweep with an opaque
+/// unwind. A malformed-input panic is itself a robustness finding (see the
+/// module doc), so callers must not treat `Err` here the same as a clean
+/// rejection: propagate it loudly.
+///
+/// `Ok(accepted)` collapses `Ok(true)` to `true` and both `Ok(false)` and
+/// `Err(_)` to `false` — for the transcript-consumption property below, a
+/// clean verifier error and a clean `false` are equally valid rejections.
+fn verify_catching_panics(
+    proof: HonkProof<ark_bn254::Fr>,
+    public_inputs: &[ark_bn254::Fr],
+    vk: &VerifyingKey<Bn254>,
+    has_zk: ZeroKnowledge,
+) -> Result<bool, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, public_inputs, vk, has_zk)
+    })) {
+        Ok(res) => Ok(matches!(res, Ok(true))),
+        Err(payload) => Err(describe_panic_payload(&payload)),
+    }
+}
+
+/// Transcript-consumption property, shared between the non-ZK (410-field) and
+/// ZK (458-field) proof shapes: for a valid proof of byte-length L, (a) EVERY
+/// truncation is rejected (cleanly, never panicking), (b) extensions carrying
+/// trailing bytes are rejected, and (c) the exact-length proof verifies.
+/// Generalizes `trailing_proof_data_rejected` into a loop over lengths, and
+/// pins the verifier's read-exactly-L transcript discipline as a property
+/// rather than a single case.
+///
+/// This operates at the BYTE level (`HonkProof::to_buffer` / `from_buffer`),
+/// not just the in-memory `Vec<Fr>`, because that is the boundary a real
+/// caller actually feeds (a proof file / wire buffer can be truncated or
+/// extended at any byte, not just at a 32-byte field-element boundary).
+///
+/// Cost note: truncation is swept EXHAUSTIVELY over every byte length
+/// `0..=total_bytes`, rather than the coarser "byte-exact for the last two
+/// field elements, field-boundary-only elsewhere" sampling that would be
+/// needed if this were expensive: a non-32-aligned length fails to
+/// deserialize before ever reaching `verify` (a cheap length
+/// check, no proving-system work), and only the `total_bytes / 32` aligned
+/// lengths pay a `verify` call — the same number of `verify` calls as the
+/// field-level sweep this replaces, plus ~31x that many near-free length
+/// checks. Measured: full sweep (both shapes, truncation + extension) runs in
+/// low single-digit seconds in `--release`. Extension is NOT exhaustive: the
+/// "extra bytes present" check fires only after a complete, successful
+/// verify, so every extension probe pays the full verify cost; we probe
+/// densely at the smallest scale (every extra byte count from 1 up to two
+/// field elements' worth, covering both sub-field-element and
+/// cross-field-element trailing garbage) and sparsely at field-multiple scale
+/// beyond that.
+fn assert_transcript_consumption_property(has_zk: ZeroKnowledge) {
+    let (proof, public_inputs, vk) = build_artifacts_with(has_zk);
+    let buf = proof.to_buffer();
+    let total_bytes = buf.len();
+    let n = total_bytes / 32;
+    assert_eq!(
+        n * 32,
+        total_bytes,
+        "proof byte length must be a whole number of field elements"
+    );
+
+    // (c) Exact length verifies (property baseline). A panic here is fatal to
+    // the whole test, since the tampering checks below are meaningless if the
+    // baseline is broken.
+    let ok = verify_catching_panics(
+        HonkProof::<ark_bn254::Fr>::from_buffer(&buf).expect("untampered proof must deserialize"),
+        &public_inputs,
+        &vk,
+        has_zk,
+    )
+    .unwrap_or_else(|panic_msg| {
+        panic!("verify PANICKED on the untampered exact-length proof ({has_zk:?}): {panic_msg}")
+    });
+    assert!(ok, "exact-length proof must verify ({has_zk:?})");
+
+    // (a) Every truncation, swept byte-by-byte, is rejected or fails to
+    // deserialize — and never panics.
+    let mut panicking_truncations = Vec::new();
+    for len in 0..total_bytes {
+        match HonkProof::<ark_bn254::Fr>::from_buffer(&buf[..len]) {
+            // Non-field-aligned length: clean deserialization failure. Rejected.
+            Err(_) => continue,
+            Ok(parsed) => match verify_catching_panics(parsed, &public_inputs, &vk, has_zk) {
+                Ok(accepted) => assert!(
+                    !accepted,
+                    "verifier ACCEPTED a proof truncated to {len}/{total_bytes} bytes ({has_zk:?})"
+                ),
+                Err(panic_msg) => panicking_truncations.push((len, panic_msg)),
+            },
+        }
+    }
+    assert!(
+        panicking_truncations.is_empty(),
+        "verify PANICKED on {} truncated byte length(s) ({has_zk:?}) — a malformed-input \
+         panic is a robustness regression in its own right, distinct from (and worse than) \
+         a clean rejection: {panicking_truncations:?}",
+        panicking_truncations.len()
+    );
+
+    // (b) Extensions carrying trailing bytes are rejected: dense over the
+    // smallest scale, sparse over field-multiple scale.
+    let dense_extra_bytes = 1..=64usize;
+    let sparse_extra_fields = [2usize, 7, 48, n];
+    let extra_lens = dense_extra_bytes.chain(sparse_extra_fields.iter().map(|f| f * 32));
+    let mut panicking_extensions = Vec::new();
+    for extra in extra_lens {
+        let mut extended = buf.clone();
+        extended.extend(std::iter::repeat_n(0u8, extra));
+        match HonkProof::<ark_bn254::Fr>::from_buffer(&extended) {
+            // Non-field-aligned extension: clean deserialization failure. Rejected.
+            Err(_) => continue,
+            Ok(parsed) => match verify_catching_panics(parsed, &public_inputs, &vk, has_zk) {
+                Ok(accepted) => assert!(
+                    !accepted,
+                    "verifier ACCEPTED a proof extended by {extra} trailing byte(s) ({has_zk:?})"
+                ),
+                Err(panic_msg) => panicking_extensions.push((extra, panic_msg)),
+            },
+        }
+    }
+    assert!(
+        panicking_extensions.is_empty(),
+        "verify PANICKED on {} extended byte length(s) ({has_zk:?}): {panicking_extensions:?}",
+        panicking_extensions.len()
+    );
+}
+
+/// Transcript-consumption property on the non-ZK (410-field) proof shape. See
+/// `assert_transcript_consumption_property` for the full property and cost
+/// notes.
+#[test]
+fn proof_length_property_exact_length_only() {
+    assert_transcript_consumption_property(ZeroKnowledge::No);
+}
+
+/// Transcript-consumption property on the ZK (458-field) proof shape — same
+/// property, applied to the SmallSubgroupIPA/Libra-carrying ZK proof body so
+/// the sweep isn't blind to that region's transcript discipline.
+#[test]
+fn proof_length_property_exact_length_only_zk() {
+    assert_transcript_consumption_property(ZeroKnowledge::Yes);
+}
+
+/// Zero / out-of-range `log_circuit_size` in a VK must be rejected cleanly by
+/// both loaders. A `log_circuit_size = 0` VK drives the verifier's round count
+/// to 0; before this hardening the field-encoded (`from_buffer`) path PANICKED
+/// (`to_u64_digits()[0]` on zero indexes an empty vec) and the keccak path
+/// silently accepted it. Mirrors bb `1391c49546`.
+#[test]
+fn zero_log_circuit_size_vk_rejected() {
+    let (_proof, _public_inputs, vk) = build_artifacts();
+
+    // Field-encoded layout: log_circuit_size is the first header field element.
+    // Zeroing its 32-byte big-endian slot sets log_circuit_size = 0.
+    let mut buf = vk.inner_vk.to_buffer();
+    for b in buf.iter_mut().take(32) {
+        *b = 0;
+    }
+    let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+    assert!(
+        matches!(res, Err(HonkProofError::CorruptedKey)),
+        "from_buffer accepted (or panicked on) a log_circuit_size=0 VK: {res:?}"
+    );
+
+    // Keccak (U256) layout: same first-32-bytes header slot.
+    let mut buf_k = vk.inner_vk.to_buffer_keccak();
+    for b in buf_k.iter_mut().take(32) {
+        *b = 0;
+    }
+    let res_k = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&buf_k);
+    assert!(
+        matches!(res_k, Err(HonkProofError::CorruptedKey)),
+        "from_buffer_keccak accepted a log_circuit_size=0 VK: {res_k:?}"
+    );
+}
+
+/// Sanity: a genuine ZK proof verifies. Guards the ZK negative tests below.
+#[test]
+fn baseline_zk_proof_accepts() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let ok =
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::Yes)
+            .unwrap();
+    assert!(ok, "untampered ZK proof must verify");
+}
+
+/// ZK-path tamper coverage. Flipping any single field element in the decider
+/// portion of a ZK proof (which includes the SmallSubgroupIPA / Libra region
+/// carrying the grand-sum evaluations) must NOT verify. This is a general
+/// binding check on the ZK proof body — it confirms every field of the
+/// decider/SSIPA region is actually consumed and constrained by the verifier,
+/// not silently ignored.
+///
+/// NOTE: this general binding check is complemented by
+/// `zk_proof_ssipa_evaluation_tamper_rejected` below, which pins the four
+/// transmitted SmallSubgroupIPA evaluation fields specifically (this test's
+/// fractional probe positions do not land on the SSIPA eval region). See that
+/// test for the SSIPA-specific enforcement discussion and the mutation matrix.
+#[test]
+fn zk_proof_decider_field_tamper_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let n = proof.inner_as_ref().len();
+
+    // Probe several positions across the decider/SSIPA region (second half of
+    // the proof) rather than a single fixed index, so the test does not depend
+    // on the exact ZK proof layout. Each tampered copy must fail to verify.
+    for frac in [55usize, 70, 85, 95] {
+        let pos = n * frac / 100;
+        let mut inner = proof.inner_as_ref().clone();
+        inner[pos] += ark_bn254::Fr::from(1u64);
+        let tampered = HonkProof::new(inner);
+
+        let res = UltraHonk::<_, Poseidon2Sponge>::verify(
+            tampered,
+            &public_inputs,
+            &vk,
+            ZeroKnowledge::Yes,
+        );
+        assert!(
+            !matches!(res, Ok(true)),
+            "ZK verifier accepted a proof with field {pos}/{n} tampered: {res:?}"
+        );
+    }
+}
+
+/// SmallSubgroupIPA (Libra) evaluation binding — the deferred §3a #8 negative.
+///
+/// The ZK prover emits four transmitted SmallSubgroupIPA evaluations in the
+/// proof, in this transcript order at the tail of the decider proof:
+///   G(r)  = "Libra:concatenation_eval"
+///   A(g*r)= "Libra:shifted_grand_sum_eval"
+///   A(r)  = "Libra:grand_sum_eval"
+///   Q(r)  = "Libra:quotient_eval"
+/// Together with the untransmitted, hard-coded boundary opening A(1) = 0 these
+/// form the five SmallSubgroupIPA opening claims (NUM_SMALL_IPA_OPENING_CLAIMS)
+/// batched through Shplonk/Shplemini. They occupy the four field elements just
+/// before the two trailing commitments (Shplonk:Q = 4 frs, then KZG:W = 4 frs),
+/// i.e. inner indices n-12 ..= n-9. This test tampers each one in turn and
+/// asserts the ZK verifier rejects cleanly (Ok(false) or a clean Err), never a
+/// panic.
+///
+/// What the verifier actually enforces here (empirically established while
+/// writing this test, via a temporary two-point mutation of the verifier — the
+/// verifier is unchanged in the committed tree):
+///
+///   * the final ZK verdict is `sumcheck.verified && pcs_verified &&
+///     consistency_checked` — a three-way AND;
+///   * each of the four evaluations is bound *twice, independently*: once by
+///     the Shplemini/KZG batched opening (they feed the Shplonk constant-term
+///     accumulator, so any change breaks the KZG pairing → `pcs_verified`
+///     false), and once by `check_evaluations_consistency` (they must satisfy
+///     the SmallSubgroupIPA identity at the Gemini challenge r → the returned
+///     `consistency_checked` false).
+///
+/// Mutation matrix observed for each of the four fields (tamper = +1):
+///   honest verifier                       -> Ok(false)   (rejected)
+///   check_evaluations_consistency := true  -> Ok(false)   (KZG still catches it)
+///   pairing_check := true                  -> Ok(false)   (consistency catches it)
+///   BOTH neutralized                       -> Ok(true)    (accepted — RED)
+///
+/// So this is defense-in-depth: it is *stronger* than bb's own note that the
+/// standalone SmallSubgroupIPA `check_consistency` accepts the homogeneous
+/// kernel perturbation (delta_A(1)=delta, delta_A(g^j)=-delta/(g-1), delta_s=c).
+/// That perturbation is a prover-side forgery: it rebuilds the [A]/[Q]
+/// commitments and re-derives the whole Fiat-Shamir transcript so the identity
+/// holds at r while A(1) != 0, leaving only the KZG boundary opening to reject
+/// it. It cannot be reproduced by byte-tampering a finished proof, because the
+/// transmitted evaluations are absorbed into the transcript *before* the Shplonk
+/// challenges nu/z are drawn, so any byte edit desynchronizes every downstream
+/// challenge. Reproducing it in-process would require the SmallSubgroupIPA
+/// prover internals (they are `pub(crate)`), i.e. a production-code change,
+/// which this test intentionally avoids. The byte-level negative here still
+/// pins the property the deferral cared about: the verifier does not silently
+/// accept altered SmallSubgroupIPA evaluations — the A(1)=0 / identity binding
+/// is enforced on the verifier side.
+#[test]
+fn zk_proof_ssipa_evaluation_tamper_rejected() {
+    let (proof, public_inputs, vk) = build_artifacts_with(ZeroKnowledge::Yes);
+    let n = proof.inner_as_ref().len();
+
+    // Layout at the tail of the ZK decider proof: [.. , 4 SSIPA evals, Shplonk:Q
+    // (4 frs), KZG:W (4 frs)]. Locate the SSIPA evals relative to the end so the
+    // test does not depend on the (public-input-dependent) absolute offset.
+    const TRAILING_COMMITMENT_FRS: usize = 8; // Shplonk:Q (4) + KZG:W (4)
+    let ssipa_eval_indices = [
+        n - TRAILING_COMMITMENT_FRS - 4, // Libra:concatenation_eval   G(r)
+        n - TRAILING_COMMITMENT_FRS - 3, // Libra:shifted_grand_sum_eval A(g*r)
+        n - TRAILING_COMMITMENT_FRS - 2, // Libra:grand_sum_eval        A(r)
+        n - TRAILING_COMMITMENT_FRS - 1, // Libra:quotient_eval         Q(r)
+    ];
+    let labels = [
+        "Libra:concatenation_eval G(r)",
+        "Libra:shifted_grand_sum_eval A(g*r)",
+        "Libra:grand_sum_eval A(r)",
+        "Libra:quotient_eval Q(r)",
+    ];
+
+    for (pos, label) in ssipa_eval_indices.into_iter().zip(labels) {
+        let mut inner = proof.inner_as_ref().clone();
+        inner[pos] += ark_bn254::Fr::from(1u64);
+        let tampered = HonkProof::new(inner);
+
+        // Must reject and must not panic. A malformed-input panic would itself
+        // be a robustness regression (see the module doc and
+        // `verify_catching_panics`).
+        let accepted = verify_catching_panics(tampered, &public_inputs, &vk, ZeroKnowledge::Yes)
+            .unwrap_or_else(|panic_msg| {
+                panic!(
+                    "ZK verify PANICKED on tampered SSIPA field {label} (idx {pos}/{n}): \
+                     {panic_msg}"
+                )
+            });
+        assert!(
+            !accepted,
+            "ZK verifier ACCEPTED a proof with SSIPA field {label} (idx {pos}/{n}) tampered"
+        );
+    }
+}
+
+/// Read a 32-byte big-endian field-element slot as a `BigUint`.
+fn read_be_u256(buf: &[u8], offset: usize) -> BigUint {
+    BigUint::from_bytes_be(&buf[offset..offset + 32])
+}
+
+/// Write a `BigUint` (< 2^256) into a 32-byte big-endian field-element slot.
+fn write_be_u256(buf: &mut [u8], offset: usize, value: &BigUint) {
+    let bytes = value.to_bytes_be();
+    assert!(bytes.len() <= 32, "value does not fit in 32 bytes");
+    let dst = &mut buf[offset..offset + 32];
+    dst.fill(0);
+    dst[32 - bytes.len()..].copy_from_slice(&bytes);
+}
+
+/// Non-canonical base-field limb encoding, VK side (backlog §6 R1).
+///
+/// A base-field (Fq) coordinate of a G1 commitment is transmitted as two
+/// `bb::fr` limbs: `res0` (low 2*68 = 136 bits) and `res1` (upper 254-136 = 118
+/// bits), recombined as `value = res0 + res1 * 2^136` and then mapped into Fq
+/// (which reduces mod the Fq modulus q). bb asserts `res0 < 2^136`,
+/// `res1 < 2^118`, and `value < q` in EVERY build (`field_conversion.hpp`).
+/// co-noir's recombination (`bn254_fq_to_fr_rev`) only `debug_assert!`d the two
+/// limb bounds — compiled OUT in release, which is exactly how the KAT/oracle
+/// suites run — and never checked `value < q` (the final `Fq::from` silently
+/// reduces). So a release-build verifier would ACCEPT a non-canonical encoding
+/// that recombines to a genuine on-curve point but that bb REJECTS: no forgery
+/// (the point is still on-curve), but a verifier-set divergence and a loss of
+/// encoding uniqueness.
+///
+/// This is a NEGATIVE test at the VK `from_buffer` boundary, which — unlike a
+/// proof transcript point — is NOT Fiat-Shamir bound, so rewriting a
+/// commitment's limbs in place does not desynchronize any downstream challenge
+/// and the accept/reject verdict isolates exactly this check. Two encodings are
+/// exercised, each recombining to the SAME on-curve commitment the honest VK
+/// carries:
+///
+///   (a) limb out of range, IDENTICAL recombined value: `res0' = res0 + 2^136`,
+///       `res1' = res1 - 1` leaves `res0' + res1'*2^136` bit-for-bit unchanged
+///       but pushes `res0'` past its 2^136 bound (the check the release build
+///       dropped);
+///   (b) value >= modulus, CONGRUENT recombined value: add q to the recombined
+///       value (`value' = value + q ≡ value (mod q)`), which reduces to the
+///       identical Fq coordinate but makes `value' >= q` (the alias check that
+///       never existed).
+///
+/// Both must be rejected cleanly with `NonCanonicalFieldEncoding`. Before the
+/// fix, `from_buffer` accepted both (they recombine/reduce to the honest,
+/// on-curve commitment, so the on-curve guard passes).
+#[test]
+fn noncanonical_vk_coordinate_limbs_rejected() {
+    let (_proof, _public_inputs, vk) = build_artifacts();
+
+    // Field-encoded VK layout: 3 header field elements (32 B each) = 96 B, then
+    // 128 B per precomputed commitment as [x0, x1, y0, y1]. Target the first
+    // commitment's x coordinate: x0 (low limb) at 96, x1 (high limb) at 128.
+    const X0_OFF: usize = 96;
+    const X1_OFF: usize = 128;
+    let two_pow_136: BigUint = BigUint::from(1u8) << 136u32;
+    let q: BigUint = BigUint::from(ark_bn254::Fq::MODULUS);
+
+    let base = vk.inner_vk.to_buffer();
+    let res0 = read_be_u256(&base, X0_OFF);
+    let res1 = read_be_u256(&base, X1_OFF);
+    let value = &res0 + (&res1 << 136u32);
+
+    // Preconditions on the honest encoding: canonical, and high limb non-zero so
+    // construction (a) can borrow from it. A real ~254-bit commitment coordinate
+    // satisfies both; assert so a future layout change surfaces here.
+    assert!(res0 < two_pow_136, "honest x0 must be a canonical low limb");
+    assert!(
+        res1 >= BigUint::from(1u8),
+        "honest x1 (high limb) must be non-zero for this construction"
+    );
+    assert!(
+        value < q,
+        "honest recombined coordinate must be canonical (< q)"
+    );
+
+    // (a) IDENTICAL recombined value, low limb pushed out of range.
+    let a_res0 = &res0 + &two_pow_136;
+    let a_res1 = &res1 - BigUint::from(1u8);
+    debug_assert_eq!(
+        &a_res0 + (&a_res1 << 136u32),
+        value,
+        "construction (a) must leave the recombined value unchanged"
+    );
+
+    // (b) CONGRUENT recombined value (== value + q), so it reduces to the same
+    // Fq coordinate but is >= q. Re-split into limbs.
+    let b_value = &value + &q;
+    let b_res0 = &b_value & (&two_pow_136 - BigUint::from(1u8));
+    let b_res1 = &b_value >> 136u32;
+    debug_assert_eq!(
+        ark_bn254::Fq::from(b_value.clone()),
+        ark_bn254::Fq::from(value.clone()),
+        "construction (b) must reduce to the same Fq coordinate"
+    );
+
+    for (label, new_x0, new_x1) in [
+        ("(a) low limb >= 2^136, identical value", &a_res0, &a_res1),
+        ("(b) recombined value >= q", &b_res0, &b_res1),
+    ] {
+        let mut buf = base.clone();
+        write_be_u256(&mut buf, X0_OFF, new_x0);
+        write_be_u256(&mut buf, X1_OFF, new_x1);
+
+        let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+        assert!(
+            matches!(res, Err(HonkProofError::NonCanonicalFieldEncoding)),
+            "from_buffer accepted a non-canonical VK coordinate encoding {label}: {res:?}"
+        );
+    }
+}
+
+/// F1 — the native verifier must aggregate the public-input pairing-point
+/// accumulator into the PCS pairing points before the final pairing check
+/// (mirroring bb's `UltraVerifier::verify_proof`), not check the PCS points
+/// alone. A recursive circuit can carry a MALICIOUS accumulator in its public
+/// inputs: the in-circuit recursive verifier is complete-but-not-sound and
+/// emits whatever accumulator results from the (arbitrary) inner-proof bytes,
+/// deferring soundness to this final pairing check. Pre-fix, `verify()` checked
+/// only the PCS points, so it accepted such a proof; bb rejects it at the
+/// pairing check.
+///
+/// Fixtures are committed under
+/// `test_vectors/noir/recursion_malicious_accumulator/` (honest + malicious
+/// outer proofs over the `recursion` circuit, both honestly generated by the
+/// plain prover — the malicious one over a tampered inner proof). See that
+/// dir's README.md for exact regeneration + bb-referee commands. Both were
+/// refereed with the bb oracle: bb ACCEPTS honest, REJECTS malicious.
+mod f1_pairing_point_accumulator {
+    use super::*;
+
+    const FIX: &str = "../test_vectors/noir/recursion_malicious_accumulator";
+
+    fn load_vk() -> VerifyingKey<Bn254> {
+        let bb_vk = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(
+            &std::fs::read(format!("{FIX}/vk")).unwrap(),
+        )
+        .unwrap();
+        let g2 = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+        VerifyingKey::from_barretenberg_and_crs(bb_vk, g2)
+    }
+
+    fn load_case(name: &str) -> (HonkProof<ark_bn254::Fr>, Vec<ark_bn254::Fr>) {
+        let proof = <HonkProof<ark_bn254::Fr>>::from_buffer(
+            &std::fs::read(format!("{FIX}/{name}_proof")).unwrap(),
+        )
+        .unwrap();
+        let public_inputs = SerializeF::from_buffer(
+            &std::fs::read(format!("{FIX}/{name}_public_inputs")).unwrap(),
+            false,
+        )
+        .unwrap();
+        (proof, public_inputs)
+    }
+
+    /// The honestly-generated recursive proof must still verify: the fix must not
+    /// regress a legitimate carried accumulator.
+    #[test]
+    fn honest_recursive_accumulator_accepts() {
+        let vk = load_vk();
+        let (proof, public_inputs) = load_case("honest");
+        let ok =
+            UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No)
+                .unwrap();
+        assert!(ok, "honest recursive proof must verify");
+    }
+
+    /// The malicious-accumulator proof must be REJECTED. This is the F1 soundness
+    /// gap: pre-fix `verify()` returned Ok(true) here; bb rejects it.
+    #[test]
+    fn malicious_recursive_accumulator_rejected() {
+        let vk = load_vk();
+        let (proof, public_inputs) = load_case("malicious");
+        let res =
+            UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No);
+        assert!(
+            !matches!(res, Ok(true)),
+            "verifier accepted a proof with a malicious pairing-point accumulator: {res:?}"
+        );
+    }
+}
+
+/// F2 — the Keccak (U256) proof/public-input loader must reject a buffer
+/// whose length is not an exact multiple of 32 bytes cleanly, not panic.
+///
+/// Before the fix, `buf.chunks(32)` handed a short final chunk straight into
+/// `chunk.try_into().expect("Chunk should be 32 bytes")`, which panics on ANY
+/// non-32-aligned length — not just a maliciously crafted one; a plain
+/// off-by-one truncation of a Keccak proof/public-input file hits it too. The
+/// Poseidon2 twin (`SerializeF::from_buffer`) already validated the length up
+/// front and returned a clean `Err`; only the U256/Keccak path panicked.
+#[test]
+fn f2_keccak_short_final_chunk_rejected() {
+    let (proof, _public_inputs, _vk) = build_artifacts();
+
+    // A real proof buffer is a whole number of 32-byte field elements;
+    // dropping the last byte leaves a short, non-32-aligned final chunk.
+    let buf = proof.to_buffer();
+    assert_eq!(buf.len() % 32, 0, "proof buffer must start 32-byte aligned");
+    let truncated = &buf[..buf.len() - 1];
+
+    let res = HonkProof::<U256>::from_buffer(truncated);
+    assert!(
+        res.is_err(),
+        "HonkProof::<U256>::from_buffer accepted (or would have panicked on) a \
+         non-32-aligned buffer: {res:?}"
+    );
+
+    let res = U256::from_buffer(truncated);
+    assert!(
+        res.is_err(),
+        "U256::from_buffer accepted (or would have panicked on) a non-32-aligned buffer: {res:?}"
+    );
+}
+
+/// F3 — an unbounded `num_public_inputs` / `pub_inputs_offset` read straight
+/// from untrusted VK bytes must be rejected cleanly by both loaders, not left
+/// to blow up downstream.
+///
+/// `num_public_inputs` sizes the oink verifier's
+/// `Vec::with_capacity(public_input_size as usize)` preamble allocation: a
+/// huge value aborts the process on the allocator's own capacity-overflow
+/// check, before the per-element transcript read loop that would otherwise
+/// reject a mismatched proof cleanly. `pub_inputs_offset` feeds
+/// `1 + pub_inputs_offset` in `compute_public_input_delta` (debug-panics,
+/// wraps in release). Both are now bounded against the circuit size implied
+/// by the (already-validated) `log_circuit_size`, at the same VK-parse choke
+/// point that already rejects a corrupt `log_circuit_size`
+/// (`check_log_circuit_size` / `zero_log_circuit_size_vk_rejected` above) —
+/// this is the earliest point untrusted VK bytes are decoded into these
+/// fields, and the ONLY place a `co-noir verify` invocation constructs a
+/// `VerifyingKeyBarretenberg` from attacker-controlled bytes, so rejecting
+/// here means the vulnerable `oink_verifier.rs` / `oink_prover.rs` call sites
+/// can never be reached with an out-of-range value.
+mod f3_vk_public_input_bounds {
+    use super::*;
+
+    /// Header layout (both `to_buffer` and `to_buffer_keccak`): 3 leading
+    /// 32-byte fields, in order log_circuit_size, num_public_inputs,
+    /// pub_inputs_offset.
+    const NUM_PUBLIC_INPUTS_OFF: usize = 32;
+    const PUB_INPUTS_OFFSET_OFF: usize = 64;
+
+    #[test]
+    fn oversized_num_public_inputs_rejected() {
+        let (_proof, _public_inputs, vk) = build_artifacts();
+
+        let mut buf = vk.inner_vk.to_buffer();
+        write_be_u256(&mut buf, NUM_PUBLIC_INPUTS_OFF, &BigUint::from(u64::MAX));
+        let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+        assert!(
+            matches!(res, Err(HonkProofError::CorruptedKey)),
+            "from_buffer accepted (or panicked on) num_public_inputs = u64::MAX: {res:?}"
+        );
+
+        let mut buf_k = vk.inner_vk.to_buffer_keccak();
+        write_be_u256(&mut buf_k, NUM_PUBLIC_INPUTS_OFF, &BigUint::from(u64::MAX));
+        let res_k = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&buf_k);
+        assert!(
+            matches!(res_k, Err(HonkProofError::CorruptedKey)),
+            "from_buffer_keccak accepted (or panicked on) num_public_inputs = u64::MAX: {res_k:?}"
+        );
+    }
+
+    #[test]
+    fn oversized_pub_inputs_offset_rejected() {
+        let (_proof, _public_inputs, vk) = build_artifacts();
+
+        let mut buf = vk.inner_vk.to_buffer();
+        write_be_u256(&mut buf, PUB_INPUTS_OFFSET_OFF, &BigUint::from(u64::MAX));
+        let res = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf);
+        assert!(
+            matches!(res, Err(HonkProofError::CorruptedKey)),
+            "from_buffer accepted (or panicked on) pub_inputs_offset = u64::MAX: {res:?}"
+        );
+
+        let mut buf_k = vk.inner_vk.to_buffer_keccak();
+        write_be_u256(&mut buf_k, PUB_INPUTS_OFFSET_OFF, &BigUint::from(u64::MAX));
+        let res_k = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&buf_k);
+        assert!(
+            matches!(res_k, Err(HonkProofError::CorruptedKey)),
+            "from_buffer_keccak accepted (or panicked on) pub_inputs_offset = u64::MAX: {res_k:?}"
+        );
+    }
+}
+
+/// F4 — the JSON proof/public-input path must reject unparsable strings
+/// cleanly instead of panicking, and must not mishandle legitimate 256-bit
+/// values.
+mod f4_json_string_parsing {
+    use super::*;
+    use noir_types::HonkProofType;
+    use ruint::Uint;
+
+    /// Poseidon2 (field) JSON path: `.parse::<Fr>().unwrap()` panicked on any
+    /// non-field-element string, in either the proof or the public-inputs
+    /// vector.
+    #[test]
+    fn field_string_non_numeric_rejected() {
+        // `HonkProofType` is not `Debug` (it carries dense field/curve data), so
+        // these assertions report `is_ok()` rather than interpolating `res`.
+        let res = HonkProofType::proof_and_public_inputs_from_string_field(
+            vec!["not-a-field-element".to_string()],
+            vec!["1".to_string()],
+        );
+        assert!(
+            res.is_err(),
+            "proof_and_public_inputs_from_string_field accepted (or would have \
+             panicked on) a non-numeric proof string (is_ok = {})",
+            res.is_ok()
+        );
+
+        let res = HonkProofType::proof_and_public_inputs_from_string_field(
+            vec!["1".to_string()],
+            vec!["not-a-field-element".to_string()],
+        );
+        assert!(
+            res.is_err(),
+            "proof_and_public_inputs_from_string_field accepted (or would have \
+             panicked on) a non-numeric public-input string (is_ok = {})",
+            res.is_ok()
+        );
+    }
+
+    /// Keccak (U256) JSON path: same non-numeric-string crash, previously at
+    /// `.parse::<u128>().unwrap()`.
+    #[test]
+    fn u256_string_non_numeric_rejected() {
+        let res = HonkProofType::proof_and_public_inputs_from_string_u256(
+            vec!["not-a-number".to_string()],
+            vec!["1".to_string()],
+        );
+        assert!(
+            res.is_err(),
+            "proof_and_public_inputs_from_string_u256 accepted (or would have \
+             panicked on) a non-numeric proof string (is_ok = {})",
+            res.is_ok()
+        );
+
+        let res = HonkProofType::proof_and_public_inputs_from_string_u256(
+            vec!["1".to_string()],
+            vec!["not-a-number".to_string()],
+        );
+        assert!(
+            res.is_err(),
+            "proof_and_public_inputs_from_string_u256 accepted (or would have \
+             panicked on) a non-numeric public-input string (is_ok = {})",
+            res.is_ok()
+        );
+    }
+
+    /// Keccak (U256) JSON path: a decimal string for a legitimate 256-bit
+    /// value ABOVE `u128::MAX` must be accepted — a public input is a full
+    /// BN254-scalar-width value, routinely close to the ~254-bit modulus, so
+    /// this is not an edge case — and decode to the EXACT original value, not
+    /// crash in (or be silently mangled by) the old `.parse::<u128>()`
+    /// detour. Uses `Uint<256, 4>`'s own decimal `FromStr`/`Display`, the same
+    /// wide-integer path `U256::from_buffer` (the byte loader) decodes into,
+    /// as the independent oracle for the expected value.
+    #[test]
+    fn u256_string_above_u128_max_round_trips_exactly() {
+        // 2^200 + 999_999: comfortably above u128::MAX (2^128 - 1) and below
+        // 2^256, so a u128-only parser cannot represent it at all.
+        let expected: Uint<256, 4> =
+            (Uint::<256, 4>::from(1u8) << 200u32) + Uint::<256, 4>::from(999_999u64);
+        let s = expected.to_string();
+
+        let res = HonkProofType::proof_and_public_inputs_from_string_u256(vec![s.clone()], vec![s])
+            .expect("a legitimate >u128::MAX 256-bit decimal string must parse");
+        match res {
+            HonkProofType::U256Values(proof, public_inputs) => {
+                assert_eq!(proof.inner_as_ref(), &vec![U256(expected)]);
+                assert_eq!(public_inputs, vec![U256(expected)]);
+            }
+            HonkProofType::FieldElements(..) => {
+                panic!("proof_and_public_inputs_from_string_u256 must return U256Values")
+            }
+        }
+    }
+}
+
+/// The caller supplies application inputs separately; the accumulator stays in
+/// the proof. Moving fields across that boundary must not preserve acceptance.
+#[test]
+fn public_input_boundary_cannot_be_shifted() {
+    check_public_input_boundary::<Poseidon2Sponge>();
+    check_public_input_boundary::<sha3::Keccak256>();
+}
+
+fn check_public_input_boundary<H: TranscriptHasher<TranscriptFieldType>>() {
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        let (proof, public_inputs, vk) = build_artifacts_for_hasher::<H>(has_zk);
+        assert!(!public_inputs.is_empty());
+        assert!(UltraHonk::<_, H>::verify(proof.clone(), &public_inputs, &vk, has_zk).unwrap());
+
+        let mut shifted_proof = vec![*public_inputs.last().unwrap()];
+        shifted_proof.extend(proof.clone().inner());
+        let result = UltraHonk::<_, H>::verify(
+            HonkProof::new(shifted_proof),
+            &public_inputs[..public_inputs.len() - 1],
+            &vk,
+            has_zk,
+        );
+        assert!(!matches!(result, Ok(true)),
+            "accepted an application input supplied by the proof instead of the caller ({has_zk:?})");
+
+        let mut extra_inputs = public_inputs.clone();
+        let mut shortened_proof = proof.inner();
+        extra_inputs.push(shortened_proof.remove(0));
+        let result =
+            UltraHonk::<_, H>::verify(HonkProof::new(shortened_proof), &extra_inputs, &vk, has_zk);
+        assert!(
+            !matches!(result, Ok(true)),
+            "accepted an accumulator limb as an extra application input ({has_zk:?})"
+        );
+    }
+}
+
+#[test]
+fn directly_constructed_oversized_key_is_rejected_without_panicking() {
+    let (proof, public_inputs, mut vk) = build_artifacts();
+    vk.inner_vk.num_public_inputs = u64::MAX;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No)
+    }));
+    assert!(
+        matches!(result, Ok(Err(_))),
+        "invalid key must return an error"
+    );
+}
+
+/// The final KZG point is not absorbed before another challenge. Reducing an
+/// aliased coordinate therefore lets a byte-distinct proof verify unchanged.
+/// The pinned v6 codec rejects these encodings instead.
+#[test]
+fn keccak_final_kzg_coordinate_aliases_rejected() {
+    let modulus: BigUint = ark_bn254::Fq::MODULUS.into();
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        let (proof, public_inputs, vk) = build_artifacts_for_hasher::<sha3::Keccak256>(has_zk);
+        assert!(UltraHonk::<Bn254G1, sha3::Keccak256>::verify::<Bn254>(
+            proof.clone(),
+            &public_inputs,
+            &vk,
+            has_zk
+        )
+        .unwrap());
+        for from_end in [1usize, 2] {
+            let mut words = proof.clone().inner();
+            let index = words.len() - from_end;
+            let raw = BigUint::from_bytes_be(&words[index].0.to_be_bytes::<32>()) + &modulus;
+            let bytes = raw.to_bytes_be();
+            let mut padded = vec![0u8; 32 - bytes.len()];
+            padded.extend(bytes);
+            words[index] = U256::from_buffer(&padded).unwrap()[0];
+            let error = UltraHonk::<Bn254G1, sha3::Keccak256>::verify::<Bn254>(
+                HonkProof::new(words),
+                &public_inputs,
+                &vk,
+                has_zk,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<HonkProofError>(),
+                Some(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+        }
+    }
+}

@@ -312,11 +312,15 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<H::DataType>> {
-        if self.num_frs_read + n > self.proof_data.len() {
+        let end = self
+            .num_frs_read
+            .checked_add(n)
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        if end > self.proof_data.len() {
             return Err(HonkProofError::ProofTooSmall);
         }
-        let elements = self.proof_data[self.num_frs_read..self.num_frs_read + n].to_owned();
-        self.num_frs_read += n;
+        let elements = self.proof_data[self.num_frs_read..end].to_owned();
+        self.num_frs_read = end;
 
         self.add_element_frs_to_hash_buffer(label, &elements);
         Ok(elements)
@@ -372,7 +376,10 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<P::ScalarField>> {
-        let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS * n)?;
+        let count = H::NUM_SCALARFIELD_ELEMENTS
+            .checked_mul(n)
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        let elements = self.receive_n_from_prover(label, count)?;
 
         // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
         let elements = elements

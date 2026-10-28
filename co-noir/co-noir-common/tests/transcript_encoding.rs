@@ -9,7 +9,7 @@ fn word(value: BigUint) -> U256 {
     let raw = value.to_bytes_be();
     let mut bytes = vec![0u8; 32 - raw.len()];
     bytes.extend(raw);
-    U256::from_buffer(&bytes)[0]
+    U256::from_buffer(&bytes).unwrap()[0]
 }
 fn transcript(words: Vec<U256>) -> Transcript<Fr, Keccak256> {
     Transcript::new_verifier(HonkProof::new(words))
@@ -67,4 +67,16 @@ fn keccak_points_reject_modulus_aliases_including_infinity() {
             ));
         }
     }
+}
+
+#[test]
+fn oversized_transcript_read_is_rejected_without_overflow() {
+    let mut reader = transcript(vec![U256::from(0u64)]);
+    reader
+        .receive_fr_from_prover::<G1Projective>("first".into())
+        .unwrap();
+    assert!(matches!(
+        reader.receive_fr_vec_from_prover::<G1Projective>("oversized".into(), usize::MAX),
+        Err(HonkProofError::ProofTooSmall)
+    ));
 }

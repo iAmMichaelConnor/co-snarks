@@ -1597,61 +1597,87 @@ impl<F: FieldUint, N: Network> BrilligDriver<F> for Rep3BrilligDriver<'_, F, N> 
             }
             (Rep3BrilligType::Public(val), Rep3BrilligType::Shared(radix)) => {
                 if let (Public::Field(val), Shared::Ring32(radix)) = (val, radix) {
-                    //todo: do we want to do checks for radix <= 256?
-                    let mut limbs: Vec<Rep3BrilligType<_>> =
-                        vec![Rep3BrilligType::default(); output_size];
-                    let radix_as_field =
-                        rep3_ring::yao::ring_to_field_many(&[radix], self.net, &mut self.state)?;
-                    let div = rep3::yao::field_int_div_by_shared(
-                        val,
-                        radix_as_field[0],
-                        self.net,
-                        &mut self.state,
-                    )?;
-                    let limb = rep3::arithmetic::sub_public_by_shared(
-                        val,
-                        rep3::arithmetic::mul(div, radix_as_field[0], self.net, &mut self.state)?,
-                        self.id,
-                    );
-                    let limb = rep3_ring::yao::field_to_ring_many::<_, u8, _>(
-                        &[limb],
-                        self.net,
-                        &mut self.state,
-                    )?; //radix is at most 256, so should fit into u8
-                    limbs[output_size - 1] = Rep3BrilligType::Shared(Shared::<F>::Ring8(limb[0]));
-                    let mut input = div;
-                    for i in (0..output_size).rev().skip(1) {
-                        let div = rep3::yao::field_int_div(
-                            input,
+                    if output_size == 0 {
+                        // `output_size - 1` below would underflow for `output_size == 0`.
+                        // Matches beta.22 (noir-lang/noir acvm-repo/brillig_vm/src/black_box.rs
+                        // `to_be_radix`): decomposing into zero limbs is only valid if there is
+                        // nothing to decompose; a non-zero input does not decompose into 0 limbs.
+                        if val.is_zero() {
+                            Ok(Vec::new())
+                        } else {
+                            Err(eyre::eyre!(
+                                "Field failed to decompose into specified 0 limbs"
+                            ))
+                        }?
+                    } else {
+                        //todo: do we want to do checks for radix <= 256?
+                        let mut limbs: Vec<Rep3BrilligType<_>> =
+                            vec![Rep3BrilligType::default(); output_size];
+                        let radix_as_field = rep3_ring::yao::ring_to_field_many(
+                            &[radix],
+                            self.net,
+                            &mut self.state,
+                        )?;
+                        let div = rep3::yao::field_int_div_by_shared(
+                            val,
                             radix_as_field[0],
                             self.net,
                             &mut self.state,
                         )?;
-                        let limb = rep3::arithmetic::sub(
-                            input,
+                        let limb = rep3::arithmetic::sub_public_by_shared(
+                            val,
                             rep3::arithmetic::mul(
                                 div,
                                 radix_as_field[0],
                                 self.net,
                                 &mut self.state,
                             )?,
+                            self.id,
                         );
-
                         let limb = rep3_ring::yao::field_to_ring_many::<_, u8, _>(
                             &[limb],
                             self.net,
                             &mut self.state,
                         )?; //radix is at most 256, so should fit into u8
-                        if bits {
-                            let limb_bit =
-                                rep3_ring::binary::is_zero(&limb[0], self.net, &mut self.state)?;
-                            limbs[i] = Rep3BrilligType::Shared(Shared::<F>::Ring1(limb_bit));
-                        } else {
-                            limbs[i] = Rep3BrilligType::Shared(Shared::<F>::Ring8(limb[0]));
+                        limbs[output_size - 1] =
+                            Rep3BrilligType::Shared(Shared::<F>::Ring8(limb[0]));
+                        let mut input = div;
+                        for i in (0..output_size).rev().skip(1) {
+                            let div = rep3::yao::field_int_div(
+                                input,
+                                radix_as_field[0],
+                                self.net,
+                                &mut self.state,
+                            )?;
+                            let limb = rep3::arithmetic::sub(
+                                input,
+                                rep3::arithmetic::mul(
+                                    div,
+                                    radix_as_field[0],
+                                    self.net,
+                                    &mut self.state,
+                                )?,
+                            );
+
+                            let limb = rep3_ring::yao::field_to_ring_many::<_, u8, _>(
+                                &[limb],
+                                self.net,
+                                &mut self.state,
+                            )?; //radix is at most 256, so should fit into u8
+                            if bits {
+                                let limb_bit = rep3_ring::binary::is_zero(
+                                    &limb[0],
+                                    self.net,
+                                    &mut self.state,
+                                )?;
+                                limbs[i] = Rep3BrilligType::Shared(Shared::<F>::Ring1(limb_bit));
+                            } else {
+                                limbs[i] = Rep3BrilligType::Shared(Shared::<F>::Ring8(limb[0]));
+                            }
+                            input = div;
                         }
-                        input = div;
+                        limbs
                     }
-                    limbs
                 } else {
                     eyre::bail!("can only ToRadix on field and radix must be Int32")
                 }
@@ -1810,5 +1836,73 @@ impl<F: FieldUint, N: Network> BrilligDriver<F> for Rep3BrilligDriver<'_, F, N> 
             | Rep3BrilligType::Shared(Shared::Field(_)) => Ok(val),
             _ => eyre::bail!("expected field but got int"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use itertools::izip;
+    use mpc_core::protocols::rep3::conversion::A2BType;
+    use mpc_net::local::LocalNetwork;
+    use std::sync::mpsc;
+
+    /// Regression test for noir-claude #1019 ("ToRadix N=0 divergence"): the
+    /// `Public(value) / Shared(radix)` branch of `to_radix` special-cased the last limb
+    /// via `limbs[output_size - 1]`, which underflows (and panics, since the index is
+    /// then `usize::MAX`) when `output_size == 0`. Requesting a 0-limb decomposition of a
+    /// non-zero public value with a *shared* radix must return a structured error
+    /// instead of panicking.
+    #[test]
+    fn to_radix_public_val_shared_radix_zero_limbs_nonzero_returns_err_not_panic() {
+        let nets = LocalNetwork::new_3_parties();
+        let mut rng = rand::thread_rng();
+        let radix_shares = rep3_ring::share_ring_element::<u32, _>(RingElement(2), &mut rng);
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+        for (net, tx, radix_share) in
+            izip!(nets.into_iter(), [tx1, tx2, tx3], radix_shares.into_iter())
+        {
+            std::thread::spawn(move || {
+                let state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let mut driver = Rep3BrilligDriver::new(&net, state);
+                let val = Rep3BrilligType::public_field(ark_bn254::Fr::from(42u64));
+                let radix = Rep3BrilligType::shared_u32(radix_share);
+                let result = driver.to_radix(val, radix, 0, false);
+                tx.send(result.is_err()).unwrap();
+            });
+        }
+        assert!(rx1.recv().unwrap(), "party 0 expected an error, got Ok");
+        assert!(rx2.recv().unwrap(), "party 1 expected an error, got Ok");
+        assert!(rx3.recv().unwrap(), "party 2 expected an error, got Ok");
+    }
+
+    /// Decomposing zero into zero limbs (still with a shared radix) is legitimate and
+    /// must succeed without panicking.
+    #[test]
+    fn to_radix_public_val_shared_radix_zero_limbs_zero_input_returns_ok() {
+        let nets = LocalNetwork::new_3_parties();
+        let mut rng = rand::thread_rng();
+        let radix_shares = rep3_ring::share_ring_element::<u32, _>(RingElement(2), &mut rng);
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+        for (net, tx, radix_share) in
+            izip!(nets.into_iter(), [tx1, tx2, tx3], radix_shares.into_iter())
+        {
+            std::thread::spawn(move || {
+                let state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let mut driver = Rep3BrilligDriver::new(&net, state);
+                let val = Rep3BrilligType::public_field(ark_bn254::Fr::from(0u64));
+                let radix = Rep3BrilligType::shared_u32(radix_share);
+                let result = driver.to_radix(val, radix, 0, false);
+                tx.send(result.map(|v| v.len()).map_err(|e| e.to_string()))
+                    .unwrap();
+            });
+        }
+        assert_eq!(rx1.recv().unwrap(), Ok(0));
+        assert_eq!(rx2.recv().unwrap(), Ok(0));
+        assert_eq!(rx3.recv().unwrap(), Ok(0));
     }
 }

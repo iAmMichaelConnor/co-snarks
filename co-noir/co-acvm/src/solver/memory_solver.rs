@@ -81,3 +81,86 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::solver::PlainCoSolver;
+    use acir::{
+        circuit::opcodes::{BlockId, MemOp, MemOpKind},
+        native_types::Witness,
+    };
+
+    /// Access to a block that was never initialized must return an error.
+    #[test]
+    fn memory_read_on_uninitialized_block_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(0u64));
+        let op = MemOp {
+            operation: MemOpKind::Read,
+            index: Witness(0),
+            value: Witness(1),
+        };
+        // Block 5 was never initialized via `MemoryInit`.
+        let result = solver.solve_memory_op(BlockId::new(5), &op);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    #[test]
+    fn memory_write_on_uninitialized_block_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(0u64));
+        solver
+            .witness()
+            .insert(Witness(1), ark_bn254::Fr::from(7u64));
+        let op = MemOp {
+            operation: MemOpKind::Write,
+            index: Witness(0),
+            value: Witness(1),
+        };
+        let result = solver.solve_memory_op(BlockId::new(5), &op);
+        assert!(result.is_err(), "expected a structured error, got Ok");
+    }
+
+    /// Reject duplicate initialization and preserve the original block.
+    #[test]
+    fn duplicate_memory_init_returns_err() {
+        let mut solver = PlainCoSolver::<ark_bn254::Fr>::new_for_test();
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(1u64));
+
+        solver
+            .solve_memory_init_block(BlockId::new(3), &[Witness(0)])
+            .expect("first init of block 3 must succeed");
+
+        solver
+            .witness()
+            .insert(Witness(0), ark_bn254::Fr::from(7u64));
+        let result = solver.solve_memory_init_block(BlockId::new(3), &[Witness(0)]);
+        assert!(
+            result.is_err(),
+            "expected a structured error on duplicate MemoryInit, got Ok"
+        );
+        solver
+            .witness()
+            .insert(Witness(1), ark_bn254::Fr::from(0u64));
+        solver
+            .solve_memory_op(
+                BlockId::new(3),
+                &MemOp {
+                    operation: MemOpKind::Read,
+                    index: Witness(1),
+                    value: Witness(2),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            solver.witness().get(&Witness(2)),
+            Some(&ark_bn254::Fr::from(1u64))
+        );
+    }
+}

@@ -299,10 +299,8 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
             "biggroup batch_mul: points and scalars size mismatch after handling edgecases"
         );
 
-        // Partition scalars into big and small paths using compile-time information.
-        // Since `with_edgecases` appends a 254-bit randomization scalar at the end (via
-        // `mask_points`), the last scalar must go to big. Everything else routes by
-        // `max_num_bits`: `0` forces the full-width path, anything else uses the small path.
+        // The route depends only on public configuration. Zero scalars use
+        // the same fixed-width NAF as all other scalars (BB v6 semantics).
         let original_size = scalars.len();
         let mut big_scalars = Vec::new();
         let mut big_points = Vec::new();
@@ -404,7 +402,9 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
             "biggroup process_strauss_msm_rounds: points and scalars have different lengths"
         );
 
-        // TACEO TODO: Check that all scalars are in range?
+        // compute_naf constrains Boolean digits and their signed reconstruction
+        // to the scalar at this public width; no secret scalar is opened for a
+        // host-side range check.
 
         // Constant parameters
         let num_rounds = max_num_bits;
@@ -453,16 +453,12 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
         let num_rounds_per_iteration = 4;
         let num_iterations =
             ((num_rounds - 1) as u64).div_ceil(num_rounds_per_iteration as u64) as usize;
-        let num_rounds_per_final_iteration =
-            (num_rounds - 1) - ((num_iterations - 1) * num_rounds_per_iteration);
-
         for i in 0..num_iterations {
             let mut to_add = Vec::with_capacity(msm_size);
-            let inner_num_rounds = if i != num_iterations - 1 {
-                num_rounds_per_iteration
-            } else {
-                num_rounds_per_final_iteration
-            };
+            // With one-bit scalars the loop is empty. Compute the remaining
+            // rounds here so zero iterations never evaluate num_iterations - 1.
+            let inner_num_rounds =
+                ((num_rounds - 1) - i * num_rounds_per_iteration).min(num_rounds_per_iteration);
 
             for j in 0..inner_num_rounds {
                 let mut nafs = vec![BoolCT::from(false); msm_size];
@@ -1297,7 +1293,8 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
     /// Implements scalar multiplication that supports short scalars.
     /// For multiple scalar multiplication use `batch_mul` to save gates.
     /// `scalar` is a field element. If `max_num_bits` > 0, the length of the scalar must not exceed `max_num_bits`.
-    /// `max_num_bits` should be even and < 254. Default value 0 corresponds to unspecified scalar length.
+    /// Positive `max_num_bits` bounds the scalar width; odd widths are supported.
+    /// Default value 0 selects the full scalar-field width.
     pub(crate) fn scalar_mul<P: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
         &mut self,
         scalar: &FieldCT<F>,
@@ -1532,6 +1529,122 @@ mod tests {
         types::{big_field::BigField, big_group::BigGroup, field_ct::FieldCT},
     };
 
+    /// Exercise witness-backed recursive point decoding through the full proof verifier.
+    /// Merely inspecting the reconstructed (modularly reduced) point would miss aliases.
+    #[test]
+    fn recursive_point_encoding_constraints_reject_malformed_limbs() {
+        use ark_bn254::{Bn254, Fq};
+        use ark_ff::PrimeField;
+        use co_noir_common::{
+            crs::parse::CrsParser, transcript::Poseidon2Sponge, types::ZeroKnowledge,
+        };
+        use co_ultrahonk::prelude::UltraHonk;
+
+        fn split(value: BigUint) -> [Fr; 2] {
+            let mask = (BigUint::one() << 136usize) - BigUint::one();
+            [Fr::from(&value & mask), Fr::from(value >> 136usize)]
+        }
+        fn encode(x: BigUint, y: BigUint) -> [Fr; 4] {
+            let [x_lo, x_hi] = split(x);
+            let [y_lo, y_hi] = split(y);
+            [x_lo, x_hi, y_lo, y_hi]
+        }
+
+        let modulus: BigUint = Fq::MODULUS.into();
+        let generator = encode(BigUint::from(1u32), BigUint::from(2u32));
+        let mut cases = vec![
+            ("generator", generator, true),
+            ("infinity", [Fr::zero(); 4], true),
+            (
+                "x plus modulus",
+                encode(&modulus + 1u32, BigUint::from(2u32)),
+                false,
+            ),
+            (
+                "y plus modulus",
+                encode(BigUint::from(1u32), &modulus + 2u32),
+                false,
+            ),
+            (
+                "infinity x modulus",
+                encode(modulus.clone(), BigUint::zero()),
+                false,
+            ),
+            (
+                "infinity y modulus",
+                encode(BigUint::zero(), modulus),
+                false,
+            ),
+            (
+                "off curve",
+                encode(BigUint::from(1u32), BigUint::from(1u32)),
+                false,
+            ),
+        ];
+        // Shift one unit from a high limb into its low limb: the represented integer
+        // stays unchanged, but the low limb is now 137 bits instead of at most 136.
+        // This targets limb uniqueness separately from field canonicality.
+        let point = G1Affine::generator()
+            .mul_bigint(Fr::from(17u32).into_bigint())
+            .into_affine();
+        let canonical = encode(point.x.into(), point.y.into());
+        cases.push(("nontrivial canonical point", canonical, true));
+        for (name, low) in [("excess x low bits", 0), ("excess y low bits", 2)] {
+            assert!(!canonical[low + 1].is_zero());
+            let mut limbs = canonical;
+            limbs[low] += Fr::from(BigUint::one() << 136usize);
+            limbs[low + 1] -= Fr::one();
+            cases.push((name, limbs, false));
+        }
+        for (name, high) in [("excess x high bits", 1), ("excess y high bits", 3)] {
+            let mut limbs = generator;
+            limbs[high] = Fr::from(BigUint::one() << 118usize);
+            cases.push((name, limbs, false));
+        }
+
+        let crs_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../co-noir-common/src/crs");
+        for (name, values, expected) in cases {
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let mut builder = GenericUltraCircuitBuilder::<Bn254G1, _>::new_minimal(0);
+            let limbs: Vec<_> = values
+                .into_iter()
+                .map(|value| FieldCT::from_witness_index(builder.add_variable(value)))
+                .collect();
+            BigGroup::reconstruct_from_public(&limbs, &mut builder, &mut driver)
+                .unwrap_or_else(|error| panic!("{name}: reconstruction failed: {error}"));
+            builder.add_default_to_public_inputs();
+            builder.finalize_circuit(&mut driver).unwrap();
+            let size = builder.compute_dyadic_size();
+            let crs = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+                crs_dir.join("bn254_g1.dat"),
+                crs_dir.join("bn254_g2.dat"),
+                size,
+                ZeroKnowledge::No,
+            )
+            .unwrap();
+            let (prover_crs, verifier_crs) = crs.split();
+            let (pk, vk) = builder
+                .create_keys::<Bn254>(prover_crs.into(), verifier_crs, &mut driver)
+                .unwrap();
+            let (proof, public_inputs) =
+                UltraHonk::<_, Poseidon2Sponge>::prove(pk, ZeroKnowledge::No, &vk.inner_vk)
+                    .unwrap();
+            let accepted = UltraHonk::<_, Poseidon2Sponge>::verify(
+                proof,
+                &public_inputs,
+                &vk,
+                ZeroKnowledge::No,
+            )
+            .unwrap();
+            assert_eq!(
+                accepted, expected,
+                "{name}: full constraint proof acceptance"
+            );
+            eprintln!("recursive point case {name}: accepted={accepted}, circuit_size={size}");
+        }
+    }
+
     fn affine_to_biggroup(
         point: &G1Affine,
         builder: &mut GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>,
@@ -1642,3 +1755,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "one_bit_scalar_tests.rs"]
+mod one_bit_scalar_tests;

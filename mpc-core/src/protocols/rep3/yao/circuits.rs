@@ -895,12 +895,13 @@ impl GarbledCircuits {
         decompose_bitlen: usize,
         total_output_bitlen: usize,
     ) -> Result<Vec<G::Item>, G::Error> {
+        // The final (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         let num_decomps_per_field = total_output_bitlen.div_ceil(decompose_bitlen);
         debug_assert_eq!(wires_a.len(), wires_b.len());
         let input_bitlen = wires_a.len();
         debug_assert_eq!(input_bitlen, F::MODULUS_BIT_SIZE as usize);
         debug_assert!(input_bitlen >= total_output_bitlen);
-        debug_assert!(decompose_bitlen <= total_output_bitlen);
         debug_assert_eq!(wires_c.len(), input_bitlen * num_decomps_per_field);
 
         let input_bits =
@@ -933,12 +934,13 @@ impl GarbledCircuits {
         let input_bitlen = F::MODULUS_BIT_SIZE as usize;
         let num_inputs = input_size / input_bitlen;
 
+        // The final (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         let num_decomps_per_field = total_output_bitlen_per_field.div_ceil(decompose_bitlen);
         let total_output_elements = num_decomps_per_field * num_inputs;
 
         debug_assert_eq!(input_size % input_bitlen, 0);
         debug_assert!(input_bitlen >= total_output_bitlen_per_field);
-        debug_assert!(decompose_bitlen <= total_output_bitlen_per_field);
         debug_assert_eq!(wires_c.size(), input_bitlen * total_output_elements);
 
         let mut results = Vec::with_capacity(wires_c.size());
@@ -971,13 +973,14 @@ impl GarbledCircuits {
         decompose_bitlen: usize,
         total_output_bitlen: usize,
     ) -> Result<Vec<G::Item>, G::Error> {
+        // The final (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         let num_decomps_per_field = total_output_bitlen.div_ceil(decompose_bitlen);
         debug_assert_eq!(wires_a.len(), wires_b.len());
         let input_bitlen = wires_a.len();
         let output_bitlen = K::MODULUS_BIT_SIZE as usize;
         debug_assert_eq!(input_bitlen, F::MODULUS_BIT_SIZE as usize);
         debug_assert!(input_bitlen >= total_output_bitlen);
-        debug_assert!(decompose_bitlen <= total_output_bitlen);
         debug_assert_eq!(wires_c.len(), input_bitlen * num_decomps_per_field);
 
         let input_bits =
@@ -1015,12 +1018,13 @@ impl GarbledCircuits {
         let output_bitlen = K::MODULUS_BIT_SIZE as usize;
         let num_inputs = input_size / input_bitlen;
 
+        // The final (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         let num_decomps_per_field = total_output_bitlen_per_field.div_ceil(decompose_bitlen);
         let total_output_elements = num_decomps_per_field * num_inputs;
 
         debug_assert_eq!(input_size % input_bitlen, 0);
         debug_assert!(input_bitlen >= total_output_bitlen_per_field);
-        debug_assert!(decompose_bitlen <= total_output_bitlen_per_field);
         debug_assert_eq!(wires_c.size(), input_bitlen * total_output_elements);
 
         let mut results = Vec::with_capacity(wires_c.size());
@@ -1886,7 +1890,16 @@ impl GarbledCircuits {
         );
         let quotient = Self::bin_div_by_public(g, &dividend, divisor)?;
         let km = Self::bin_mul_with_public(g, &quotient, divisor)?;
-        let remainder = &Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
+        let mut remainder = Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
+        // Preserve the low-K-bits convention, then canonicalize before adding
+        // the field mask. For n=bitlen(K::MODULUS), x<2^n<=2*K::MODULUS, so one
+        // conditional subtraction suffices. Without it, a wider public divisor
+        // can yield noncanonical x and a mask-dependent decoding failure.
+        remainder.resize(K::MODULUS_BIT_SIZE as usize, g.const_zero()?);
+        let modulus = GCUtils::uint_to_bits(&K::modulus_uint(), K::MODULUS_BIT_SIZE as usize);
+        let (reduced, no_borrow) =
+            Self::bin_subtraction_partial_by_constant(g, &remainder, &modulus)?;
+        remainder = Self::bin_multiplex(g, &no_borrow, &remainder, &reduced)?;
 
         let mut results = Vec::with_capacity(
             F::MODULUS_BIT_SIZE as usize * limbs_per_field + K::MODULUS_BIT_SIZE as usize,
@@ -1903,9 +1916,7 @@ impl GarbledCircuits {
             results.extend(result);
         }
         results.extend(Self::compose_field_element::<_, K>(
-            g,
-            remainder[..K::MODULUS_BIT_SIZE as usize].as_ref(),
-            wires_c_k,
+            g, &remainder, wires_c_k,
         )?);
         Ok(results)
     }

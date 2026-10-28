@@ -13,7 +13,7 @@ use crate::protocols::{
     },
     rep3_ring::conversion,
 };
-use crate::uint::{FieldUint, U512};
+use crate::uint::{FieldUint, U512, UintBackend};
 use fancy_garbling::{BinaryBundle, WireLabel, WireMod2};
 use itertools::izip;
 use mpc_net::Network;
@@ -986,7 +986,10 @@ fn public_divisor_to_ring<T: IntRing2k>(divisor: &U512) -> RingElement<T> {
     RingElement(T::cast_from_uint(divisor))
 }
 
-/// Divides the quotient by a public divisor and then returns the quotient as field elements in limbs_per_field many limbs in one field F and the remainder in another field K. The field elements are composed using wires_c.
+/// Divide by a positive public divisor. Return the low quotient limbs in F and
+/// the low K::MODULUS_BIT_SIZE remainder bits reduced modulo K. When the divisor
+/// is K::MODULUS, this is the full canonical integer remainder.
+/// Requires 0 < limb_size < F::MODULUS_BIT_SIZE so every quotient limb is canonical.
 #[expect(clippy::type_complexity)]
 pub fn ring_div_by_public_to_fr_limbs_and_fq_many<
     T: IntRing2k,
@@ -1004,6 +1007,18 @@ pub fn ring_div_by_public_to_fr_limbs_and_fq_many<
 where
     Standard: Distribution<T>,
 {
+    // Each quotient limb is composed directly into F and must be canonical.
+    eyre::ensure!(
+        limb_size > 0 && limb_size < F::MODULUS_BIT_SIZE as usize,
+        "Quotient limb size must be positive and smaller than the field modulus bit size"
+    );
+    // Reject invalid public configuration before any protocol messages. The
+    // exact divider must not silently divide by a truncated (possibly zero) value.
+    eyre::ensure!(!divisor.is_zero(), "Public divisor must be nonzero");
+    eyre::ensure!(
+        divisor.bit_len() <= T::K,
+        "Public divisor exceeds ring width"
+    );
     let num_inputs = input.len();
     let divisor_as_bits = GCUtils::ring_to_bits::<T>(public_divisor_to_ring(divisor));
 
@@ -1023,7 +1038,10 @@ where
     )
 }
 
-/// Divides the quotient by a public divisor and then returns the quotient as field elements in limbs_per_field many limbs in one field F and the remainder in another field K. The field elements are composed using wires_c.
+/// Divide by a positive public divisor. Return the low quotient limbs in F and
+/// the low K::MODULUS_BIT_SIZE remainder bits reduced modulo K. When the divisor
+/// is K::MODULUS, this is the full canonical integer remainder.
+/// Requires 0 < limb_size < F::MODULUS_BIT_SIZE so every quotient limb is canonical.
 pub fn ring_div_by_public_to_fr_limbs_and_fq<T: IntRing2k, N: Network, F: FieldUint, K: FieldUint>(
     input: Rep3RingShare<T>,
     limb_size: usize,
