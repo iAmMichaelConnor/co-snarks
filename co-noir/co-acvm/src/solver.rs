@@ -296,6 +296,36 @@ impl PlainCoSolver<ark_bn254::Fr> {
             println!("no output for circuit")
         }
     }
+
+    /// Test-only constructor building a minimal, empty solver so that individual
+    /// opcode-solving methods (e.g. memory ops) can be unit tested without needing a
+    /// full `ProgramArtifact`.
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        let mut driver = PlainAcvmSolver::default();
+        let brillig = CoBrilligVM::init(
+            driver
+                .init_brillig_driver()
+                .expect("plain brillig driver init never fails"),
+            vec![],
+        );
+        Self {
+            driver,
+            brillig,
+            abi: Abi {
+                abi_version: noirc_abi::ABI_VERSION,
+                parameters: vec![],
+                return_type: None,
+                error_types: BTreeMap::new(),
+            },
+            value_store: PssStore::new(),
+            functions: vec![],
+            witness_map: vec![WitnessMap::default()],
+            function_index: Self::DEFAULT_FUNCTION_INDEX,
+            memory_access: IntMap::new(),
+            pedantic_solving: true,
+        }
+    }
 }
 
 impl<T, F> CoSolver<T, F>

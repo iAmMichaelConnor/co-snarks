@@ -8,10 +8,9 @@ use crate::uint::UintBackend;
 use ark_ec::CurveGroup;
 use ark_ff::PrimeField;
 use fancy_garbling::WireMod2;
-use rand::{
-    Rng, RngCore, SeedableRng, distributions::Standard, prelude::Distribution, seq::SliceRandom,
-};
+use rand::{Rng, SeedableRng, distributions::Standard, prelude::Distribution, seq::SliceRandom};
 use rayon::prelude::*;
+use sha3::{Digest, Sha3_256};
 
 #[derive(Debug)]
 /// A correlated rng for rep3
@@ -20,15 +19,35 @@ pub struct Rep3CorrelatedRng {
     pub rand: Rep3Rand,
     pub(crate) bitcomp1: Rep3RandBitComp,
     pub(crate) bitcomp2: Rep3RandBitComp,
+    // Public randomness must not share a cursor with private conversion masks.
+    common_rng: RngType,
 }
 
 impl Rep3CorrelatedRng {
     /// Construct a new [`Rep3CorrelatedRng`]
-    pub fn new(rand: Rep3Rand, bitcomp1: Rep3RandBitComp, bitcomp2: Rep3RandBitComp) -> Self {
+    pub fn new(
+        rand: Rep3Rand,
+        bitcomp1: Rep3RandBitComp,
+        bitcomp2: Rep3RandBitComp,
+        id: PartyID,
+    ) -> Self {
+        // setup_bitcomp gives all three parties this same initial seed. The
+        // matching streams are NOT consumed equally by later conversions:
+        // party 0 does not draw bitcomp1 masks during direct b2a. Derive a
+        // separate public stream without advancing any private mask cursor.
+        let common_seed = match id {
+            PartyID::ID0 | PartyID::ID1 => bitcomp1.rng2.get_seed(),
+            PartyID::ID2 => bitcomp1.rng1.get_seed(),
+        };
+        let mut hash = Sha3_256::new();
+        hash.update(b"co-snarks/rep3/common-public-rng/v1\0");
+        hash.update(common_seed);
+        let common_rng = RngType::from_seed(hash.finalize().into());
         Self {
             rand,
             bitcomp1,
             bitcomp2,
+            common_rng,
         }
     }
 
@@ -37,23 +56,21 @@ impl Rep3CorrelatedRng {
         let rand = self.rand.fork();
         let bitcomp1 = self.bitcomp1.fork();
         let bitcomp2 = self.bitcomp2.fork();
+        let common_rng = RngType::from_seed(self.common_rng.r#gen());
         Self {
             rand,
             bitcomp1,
             bitcomp2,
+            common_rng,
         }
     }
 
     /// Generate a value that is equal on all three parties
-    pub fn generate_shared<T>(&mut self, id: PartyID) -> T
+    pub fn generate_shared<T>(&mut self, _id: PartyID) -> T
     where
         Standard: Distribution<T>,
     {
-        match id {
-            PartyID::ID0 => self.bitcomp1.rng2.r#gen(),
-            PartyID::ID1 => self.bitcomp1.rng2.r#gen(),
-            PartyID::ID2 => self.bitcomp1.rng1.r#gen(),
-        }
+        self.common_rng.r#gen()
     }
 
     /// Generate a value that is equal on all two garbler parties
@@ -135,23 +152,29 @@ impl Rep3Rand {
     // TODO do not collect the values
     /// Generate a vector of masking field elements
     pub fn masking_field_elements_vec<F: PrimeField>(&mut self, len: usize) -> Vec<F> {
-        let field_size = usize::try_from(F::MODULUS_BIT_SIZE)
-            .expect("u32 fits into usize")
-            .div_ceil(8);
-        let mut a = vec![0_u8; field_size * len];
-        let mut b = vec![0_u8; field_size * len];
-        rayon::join(
+        // Each party knows one of the two adjacent pairwise masks. The other
+        // must therefore be uniform by itself; subtracting two biased samples
+        // is not sufficient. Reducing only ceil(log2(p)/8) random bytes modulo
+        // p gives a non-negligible bias (about 0.039 for BN254 Fr).
+        // F::rand uses uniform field sampling and matches the scalar path's
+        // consumption of each pairwise RNG. Draw the two independent streams
+        // in parallel, then subtract locally without further randomness.
+        let (a, b) = rayon::join(
             || {
-                self.rng1.fill_bytes(&mut a);
+                (0..len)
+                    .map(|_| F::rand(&mut self.rng1))
+                    .collect::<Vec<_>>()
             },
             || {
-                self.rng2.fill_bytes(&mut b);
+                (0..len)
+                    .map(|_| F::rand(&mut self.rng2))
+                    .collect::<Vec<_>>()
             },
         );
-        a.par_chunks(field_size)
-            .zip_eq(b.par_chunks(field_size))
+        a.into_par_iter()
+            .zip_eq(b.into_par_iter())
             .with_min_len(512)
-            .map(|(a, b)| F::from_be_bytes_mod_order(a) - F::from_be_bytes_mod_order(b))
+            .map(|(a, b)| a - b)
             .collect()
     }
 
@@ -356,5 +379,165 @@ mod tests {
         let single_b: U256 = rand_single.random_uint_rng2(64);
         assert_eq!(pair_a, single_a);
         assert_eq!(pair_b, single_b);
+    }
+}
+
+#[cfg(test)]
+mod uniform_mask_tests {
+    use super::Rep3Rand;
+    use ark_bn254::Fr;
+    use ark_ff::Zero;
+
+    #[test]
+    fn vector_masks_match_uniform_scalar_sampling_across_batches() {
+        // The scalar path uses rejection sampling through F::rand. Matching
+        // both its outputs and subsequent stream position prevents replacing
+        // it with biased fixed-width modular reduction in the batch path.
+        let mut scalar = Rep3Rand::new([17; 32], [29; 32]);
+        let mut batched = Rep3Rand::new([17; 32], [29; 32]);
+        for len in [0, 1, 31, 1024, 3] {
+            let expected: Vec<Fr> = (0..len).map(|_| scalar.masking_field_element()).collect();
+            assert_eq!(batched.masking_field_elements_vec::<Fr>(len), expected);
+            assert_eq!(
+                batched.random_fes::<Fr>(),
+                scalar.random_fes::<Fr>(),
+                "batching changed subsequent pairwise RNG consumption"
+            );
+        }
+    }
+
+    #[test]
+    fn vector_masks_cancel_across_rep3_edges() {
+        // Every edge is sampled independently by its two endpoints. A fresh
+        // zero sharing must sum to zero after any mixture of batch lengths.
+        let seeds = [[17; 32], [29; 32], [43; 32]];
+        let mut parties = [
+            Rep3Rand::new(seeds[0], seeds[2]),
+            Rep3Rand::new(seeds[1], seeds[0]),
+            Rep3Rand::new(seeds[2], seeds[1]),
+        ];
+        for len in [1, 7, 1024, 0, 13] {
+            let masks = parties
+                .each_mut()
+                .map(|rng| rng.masking_field_elements_vec::<Fr>(len));
+            for i in 0..len {
+                assert!((masks[0][i] + masks[1][i] + masks[2][i]).is_zero());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod common_rng_tests {
+    use super::*;
+    use ark_bn254::{Fq, Fr};
+
+    fn parties() -> [Rep3CorrelatedRng; 3] {
+        // Same seed topology as setup_bitcomp: the three-key sums are equal
+        // despite their per-party key order. Only party 0 lacks bitcomp1's
+        // third key and only party 1 lacks bitcomp2's third key.
+        let [a, b, c, d, e, f] = [11, 13, 17, 19, 23, 29].map(|x| [x; 32]);
+        [
+            Rep3CorrelatedRng::new(
+                Rep3Rand::new(a, c),
+                Rep3RandBitComp::new_2keys(a, c),
+                Rep3RandBitComp::new_3keys(d, e, f),
+                PartyID::ID0,
+            ),
+            Rep3CorrelatedRng::new(
+                Rep3Rand::new(b, a),
+                Rep3RandBitComp::new_3keys(b, c, a),
+                Rep3RandBitComp::new_2keys(e, d),
+                PartyID::ID1,
+            ),
+            Rep3CorrelatedRng::new(
+                Rep3Rand::new(c, b),
+                Rep3RandBitComp::new_3keys(c, a, b),
+                Rep3RandBitComp::new_3keys(f, d, e),
+                PartyID::ID2,
+            ),
+        ]
+    }
+
+    fn check_common(parties: &mut [Rep3CorrelatedRng; 3]) -> [u8; 32] {
+        let [p0, p1, p2] = parties.each_mut();
+        let seeds = [
+            p0.generate_shared::<[u8; 32]>(PartyID::ID0),
+            p1.generate_shared::<[u8; 32]>(PartyID::ID1),
+            p2.generate_shared::<[u8; 32]>(PartyID::ID2),
+        ];
+        assert!(seeds[0] == seeds[1] && seeds[1] == seeds[2]);
+        seeds[0]
+    }
+
+    fn consume_field_masks<F: PrimeField>(parties: &mut [Rep3CorrelatedRng; 3]) {
+        let [p0, p1, p2] = parties.each_mut();
+        let sum = |(a, b, c): (F, F, F)| a + b + c;
+        let k3 = sum(p0.bitcomp2.random_fes_3keys::<F>());
+        let k2 = sum(p1.bitcomp1.random_fes_3keys::<F>());
+        assert_eq!(k2, sum(p2.bitcomp1.random_fes_3keys::<F>()));
+        assert_eq!(k3, sum(p2.bitcomp2.random_fes_3keys::<F>()));
+    }
+
+    fn consume_ring_masks(parties: &mut [Rep3CorrelatedRng; 3]) {
+        let [p0, p1, p2] = parties.each_mut();
+        let sum = |(a, b, c): (u32, u32, u32)| a.wrapping_add(b).wrapping_add(c);
+        let k3 = sum(p0.bitcomp2.random_elements_3keys::<u32>());
+        let k2 = sum(p1.bitcomp1.random_elements_3keys::<u32>());
+        assert_eq!(k2, sum(p2.bitcomp1.random_elements_3keys::<u32>()));
+        assert_eq!(k3, sum(p2.bitcomp2.random_elements_3keys::<u32>()));
+    }
+
+    fn private_positions(rng: &Rep3CorrelatedRng) -> [Option<u128>; 8] {
+        [
+            Some(rng.rand.rng1.get_word_pos()),
+            Some(rng.rand.rng2.get_word_pos()),
+            Some(rng.bitcomp1.rng1.get_word_pos()),
+            Some(rng.bitcomp1.rng2.get_word_pos()),
+            rng.bitcomp1.rng3.as_ref().map(RngType::get_word_pos),
+            Some(rng.bitcomp2.rng1.get_word_pos()),
+            Some(rng.bitcomp2.rng2.get_word_pos()),
+            rng.bitcomp2.rng3.as_ref().map(RngType::get_word_pos),
+        ]
+    }
+
+    #[test]
+    fn common_rng_stays_equal_after_private_masks_and_forks() {
+        let mut parties = parties();
+        check_common(&mut parties);
+        for _ in 0..9 {
+            consume_field_masks::<Fr>(&mut parties);
+            consume_ring_masks(&mut parties);
+            consume_field_masks::<Fq>(&mut parties);
+            check_common(&mut parties);
+        }
+        let mut children = parties.each_mut().map(Rep3CorrelatedRng::fork);
+        let parent_seed = check_common(&mut parties);
+        let child_seed = check_common(&mut children);
+        assert!(parent_seed != child_seed);
+        for group in [&mut parties, &mut children] {
+            consume_field_masks::<Fr>(group);
+            consume_ring_masks(group);
+            consume_field_masks::<Fq>(group);
+            check_common(group);
+        }
+        let mut grandchildren = children.each_mut().map(Rep3CorrelatedRng::fork);
+        check_common(&mut grandchildren);
+        consume_field_masks::<Fr>(&mut grandchildren);
+        check_common(&mut grandchildren);
+    }
+
+    #[test]
+    fn common_rng_does_not_consume_private_streams() {
+        let mut parties = parties();
+        consume_field_masks::<Fr>(&mut parties);
+        consume_ring_masks(&mut parties);
+        let before = parties.each_ref().map(private_positions);
+        for _ in 0..17 {
+            check_common(&mut parties);
+        }
+        assert_eq!(before, parties.each_ref().map(private_positions));
+        consume_field_masks::<Fq>(&mut parties);
+        consume_ring_masks(&mut parties);
     }
 }

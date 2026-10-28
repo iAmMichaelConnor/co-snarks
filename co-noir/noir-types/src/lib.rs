@@ -53,7 +53,7 @@ impl HonkProofType {
         buf_public_inputs: &[u8],
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::from_buffer(buf_proof)?;
-        let public_inputs = U256::from_buffer(buf_public_inputs);
+        let public_inputs = U256::from_buffer(buf_public_inputs)?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 
@@ -107,20 +107,46 @@ impl HonkProofType {
                 .collect(),
         }
     }
+    /// Parse a single decimal (or `0x`-prefixed) string as a field element.
+    /// Returns a clean `Err` on a non-field string instead of panicking — the
+    /// JSON proof/public-input path hands this untrusted strings straight from
+    /// a file given to `co-noir verify`.
+    fn parse_fr_str(s: &str) -> eyre::Result<ark_bn254::Fr> {
+        let word = Self::parse_u256_str(s)?;
+        let value = ark_bn254::Fr::from_be_bytes_mod_order(&word.0.to_be_bytes::<32>());
+        eyre::ensure!(
+            U256::convert_field_into(&value) == word,
+            "non-canonical field element string: {s:?}"
+        );
+        Ok(value)
+    }
+
+    /// Parse a single decimal (or `0x`-prefixed) string as a full 256-bit
+    /// unsigned integer. Uses `Uint<256, 4>`'s own `FromStr` (the same
+    /// wide-integer path the binary/byte loader decodes into) rather than
+    /// routing through `u128`, which used to panic on a non-numeric string AND
+    /// silently truncate any legitimate 256-bit decimal above `u128::MAX` down
+    /// to its low 128 bits before zero-extending back to 256.
+    fn parse_u256_str(s: &str) -> eyre::Result<U256> {
+        s.parse::<Uint<256, 4>>()
+            .map(U256)
+            .map_err(|e| eyre::eyre!("invalid U256 string {s:?}: {e}"))
+    }
+
     pub fn proof_and_public_inputs_from_string_field(
         str_proof: Vec<String>,
         str_public_inputs: Vec<String>,
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<ark_bn254::Fr>::new(
             str_proof
-                .into_iter()
-                .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_fr_str(s))
+                .collect::<eyre::Result<Vec<_>>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-            .collect();
+            .iter()
+            .map(|s| Self::parse_fr_str(s))
+            .collect::<eyre::Result<Vec<_>>>()?;
         Ok(HonkProofType::FieldElements(proof, public_inputs))
     }
     pub fn proof_and_public_inputs_from_string_u256(
@@ -129,14 +155,14 @@ impl HonkProofType {
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::new(
             str_proof
-                .into_iter()
-                .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_u256_str(s))
+                .collect::<eyre::Result<Vec<_>>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-            .collect();
+            .iter()
+            .map(|s| Self::parse_u256_str(s))
+            .collect::<eyre::Result<Vec<_>>>()?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 }
@@ -185,14 +211,7 @@ impl HonkProof<U256> {
     }
 
     pub fn from_buffer(buf: &[u8]) -> eyre::Result<Self> {
-        let res = buf
-            .chunks(32)
-            .map(|chunk| {
-                U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
-                ))
-            })
-            .collect::<Vec<U256>>();
+        let res = U256::from_buffer(buf)?;
         Ok(Self::new(res))
     }
 }
@@ -211,29 +230,26 @@ impl<F: Field> SerializeF<F> {
         let size = buf.len();
         let mut offset = 0;
 
-        // Check sizes
-        let num_elements = if size_included {
-            let num_elements =
-                (size - Self::VEC_LEN_BYTES as usize) / Self::FIELDSIZE_BYTES as usize;
-            if num_elements * Self::FIELDSIZE_BYTES as usize + Self::VEC_LEN_BYTES as usize != size
-            {
-                eyre::bail!("invalid length");
-            }
-
-            let read_num_elements = Self::read_u32(buf, &mut offset);
-            if read_num_elements != num_elements as u32 {
-                eyre::bail!("invalid length");
-            }
-            num_elements
+        // Validate the complete framing before reading a header or a field.
+        // Each extension-field element occupies all of its base-field limbs.
+        let payload_size = if size_included {
+            size.checked_sub(Self::VEC_LEN_BYTES as usize)
+                .ok_or_else(|| eyre::eyre!("invalid length"))?
         } else {
-            let num_elements = size / Self::FIELDSIZE_BYTES as usize;
-            if num_elements * Self::FIELDSIZE_BYTES as usize != size {
-                eyre::bail!("invalid length");
-            }
-            num_elements
+            size
         };
+        let field_size = Self::field_size();
+        if !payload_size.is_multiple_of(field_size) {
+            eyre::bail!("invalid length");
+        }
+        let num_elements = payload_size / field_size;
+        if size_included && Self::read_u32(buf, &mut offset) as usize != num_elements {
+            eyre::bail!("invalid length");
+        }
 
-        // v6 rejects non-canonical proof and public-input field encodings.
+        // Final BB rejects non-canonical field words at proof, public-input
+        // and VK byte boundaries. This vector entry point validates before
+        // calling the lower-level field construction helper.
         let modulus = F::BasePrimeField::MODULUS.to_bytes_be();
         for word in buf[offset..].chunks_exact(Self::FIELDSIZE_BYTES as usize) {
             eyre::ensure!(word < modulus.as_slice(), "non-canonical field encoding");
@@ -307,12 +323,8 @@ impl<F: Field> SerializeF<F> {
             for data in el.as_ref().iter().rev().cloned() {
                 Self::write_u64(buf, data);
             }
-
-            debug_assert_eq!(
-                buf.len() - prev_len,
-                Self::FIELDSIZE_BYTES as usize * F::extension_degree() as usize
-            );
         }
+        debug_assert_eq!(buf.len() - prev_len, Self::field_size());
     }
 
     pub fn read_field_element(buf: &[u8], offset: &mut usize) -> F {
@@ -607,14 +619,147 @@ impl U256 {
             .flat_map(|el| el.0.to_be_bytes::<32>().to_vec())
             .collect::<Vec<u8>>()
     }
-    pub fn from_buffer(buffer: &[u8]) -> Vec<Self> {
-        buffer
-            .chunks(32)
+    /// Parse a buffer of concatenated 32-byte big-endian `U256`s.
+    ///
+    /// `buf.len()` must be an exact multiple of 32: this is the untrusted-bytes
+    /// entry point for the Keccak proof/public-input path (fed straight from a
+    /// file handed to `co-noir verify`), so a short trailing chunk must be a
+    /// clean rejection, not the `try_into().expect(..)` panic this used to hit
+    /// (the Poseidon2 twin, `SerializeF::from_buffer`, already validates length
+    /// the same way).
+    pub fn from_buffer(buffer: &[u8]) -> eyre::Result<Vec<Self>> {
+        if !buffer.len().is_multiple_of(32) {
+            eyre::bail!(
+                "invalid length: buffer of {} bytes is not a whole number of 32-byte U256 elements",
+                buffer.len()
+            );
+        }
+        Ok(buffer
+            .chunks_exact(32)
             .map(|chunk| {
                 U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
+                    chunk
+                        .try_into()
+                        .expect("chunks_exact(32) guarantees 32-byte chunks"),
                 ))
             })
-            .collect::<Vec<U256>>()
+            .collect::<Vec<U256>>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HonkProof, SerializeF, U256, program_artifact_from_reader};
+    use ark_bn254::{Fq, Fq2, Fr};
+    use ark_ff::PrimeField;
+    use num_bigint::BigUint;
+
+    #[test]
+    fn field_buffers_reject_short_headers_and_partial_elements_without_panicking() {
+        for len in 0..100 {
+            let bytes = vec![0u8; len];
+            let result = std::panic::catch_unwind(|| SerializeF::<Fr>::from_buffer(&bytes, true));
+            assert!(result.is_ok(), "decoder panicked at length {len}");
+            // The zero prefix declares an empty vector, so only its four-byte
+            // encoding is valid, even if additional bytes form whole fields.
+            assert_eq!(result.unwrap().is_ok(), len == 4);
+            assert_eq!(HonkProof::<Fr>::from_buffer(&bytes).is_ok(), len % 32 == 0);
+            assert_eq!(
+                HonkProof::<U256>::from_buffer(&bytes).is_ok(),
+                len % 32 == 0
+            );
+        }
+    }
+
+    #[test]
+    fn extension_field_buffers_count_complete_elements() {
+        let mut bytes = vec![0u8; 64];
+        bytes[31] = 3;
+        bytes[63] = 5;
+        let expected = vec![Fq2::new(Fq::from(3u64), Fq::from(5u64))];
+        assert_eq!(
+            SerializeF::<Fq2>::from_buffer(&bytes, false).unwrap(),
+            expected
+        );
+        assert_eq!(SerializeF::<Fq2>::to_buffer(&expected, false), bytes);
+        let mut prefixed = 1u32.to_be_bytes().to_vec();
+        prefixed.extend_from_slice(&bytes);
+        assert_eq!(
+            SerializeF::<Fq2>::from_buffer(&prefixed, true).unwrap(),
+            expected
+        );
+        assert_eq!(SerializeF::<Fq2>::to_buffer(&expected, true), prefixed);
+        assert!(SerializeF::<Fq2>::from_buffer(&bytes[..32], false).is_err());
+    }
+
+    #[test]
+    fn proof_and_public_input_fields_reject_modulus_aliases() {
+        // BB's proof API validates words before its lower-level modular
+        // field codec. Both binary and JSON entry points must preserve this.
+        let modulus: num_bigint::BigUint = Fr::MODULUS.into();
+        for value in [BigUint::from(0u64), &modulus - 1u64] {
+            for text in [value.to_string(), format!("0x{value:x}")] {
+                assert!(
+                    super::HonkProofType::proof_and_public_inputs_from_string_field(
+                        vec![text.clone()],
+                        vec![text]
+                    )
+                    .is_ok()
+                );
+            }
+        }
+        for value in [0u64, 1, 42] {
+            let raw = (&modulus + num_bigint::BigUint::from(value)).to_bytes_be();
+            let mut bytes = vec![0u8; 32 - raw.len()];
+            bytes.extend(raw);
+            assert!(SerializeF::<Fr>::from_buffer(&bytes, false).is_err());
+            assert!(
+                super::HonkProofType::proof_and_public_inputs_from_buffer_field(&bytes, &[])
+                    .is_err()
+            );
+            assert!(
+                super::HonkProofType::proof_and_public_inputs_from_buffer_field(&[], &bytes)
+                    .is_err()
+            );
+            for text in [
+                (&modulus + value).to_string(),
+                format!("0x{:x}", &modulus + value),
+            ] {
+                assert!(
+                    super::HonkProofType::proof_and_public_inputs_from_string_field(
+                        vec![text.clone()],
+                        vec![]
+                    )
+                    .is_err()
+                );
+                assert!(
+                    super::HonkProofType::proof_and_public_inputs_from_string_field(
+                        vec![],
+                        vec![text]
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    /// A tiny Noir artifact (add3: assert x + y + z == 6) checked in as a fixture, so this test
+    /// does not depend on the gitignored generated artifacts under examples/test_vectors.
+    const ADD3_ARTIFACT: &[u8] = include_bytes!("../test_fixtures/add3.json");
+
+    #[test]
+    fn parses_program_artifact() {
+        let artifact = program_artifact_from_reader(ADD3_ARTIFACT).expect("artifact should parse");
+        let param_names: Vec<&str> = artifact
+            .abi
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(param_names, ["x", "y", "z"]);
+        assert_eq!(artifact.bytecode.functions.len(), 1);
+        let circuit = &artifact.bytecode.functions[0];
+        assert_eq!(circuit.opcodes.len(), 1);
+        assert_eq!(circuit.public_parameters.0.len(), 2);
     }
 }
