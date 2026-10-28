@@ -1,0 +1,3 @@
+Aztec v6.0.0-rc.6, commit 0df91ba1799012435c62c6108a0926b357fef88c
+Noir v1.0.0-rc.3, commit 5a7ee9bf5ed8973076df7bb0d2b723024db09ae7
+Generated with source-built bb prove --verifier_target {noir-recursive-no-zk,evm-no-zk} --write_vk --verify.

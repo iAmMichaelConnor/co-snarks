@@ -125,10 +125,8 @@ impl TlsNetwork {
                                             "timeout while connecting to party {other_id} at {addr}"
                                         );
                                     }
-                                } else {
-                                    if let Ok(stream) = TcpStream::connect(addr) {
-                                        break stream;
-                                    }
+                                } else if let Ok(stream) = TcpStream::connect(addr) {
+                                    break stream;
                                 }
                                 std::thread::sleep(Duration::from_millis(100));
                             };

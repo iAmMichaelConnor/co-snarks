@@ -39,8 +39,9 @@ pub(crate) fn mask_points<
     let offset_generator_element =
         BigGroup::from_witness(&native_offset_generator, driver, builder)?;
 
-    // Disallow offset generator G = ∞ (point at infinity) because the downstream ROM table logic relies on
-    // none of the points being at infinity.
+    // Disallow offset generator G = ∞: the downstream ROM table logic relies on none of the
+    // points being at infinity — a ∞ table entry would let a malicious prover skew the MSM
+    // output.
     offset_generator_element
         .is_infinity
         .assert_equal(&BoolCT::from(false), builder, driver);
@@ -57,7 +58,8 @@ pub(crate) fn mask_points<
 
         // Convert point into point + 2ⁱ⋅G_offset
         let masked = point.add(&mut running_point, builder, driver)?;
-        // Each masked point must also be finite, for the same ROM table reason as the offset generator above.
+        // Each masked point must also be finite, for the same ROM-table reason as the offset
+        // generator above.
         masked
             .is_infinity
             .assert_equal(&BoolCT::from(false), builder, driver);

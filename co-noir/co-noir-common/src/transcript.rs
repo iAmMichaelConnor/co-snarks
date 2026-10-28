@@ -31,12 +31,27 @@ pub trait TranscriptHasher<F: PrimeField> {
     fn convert_point<P: HonkCurve<F>>(element: &P::Affine) -> Vec<Self::DataType>;
     fn convert_scalarfield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::ScalarField;
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField;
+    /// Validate proof-supplied scalar words before reducing them to a field.
+    /// Field-valued transcripts already contain canonical field elements.
+    fn validate_scalarfield<P: HonkCurve<F>>(_elements: &[Self::DataType]) -> HonkProofResult<()> {
+        Ok(())
+    }
+
+    /// Validate the raw limbs of a base-field coordinate at the untrusted parse
+    /// boundary, BEFORE [`Self::convert_basefield_back`] recombines them. See
+    /// [`HonkCurve::validate_basefield_limbs`].
+    fn validate_basefield_limbs<P: HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()>;
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2];
     fn convert_challenge_into<P: HonkCurve<F>>(challenge: &F) -> Self::DataType;
     fn convert_destinationfield_to_scalarfield<P: HonkCurve<F>>(
         element: &Self::DataType,
     ) -> P::ScalarField;
     fn to_buffer(buffer: &[Self::DataType]) -> Vec<u8>;
+    /// Decode a trusted, well-formed fixture buffer. This convenience method
+    /// may panic on malformed input; verification entry points must use the
+    /// fallible `HonkProofType` / `HonkProof::from_buffer` loaders instead.
     fn from_buffer(buffer: &[u8]) -> Vec<Self::DataType>;
 }
 
@@ -74,6 +89,12 @@ impl<F: PrimeField, const T: usize, const R: usize, H: FieldHash<F, T> + Default
 
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField {
         P::convert_basefield_back(elements)
+    }
+
+    fn validate_basefield_limbs<P: HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()> {
+        P::validate_basefield_limbs(elements)
     }
 
     fn split_challenge(challenge: Self::DataType) -> [Self::DataType; 2] {
@@ -293,6 +314,7 @@ where
     ) -> HonkProofResult<P::ScalarField> {
         let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS)?;
 
+        H::validate_scalarfield::<P>(&elements)?;
         Ok(H::convert_scalarfield_back::<P>(&elements))
     }
 
@@ -302,8 +324,17 @@ where
     ) -> HonkProofResult<P::Affine> {
         let elements = self.receive_n_from_prover(label, H::NUM_BASEFIELD_ELEMENTS * 2)?;
 
-        // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
-        #[allow(clippy::chunks_exact_to_as_chunks)]
+        // Untrusted input: reject non-canonical base-field limb encodings before
+        // recombining. `convert_basefield_back` only `debug_assert!`s the limb
+        // bounds (compiled out in release) and reduces an out-of-range value mod
+        // the modulus, whereas bb rejects these in every build. Doing this here
+        // also makes the `is_zero` infinity test below bb-equivalent: a point is
+        // infinity iff the RAW frs are all zero (an encoding of the modulus,
+        // which reduces to 0, is now rejected rather than read as infinity).
+        for chunk in elements.chunks_exact(H::NUM_BASEFIELD_ELEMENTS) {
+            H::validate_basefield_limbs::<P>(chunk)?;
+        }
+
         let coords = elements
             .chunks_exact(H::NUM_BASEFIELD_ELEMENTS)
             .map(H::convert_basefield_back::<P>)
@@ -315,7 +346,8 @@ where
         let res = if x.is_zero() && y.is_zero() {
             P::Affine::zero()
         } else {
-            P::g1_affine_from_xy(x, y)
+            // Untrusted input: reject off-curve points cleanly instead of panicking.
+            P::g1_affine_from_xy_checked(x, y)?
         };
 
         Ok(res)
@@ -329,11 +361,13 @@ where
         let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS * n)?;
 
         // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
-        #[allow(clippy::chunks_exact_to_as_chunks)]
         let elements = elements
             .chunks_exact(H::NUM_SCALARFIELD_ELEMENTS)
-            .map(H::convert_scalarfield_back::<P>)
-            .collect();
+            .map(|elements| {
+                H::validate_scalarfield::<P>(elements)?;
+                Ok(H::convert_scalarfield_back::<P>(elements))
+            })
+            .collect::<HonkProofResult<Vec<_>>>()?;
 
         Ok(elements)
     }
@@ -346,23 +380,18 @@ where
         let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS * SIZE)?;
 
         // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
-        #[allow(clippy::chunks_exact_to_as_chunks)]
         for (src, des) in elements
             .chunks_exact(H::NUM_SCALARFIELD_ELEMENTS)
             .zip(res.iter_mut())
         {
+            H::validate_scalarfield::<P>(src)?;
             let el = H::convert_scalarfield_back::<P>(src);
             *des = el;
         }
         Ok(res)
     }
 
-    fn get_next_duplex_challenge_buffer<C: HonkCurve<F>>(
-        &mut self,
-        num_challenges: usize,
-    ) -> [H::DataType; 2] {
-        // challenges need at least 110 bits in them to match the presumed security parameter of the BN254 curve.
-        assert!(num_challenges <= 2);
+    fn get_next_challenge_hash<C: HonkCurve<F>>(&mut self) -> H::DataType {
         // Prevent challenge generation if this is the first challenge we're generating,
         // AND nothing was sent by the prover.
         if self.is_first_challenge {
@@ -394,15 +423,13 @@ where
             H::convert_destinationfield_to_scalarfield::<C>(&new_challenge);
         let new_challenge = H::convert_scalarfield_into::<C>(&new_challenge_as_field)[0];
 
-        let new_challenges = H::split_challenge(new_challenge);
-
         self.previous_challenge = new_challenge;
-        new_challenges
+        new_challenge
     }
 
     pub fn get_challenge<P: HonkCurve<F>>(&mut self, label: String) -> P::ScalarField {
         self.manifest.add_challenge(self.round_number, &[label]);
-        let challenge = self.get_next_duplex_challenge_buffer::<P>(1)[0];
+        let challenge = self.get_next_challenge_hash::<P>();
         let res = H::convert_destinationfield_to_scalarfield::<P>(&challenge);
         self.round_number += 1;
         res
@@ -413,20 +440,11 @@ where
         self.manifest.add_challenge(self.round_number, labels);
 
         let mut res = Vec::with_capacity(num_challenges);
-        for _ in 0..num_challenges >> 1 {
-            let challenge_buffer = self.get_next_duplex_challenge_buffer::<P>(2);
-            res.push(H::convert_destinationfield_to_scalarfield::<P>(
-                &challenge_buffer[0],
-            ));
-            res.push(H::convert_destinationfield_to_scalarfield::<P>(
-                &challenge_buffer[1],
-            ));
-        }
-        if num_challenges & 1 == 1 {
-            let challenge_buffer = self.get_next_duplex_challenge_buffer::<P>(1);
-            res.push(H::convert_destinationfield_to_scalarfield::<P>(
-                &challenge_buffer[0],
-            ));
+        // v6 squeezes one full field challenge per label. Each hash is chained
+        // into the next; two labels no longer share a split 127-bit hash.
+        for _ in 0..num_challenges {
+            let challenge = self.get_next_challenge_hash::<P>();
+            res.push(H::convert_destinationfield_to_scalarfield::<P>(&challenge));
         }
 
         self.round_number += 1;
@@ -520,5 +538,64 @@ impl Index<usize> for TranscriptManifest {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.manifest[&index]
+    }
+}
+
+#[cfg(test)]
+mod v6_known_answer_tests {
+    use super::*;
+    use ark_bn254::{G1Affine, G1Projective};
+
+    fn check_reference<H: TranscriptHasher<TranscriptFieldType>>(name: &str) {
+        // Generated by tests/fixtures/v6_transcript.cpp linked to the actual
+        // Aztec v6.0.0-rc.6 libraries at commit 0df91ba1799012435c62c6108a0926b357fef88c.
+        // Covers scalar/point codecs, multiple full-width squeezes, empty rounds,
+        // new round data, and Keccak's reduction before hash chaining.
+        let expected: Vec<_> = include_str!("../tests/fixtures/v6_transcript.txt")
+            .lines()
+            .filter_map(|line| {
+                let (hasher, value) = line.split_once(' ').unwrap();
+                if hasher != name {
+                    return None;
+                }
+                let integer =
+                    BigUint::parse_bytes(value.trim_start_matches("0x").as_bytes(), 16).unwrap();
+                Some(TranscriptFieldType::from_be_bytes_mod_order(
+                    &integer.to_bytes_be(),
+                ))
+            })
+            .collect();
+        assert_eq!(expected.len(), 7);
+        let mut transcript = Transcript::<TranscriptFieldType, H>::new();
+        transcript
+            .send_fr_to_verifier::<G1Projective>("data0".into(), TranscriptFieldType::from(1u64));
+        transcript
+            .send_fr_to_verifier::<G1Projective>("data1".into(), TranscriptFieldType::from(2u64));
+        transcript.send_point_to_verifier::<G1Projective>("point".into(), G1Affine::generator());
+        let mut actual =
+            transcript.get_challenges::<G1Projective>(&["eta".into(), "rom_logup_gamma".into()]);
+        actual.push(transcript.get_challenge::<G1Projective>("tail".into()));
+        transcript.send_fr_to_verifier::<G1Projective>(
+            "data2".into(),
+            TranscriptFieldType::from(0xdeadbeefu64),
+        );
+        transcript.send_fr_to_verifier::<G1Projective>("large".into(), -TranscriptFieldType::one());
+        actual.extend(transcript.get_challenges::<G1Projective>(&[
+            "alpha".into(),
+            "beta".into(),
+            "gamma".into(),
+        ]));
+        actual.push(transcript.get_challenge::<G1Projective>("delta".into()));
+        assert_eq!(actual, expected, "v6 C++ {name} transcript mismatch");
+    }
+
+    #[test]
+    fn v6_poseidon_full_width_challenges_match_cpp() {
+        check_reference::<Poseidon2Sponge>("poseidon2");
+    }
+
+    #[test]
+    fn v6_keccak_full_width_challenges_match_cpp() {
+        check_reference::<sha3::Keccak256>("keccak");
     }
 }

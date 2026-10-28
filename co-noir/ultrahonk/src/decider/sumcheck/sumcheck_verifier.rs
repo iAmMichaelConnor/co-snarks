@@ -1,6 +1,5 @@
 use super::SumcheckVerifierOutput;
 use crate::{
-    CONST_PROOF_SIZE_LOG_N,
     decider::{
         decider_verifier::DeciderVerifier,
         sumcheck::{
@@ -29,7 +28,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         &mut self,
         transcript: &mut Transcript<TranscriptFieldType, H>,
         has_zk: ZeroKnowledge,
-        padding_indicator_array: &[P::ScalarField],
+        virtual_log_n: usize,
     ) -> HonkVerifyResult<SumcheckVerifierOutput<P::ScalarField>> {
         tracing::trace!("Sumcheck verify");
 
@@ -50,9 +49,9 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             sum_check_round.target_total_sum += libra_total_sum * libra_challenge;
         }
 
-        let mut multivariate_challenge = Vec::with_capacity(CONST_PROOF_SIZE_LOG_N);
+        let mut multivariate_challenge = Vec::with_capacity(virtual_log_n);
 
-        for (round_idx, &padding_value) in padding_indicator_array.iter().enumerate() {
+        for round_idx in 0..virtual_log_n {
             tracing::trace!("Sumcheck verify round {}", round_idx);
             let round_univariate_label = format!("Sumcheck:univariate_{round_idx}");
 
@@ -62,16 +61,12 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
 
             let round_challenge = transcript.get_challenge::<P>(format!("Sumcheck:u_{round_idx}"));
 
-            let checked = sum_check_round.check_sum(&round_univariate, padding_value);
+            let checked = sum_check_round.check_sum(&round_univariate);
             verified = verified && checked;
 
             multivariate_challenge.push(round_challenge);
 
-            sum_check_round.compute_next_target_sum(
-                &round_univariate,
-                round_challenge,
-                padding_value,
-            );
+            sum_check_round.compute_next_target_sum(&round_univariate, round_challenge);
             gate_separators.partially_evaluate(round_challenge);
         }
 
@@ -102,15 +97,17 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 &self.memory.alphas,
             );
 
-        // For ZK Flavors: the evaluation of the Row Disabling Polynomial at the sumcheck challenge
+        // For ZK Flavors: the evaluation of the Row Disabling Polynomial at the sumcheck challenge.
+        // The row-disabling factor 1 - prod_{k>=2}(1 - u_k) is circuit-size independent and is
+        // evaluated over ALL (virtual) sumcheck challenges.
         let claimed_libra_evaluation = if has_zk == ZeroKnowledge::Yes {
             let libra_evaluation =
                 transcript.receive_fr_from_prover::<P>("Libra:claimed_evaluation".to_string())?;
             // No recursive flavor, otherwise we need to make some modifications to the following
 
-            let correcting_factor = RowDisablingPolynomial::evaluate_at_challenge_with_padding(
+            let correcting_factor = RowDisablingPolynomial::evaluate_at_challenge(
                 &multivariate_challenge,
-                padding_indicator_array,
+                multivariate_challenge.len(),
             );
 
             full_honk_purported_value =

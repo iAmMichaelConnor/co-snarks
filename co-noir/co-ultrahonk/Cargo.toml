@@ -25,6 +25,9 @@ rayon.workspace = true
 co-noir-common = { version = "0.2.0", path = "../co-noir-common" }
 
 [dev-dependencies]
+ark-serialize.workspace = true
+bytes.workspace = true
+mpc-net = { version = "0.5.0", path = "../../mpc-net", features = ["local"] }
 ark-bn254.workspace = true
 rand.workspace = true
 criterion.workspace = true

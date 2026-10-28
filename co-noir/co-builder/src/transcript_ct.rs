@@ -223,23 +223,11 @@ where
         self.add_element_frs_to_hash_buffer(label, elements);
     }
 
-    fn split_challenge<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
-        challenge: &FieldCT<C::ScalarField>,
-        builder: &mut GenericUltraCircuitBuilder<C, WT>,
-        driver: &mut WT,
-    ) -> eyre::Result<[FieldCT<C::ScalarField>; 2]> {
-        let lo = (<C::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize) / 2;
-        challenge.split_unique(lo, builder, driver)
-    }
-
-    fn get_next_duplex_challenge_buffer<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
+    fn get_next_challenge_hash<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
         &mut self,
-        num_challenges: usize,
         builder: &mut GenericUltraCircuitBuilder<C, WT>,
         driver: &mut WT,
-    ) -> eyre::Result<[FieldCT<C::ScalarField>; 2]> {
-        // challenges need at least 110 bits in them to match the presumed security parameter of the BN254 curve.
-        assert!(num_challenges <= 2);
+    ) -> eyre::Result<FieldCT<C::ScalarField>> {
         // Prevent challenge generation if this is the first challenge we're generating,
         // AND nothing was sent by the prover.
         if self.is_first_challenge {
@@ -265,11 +253,10 @@ where
         // oracle, removing the need to pre-hash to compress and then hash with a random oracle, as we previously did
         // with Pedersen and Blake3s.
         let new_challenge = H::hash(full_buffer, builder, driver)?;
-        let new_challenges = Self::split_challenge(&new_challenge, builder, driver)?;
 
         // update previous challenge buffer for next time we call this function
-        self.previous_challenge = new_challenge;
-        Ok(new_challenges)
+        self.previous_challenge = new_challenge.clone();
+        Ok(new_challenge)
     }
 
     pub fn get_challenge<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
@@ -280,7 +267,21 @@ where
     ) -> eyre::Result<FieldCT<C::ScalarField>> {
         self.manifest.add_challenge(self.round_number, &[label]);
         self.round_number += 1;
-        Ok(self.get_next_duplex_challenge_buffer(1, builder, driver)?[0].clone())
+        self.get_next_challenge_hash(builder, driver)
+    }
+
+    /// Derive the low 127-bit limb used by v6 recursive pairing aggregation.
+    /// The full hash remains in the transcript state. `split_unique` constrains
+    /// reconstruction, both limb ranges, and canonicality below the field modulus.
+    pub fn get_short_challenge<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
+        &mut self,
+        label: String,
+        builder: &mut GenericUltraCircuitBuilder<C, WT>,
+        driver: &mut WT,
+    ) -> eyre::Result<FieldCT<C::ScalarField>> {
+        let challenge = self.get_challenge(label, builder, driver)?;
+        let lo_bits = C::ScalarField::MODULUS_BIT_SIZE as usize / 2;
+        Ok(challenge.split_unique(lo_bits, builder, driver)?[0].clone())
     }
 
     pub fn get_challenges<WT: NoirWitnessExtensionProtocol<C::ScalarField>>(
@@ -293,14 +294,8 @@ where
         self.manifest.add_challenge(self.round_number, labels);
 
         let mut res = Vec::with_capacity(num_challenges);
-        for _ in 0..num_challenges >> 1 {
-            let challenge_buffer = self.get_next_duplex_challenge_buffer(2, builder, driver)?;
-            res.push(challenge_buffer[0].clone()); // We don't need to convert here as we are in a fr-builder setting
-            res.push(challenge_buffer[1].clone());
-        }
-        if num_challenges & 1 == 1 {
-            let challenge_buffer = self.get_next_duplex_challenge_buffer(1, builder, driver)?;
-            res.push(challenge_buffer[0].clone());
+        for _ in 0..num_challenges {
+            res.push(self.get_next_challenge_hash(builder, driver)?);
         }
 
         self.round_number += 1;
@@ -434,5 +429,52 @@ impl Index<usize> for TranscriptManifest {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.manifest[&index]
+    }
+}
+
+#[cfg(test)]
+mod short_challenge_tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use co_acvm::PlainAcvmSolver;
+    use co_noir_common::transcript::{Poseidon2Sponge, Transcript};
+
+    // Use witness inputs so Poseidon and the canonical split generate constraints.
+    #[test]
+    fn recursive_short_challenge_matches_v6_low_limb_and_preserves_full_hash_state() {
+        let mut builder = GenericUltraCircuitBuilder::<G1Projective, PlainAcvmSolver<Fr>>::new(1);
+        let mut driver = PlainAcvmSolver::default();
+        let mut recursive = TranscriptCT::<G1Projective, Poseidon2SpongeCT<G1Projective>>::new();
+        let mut native = Transcript::<Fr, Poseidon2Sponge>::new();
+        for value in [1u64, 2, 3, 42] {
+            let value = Fr::from(value);
+            let witness = FieldCT::from_witness(value, &mut builder);
+            recursive.add_element_frs_to_hash_buffer("input".into(), &[witness]);
+            native.send_fr_to_verifier::<G1Projective>("input".into(), value);
+        }
+        let full = native.get_challenge::<G1Projective>("recursion_separator".into());
+        let full_integer: BigUint = full.into();
+        let mask = (BigUint::from(1u64) << 127) - BigUint::from(1u64);
+        let expected = Fr::from(&full_integer & mask);
+        assert_ne!(
+            full, expected,
+            "fixture must distinguish full and short challenges"
+        );
+        let short = recursive
+            .get_short_challenge("recursion_separator".into(), &mut builder, &mut driver)
+            .unwrap();
+        assert!(!short.is_constant());
+        assert_eq!(short.get_value(&builder, &mut driver), expected);
+        assert_eq!(
+            recursive
+                .previous_challenge
+                .get_value(&builder, &mut driver),
+            full
+        );
+        let next_native = native.get_challenge::<G1Projective>("next".into());
+        let next_recursive = recursive
+            .get_challenge("next".into(), &mut builder, &mut driver)
+            .unwrap();
+        assert_eq!(next_recursive.get_value(&builder, &mut driver), next_native);
     }
 }

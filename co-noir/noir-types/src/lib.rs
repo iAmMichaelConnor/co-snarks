@@ -233,6 +233,12 @@ impl<F: Field> SerializeF<F> {
             num_elements
         };
 
+        // v6 rejects non-canonical proof and public-input field encodings.
+        let modulus = F::BasePrimeField::MODULUS.to_bytes_be();
+        for word in buf[offset..].chunks_exact(Self::FIELDSIZE_BYTES as usize) {
+            eyre::ensure!(word < modulus.as_slice(), "non-canonical field encoding");
+        }
+
         // Read data
         let mut res = Vec::with_capacity(num_elements);
         for _ in 0..num_elements {

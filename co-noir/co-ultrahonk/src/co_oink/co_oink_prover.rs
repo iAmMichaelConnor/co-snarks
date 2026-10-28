@@ -21,17 +21,14 @@ use super::types::ProverMemory;
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
-    constants::{NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR},
+    constants::{NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR, TRACE_OFFSET},
     crs::ProverCrs,
     honk_curve::HonkCurve,
     honk_proof::{HonkProofError, HonkProofResult, TranscriptFieldType},
-    keys::{
-        proving_key::ProvingKey, types::ActiveRegionData,
-        verification_key::VerifyingKeyBarretenberg,
-    },
+    keys::{proving_key::ProvingKey, verification_key::VerifyingKeyBarretenberg},
     mpc::NoirUltraHonkProver,
     polynomials::{
-        polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, NUM_MASKED_ROWS, Polynomial},
+        polynomial::{NUM_MASKED_ROWS, Polynomial},
         shared_polynomial::SharedPolynomial,
     },
     transcript::{Transcript, TranscriptHasher},
@@ -121,7 +118,6 @@ impl<
         tracing::trace!("add_ram_rom_memory_records_to_wire_4");
         // The memory record values are computed at the indicated indices as
         // w4 = w3 * eta^3 + w2 * eta^2 + w1 * eta + read_write_flag;
-
         debug_assert_eq!(
             proving_key.polynomials.witness.w_l().len(),
             proving_key.polynomials.witness.w_r().len()
@@ -242,15 +238,14 @@ impl<
             proving_key.circuit_size as usize
         );
 
-        self.memory
-            .lookup_inverses
-            .resize(proving_key.circuit_size as usize, Default::default());
-
         // const READ_TERMS: usize = 1;
         // const WRITE_TERMS: usize = 1;
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
-
+        self.memory.lookup_inverses.resize(
+            proving_key.circuit_size as usize,
+            T::ArithmeticShare::default(),
+        );
         let mut q_lookup_mul_read_tag = Vec::with_capacity(proving_key.circuit_size as usize);
         for (i, (q_lookup, lookup_read_tag)) in izip!(
             proving_key.polynomials.precomputed.q_lookup().iter(),
@@ -258,24 +253,34 @@ impl<
         )
         .enumerate()
         {
-            // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
-            // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
-            //     continue;
-            // }
+            // Disabled head rows contain independent masking randomness.
+            if i < TRACE_OFFSET {
+                self.memory.lookup_inverses[i] = T::ArithmeticShare::default();
+                q_lookup_mul_read_tag.push(T::ArithmeticShare::default());
+                continue;
+            }
             debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
-            let mul =
-                T::mul_with_public(C::ScalarField::one() - q_lookup, lookup_read_tag.to_owned());
-            q_lookup_mul_read_tag.push(T::add_with_public(
-                q_lookup.to_owned(),
-                mul,
-                self.state.id(),
-            ));
-
-            // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
+            let mul = T::mul_with_public(C::ScalarField::one() - q_lookup, *lookup_read_tag);
+            q_lookup_mul_read_tag.push(T::add_with_public(*q_lookup, mul, self.state.id()));
             let read_term = self.compute_lookup_term(proving_key, i);
             let write_term = self.compute_table_term(proving_key, i);
             self.memory.lookup_inverses[i] = T::mul_with_public(write_term, read_term);
         }
+
+        // Invert before applying the secret activity bit. Inversion opens a randomly
+        // scaled denominator and therefore reveals its zero positions. Including
+        // q_lookup + (1 - q_lookup) * read_tag here would disclose which private
+        // table entries were used on rows with q_lookup = 0.
+        // For a boolean activity bit s, inv0(d * s) = s * inv0(d), including d = 0.
+        // Outside the publicly disabled head, d is a product of terms containing
+        // gamma, so a zero denominator is a challenge collision rather than a
+        // deterministic encoding of the read tag.
+        CoUtils::batch_invert_leaking_zeros::<T, C, N>(
+            self.memory.lookup_inverses.as_mut(),
+            self.net,
+            self.state,
+        )?;
+
         self.memory.lookup_inverses = Polynomial::new(T::mul_many(
             self.memory.lookup_inverses.as_ref(),
             &q_lookup_mul_read_tag,
@@ -283,13 +288,6 @@ impl<
             self.state,
         )?);
 
-        // Compute inverse polynomial I in place by inverting the product at each row
-        // Note: zeroes are ignored as they are not used anyway
-        CoUtils::batch_invert_leaking_zeros::<T, C, N>(
-            self.memory.lookup_inverses.as_mut(),
-            self.net,
-            self.state,
-        )?;
         Ok(())
     }
 
@@ -304,11 +302,9 @@ impl<
         // Similarly, the denominator contains an extra σ⁰ᵢ = −(i+1) term that does not appear in the numerator.
         // We expect the values of W⁰ᵢ and W¹ᵢ to be equal to xᵢ.
         // The expected accumulated product would therefore be equal to
-
         //   ∏ᵢ (γ + W¹ᵢ + β⋅ID¹ᵢ)        ∏ᵢ (γ + xᵢ + β⋅(n+i) )
         //  -----------------------  =  ------------------------
         //   ∏ᵢ (γ + W⁰ᵢ + β⋅σ⁰ᵢ )        ∏ᵢ (γ + xᵢ - β⋅(i+1) )
-
         // At the start of the loop for each xᵢ where i = 0, 1, …, m-1,
         // we have
         //      numerator_acc   = γ + β⋅(n+i) = γ + β⋅n + β⋅i
@@ -318,7 +314,6 @@ impl<
         // Note: The public inputs may be offset from the 0th index of the wires, for example due to the inclusion of an
         // initial zero row or Goblin-style ECC op gates. Accordingly, the indices i in the above formulas are given by i =
         // [0, m-1] + offset, i.e. i = offset, 1 + offset, …, m - 1 + offset.
-
         let mut num = C::ScalarField::one();
         let mut denom = C::ScalarField::one();
         let separator = PERMUTATION_ARGUMENT_VALUE_SEPARATOR;
@@ -352,24 +347,19 @@ impl<
         beta: &C::ScalarField,
         gamma: &C::ScalarField,
         output_len: usize,
-        active_region_data: &ActiveRegionData,
+        start_idx: usize,
     ) -> HonkProofResult<Vec<T::ArithmeticShare>> {
         debug_assert!(shared1.len() >= output_len);
         debug_assert!(shared2.len() >= output_len);
         debug_assert!(pub1.len() >= output_len);
         debug_assert!(pub2.len() >= output_len);
-        let has_active_ranges = active_region_data.size() > 0;
 
         // We drop the last element since it is not needed for the grand product
         let mut mul1 = Vec::with_capacity(output_len);
         let mut mul2 = Vec::with_capacity(output_len);
 
         for i in 0..output_len {
-            let idx = if has_active_ranges {
-                active_region_data.get_idx(i)
-            } else {
-                i
-            };
+            let idx = i + start_idx;
             let id = state.id();
             let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
             let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
@@ -383,24 +373,17 @@ impl<
     fn compute_grand_product(&mut self, proving_key: &ProvingKey<T, C>) -> HonkProofResult<()> {
         tracing::trace!("compute grand product");
 
-        let has_active_ranges = proving_key.active_region_data.size() > 0;
-
         // Barretenberg uses multithreading here
-
         // Set the domain over which the grand product must be computed. This may be less than the dyadic circuit size, e.g
         // the permutation grand product does not need to be computed beyond the index of the last active wire
         let domain_size = proving_key.final_active_wire_idx + 1;
 
-        let active_domain_size = if has_active_ranges {
-            proving_key.active_region_data.size()
-        } else {
-            domain_size
-        };
+        let gp_start = TRACE_OFFSET;
+        let active_domain_size = domain_size - gp_start;
 
         // In Barretenberg circuit size is taken from the q_c polynomial
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
-
         // TACEO TODO could batch those 4 as well
         let denom1 = Self::batched_grand_product_num_denom(
             self.net,
@@ -412,7 +395,7 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
         )?;
         let denom2 = Self::batched_grand_product_num_denom(
             self.net,
@@ -424,7 +407,7 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
         )?;
         let num1 = Self::batched_grand_product_num_denom(
             self.net,
@@ -436,7 +419,7 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
         )?;
         let num2 = Self::batched_grand_product_num_denom(
             self.net,
@@ -448,7 +431,7 @@ impl<
             &self.memory.challenges.beta,
             &self.memory.challenges.gamma,
             active_domain_size - 1,
-            &proving_key.active_region_data,
+            gp_start,
         )?;
 
         // TACEO TODO could batch here as well
@@ -457,7 +440,6 @@ impl<
 
         // Step (2)
         // Compute the accumulating product of the numerator and denominator terms.
-
         // TACEO TODO could batch here as well
         // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds
         let numerator = CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?;
@@ -474,37 +456,9 @@ impl<
             proving_key.circuit_size as usize,
             T::ArithmeticShare::default(),
         );
-        // The grand product's boundary value of 1 sits at the trace's start row (the first row
-        // after the disabled/reserved head rows), i.e. NUM_DISABLED_ROWS_IN_SUMCHECK + NUM_ZERO_ROWS.
-        self.memory.z_perm[NUM_DISABLED_ROWS_IN_SUMCHECK as usize + NUM_ZERO_ROWS] =
-            T::promote_to_trivial_share(self.state.id(), C::ScalarField::one());
-
-        // Compute grand product values corresponding only to the active regions of the trace
+        // v6 reserves the head rows and starts the grand product at TRACE_OFFSET.
         for (i, mul) in mul.into_iter().enumerate() {
-            let idx = if has_active_ranges {
-                proving_key.active_region_data.get_idx(i + 1)
-            } else {
-                i + 1
-            };
-            self.memory.z_perm[idx] = mul
-        }
-
-        // Final step: If active/inactive regions have been specified, the value of the grand product in the inactive
-        // regions have not yet been set. The polynomial takes an already computed constant value across each inactive
-        // region (since no copy constraints are present there) equal to the value of the grand product at the first index
-        // of the subsequent active region.
-        if has_active_ranges {
-            for i in 0..domain_size {
-                for j in 0..proving_key.active_region_data.num_ranges() - 1 {
-                    let previous_range_end = proving_key.active_region_data.get_range(j).1;
-                    let next_range_start = proving_key.active_region_data.get_range(j + 1).0;
-                    // Set the value of the polynomial if the index falls in an inactive region
-                    if i >= previous_range_end && i < next_range_start {
-                        self.memory.z_perm[i] = self.memory.z_perm[next_range_start];
-                        break;
-                    }
-                }
-            }
+            self.memory.z_perm[gp_start + i + 1] = mul;
         }
 
         Ok(())
@@ -558,7 +512,6 @@ impl<
 
         // Commit to the first three wire polynomials of the instance
         // We only commit to the fourth wire polynomial after adding memory records
-
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
             self.mask_polynomial(proving_key.polynomials.witness.w_l_mut())?;
@@ -607,6 +560,43 @@ impl<
     }
 
     // Compute sorted witness-table accumulator and commit to the resulting polynomials.
+    fn add_rom_logup_inverses_to_wire_4(
+        &mut self,
+        proving_key: &ProvingKey<T, C>,
+    ) -> HonkProofResult<()> {
+        if proving_key.rom_logup_records.is_empty() {
+            return Ok(());
+        }
+        let id = self.state.id();
+        // The record list contains every ROM table/read row, including unused
+        // table entries. It is public circuit metadata. Never filter by the
+        // secret multiplicity or include it in these opened masked denominators.
+        let mut denominators = proving_key
+            .rom_logup_records
+            .iter()
+            .map(|row| {
+                let row = *row as usize;
+                let value = T::mul_with_public(
+                    self.memory.challenges.eta_1,
+                    proving_key.polynomials.witness.w_r()[row],
+                );
+                let denom = T::add(proving_key.polynomials.witness.w_l()[row], value);
+                T::add_with_public(
+                    self.memory.challenges.rom_logup_gamma
+                        + self.memory.challenges.eta_2
+                            * proving_key.polynomials.precomputed.q_c()[row],
+                    denom,
+                    id,
+                )
+            })
+            .collect::<Vec<_>>();
+        CoUtils::batch_invert::<T, C, N>(&mut denominators, self.net, self.state)?;
+        for (row, inverse) in proving_key.rom_logup_records.iter().zip(denominators) {
+            self.memory.w_4[*row as usize] = inverse;
+        }
+        Ok(())
+    }
+
     fn commit_to_lookup_counts_and_w4(
         &mut self,
         transcript: &mut Transcript<TranscriptFieldType, H>,
@@ -615,12 +605,16 @@ impl<
     ) -> HonkProofResult<()> {
         tracing::trace!("executing sorted list accumulator round");
 
-        let eta = transcript.get_challenge::<C>("eta".to_string());
+        let challenges =
+            transcript.get_challenges::<C>(&["eta".to_string(), "rom_logup_gamma".to_string()]);
+        let eta = challenges[0];
+        self.memory.challenges.rom_logup_gamma = challenges[1];
         self.memory.challenges.eta_1 = eta;
         self.memory.challenges.eta_2 = eta * eta;
         self.memory.challenges.eta_3 = eta * eta * eta;
 
         self.add_ram_rom_memory_records_to_wire_4(proving_key);
+        self.add_rom_logup_inverses_to_wire_4(proving_key)?;
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
@@ -686,7 +680,6 @@ impl<
         self.compute_logderivative_inverses(proving_key)?;
 
         // We moved the committing and opening of the lookup inverses to be at the same time as z_perm
-
         // Round is done since ultra_honk is no goblin flavor
         Ok(())
     }
@@ -739,14 +732,18 @@ impl<
 
         // Add circuit size public input size and public inputs to transcript
         Self::send_vk_hash_and_public_inputs(transcript, proving_key, verifying_key)?;
+
         self.commit_to_masking_poly(transcript, proving_key, crs)?;
+
         // Compute first three wire commitments
         self.commit_to_wires(transcript, proving_key, crs)?;
+
         // Compute sorted list accumulator and commitment
         self.commit_to_lookup_counts_and_w4(transcript, proving_key, crs)?;
 
         // Fiat-Shamir: beta & gamma
         self.commit_to_logderiv_inverses(transcript, proving_key)?;
+
         // Compute grand product(s) and commitments.
         self.commit_to_z_perm(transcript, proving_key, crs)?;
 
@@ -756,3 +753,7 @@ impl<
         Ok(self.memory)
     }
 }
+
+#[cfg(test)]
+#[path = "lookup_privacy_tests.rs"]
+mod lookup_privacy_tests;

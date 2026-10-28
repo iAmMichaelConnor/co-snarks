@@ -18,11 +18,11 @@ use co_noir_common::constants::{
     DECIDER_PROOF_LENGTH, NUM_ALL_ENTITIES, NUM_SMALL_IPA_EVALUATIONS, NUM_ZERO_ROWS,
     OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS, OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
     PUBLIC_INPUTS_SIZE, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
-    ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
+    ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK, ULTRA_VERIFICATION_KEY_LENGTH,
 };
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
-use co_noir_common::honk_proof::HonkProofResult;
+use co_noir_common::honk_proof::{HonkProofError, HonkProofResult};
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::mpc::plain::PlainUltraHonkDriver;
 use co_noir_common::polynomials::entities::{PrecomputedEntities, WITNESS_ENTITIES_SIZE};
@@ -60,6 +60,9 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         builder: &mut GenericUltraCircuitBuilder<C, T>,
         driver: &mut T,
     ) -> HonkProofResult<Self> {
+        if elements.len() != ULTRA_VERIFICATION_KEY_LENGTH {
+            return Err(HonkProofError::InvalidKeyLength);
+        }
         let log_circuit_size = elements[0].clone();
         let num_public_inputs = elements[1].clone();
         let pub_inputs_offset = elements[2].clone();
@@ -110,6 +113,10 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         crs: &ProverCrs<C>,
         driver: &mut T,
     ) -> eyre::Result<PairingPoints<C, T>> {
+        // Check before opening witnesses or constructing a mock proof.
+        if input.key.len() != ULTRA_VERIFICATION_KEY_LENGTH {
+            return Err(HonkProofError::InvalidKeyLength.into());
+        }
         let is_honk = input.proof_type == ProofType::Honk as u32;
         let is_honk_zk = input.proof_type == ProofType::HonkZk as u32;
         assert!(
@@ -122,6 +129,24 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         } else {
             ZeroKnowledge::Yes
         };
+
+        // The ACIR-side proof excludes the inner circuit's public inputs but includes the
+        // pairing-point object (PUBLIC_INPUTS_SIZE frs). Error out early on a mis-specified
+        // proof size in the noir program, like bb does.
+        let expected_proof_size = PUBLIC_INPUTS_SIZE
+            + if has_zk == ZeroKnowledge::Yes {
+                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK
+            } else {
+                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS
+            };
+        assert_eq!(
+            input.proof.len(),
+            expected_proof_size,
+            "create_honk_recursion_constraints: ACIR proof size mismatch."
+        );
+
+        // Decide disclosure before predicate conversion or any recursive computation.
+        // A false predicate does not authorize opening its guarded inputs.
 
         // Currently no IPA support
 

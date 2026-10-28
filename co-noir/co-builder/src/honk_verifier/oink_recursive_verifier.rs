@@ -15,7 +15,6 @@ use co_noir_common::{
     honk_curve::HonkCurve,
     honk_proof::{HonkProofResult, TranscriptFieldType},
 };
-use num_bigint::BigUint;
 
 pub(crate) struct OinkRecursiveVerifier;
 
@@ -29,6 +28,7 @@ impl OinkRecursiveVerifier {
         transcript: &mut TranscriptCT<C, H>,
         builder: &mut GenericUltraCircuitBuilder<C, T>,
         has_zk: ZeroKnowledge,
+        num_public_inputs: usize,
         driver: &mut T,
     ) -> HonkProofResult<()> {
         let vk_hash = verification_key
@@ -44,36 +44,13 @@ impl OinkRecursiveVerifier {
 
         transcript.add_element_frs_to_hash_buffer("vk_hash".to_string(), &[vk_hash]);
 
-        let num_public_inputs = verification_key
-            .vk_and_hash
-            .vk
-            .num_public_inputs
-            .get_value(builder, driver);
-
-        let num_public_inputs: BigUint = T::get_public(&num_public_inputs).expect(
-            "Failed to get the number of public inputs as a public value during recursive verification key verification",
-        ).into();
-
-        let num_public_inputs_usize = *num_public_inputs
-            .to_u64_digits()
-            .first()
-            .expect("Should fit into 64 bits") as usize;
-        let mut public_inputs = Vec::with_capacity(num_public_inputs_usize);
-
-        for i in 0..num_public_inputs_usize {
-            let pi = transcript.receive_fr_from_prover(format!("public_input_{i}"))?;
-            public_inputs.push(pi);
-        }
-
-        verification_key
-            .vk_and_hash
-            .vk
-            .num_public_inputs
-            .assert_equal(
-                &FieldCT::from(C::ScalarField::from(num_public_inputs_usize as u64)),
-                builder,
-                driver,
-            );
+        let public_inputs = Self::receive_public_inputs(
+            &verification_key.vk_and_hash.vk.num_public_inputs,
+            num_public_inputs,
+            transcript,
+            builder,
+            driver,
+        )?;
 
         let mut commitments = WitnessCommitments::<C::ScalarField, T>::default();
 
@@ -96,7 +73,14 @@ impl OinkRecursiveVerifier {
             transcript.receive_point_from_prover("w_o".to_owned(), builder, driver)?;
 
         // Get eta challenge and derive eta, eta² and eta³ used in memory and lookup arguments.
-        let eta = transcript.get_challenge("eta".to_string(), builder, driver)?;
+        let [eta, rom_logup_gamma] = transcript
+            .get_challenges(
+                &["eta".to_string(), "rom_logup_gamma".to_string()],
+                builder,
+                driver,
+            )?
+            .try_into()
+            .unwrap();
         let eta_1 = eta.clone();
         let eta_2 = eta.multiply(&eta, builder, driver)?;
         let eta_3 = eta_2.multiply(&eta, builder, driver)?;
@@ -147,12 +131,37 @@ impl OinkRecursiveVerifier {
             eta_1,
             eta_2,
             eta_3,
+            rom_logup_gamma,
             public_input_delta,
         };
         verification_key.witness_commitments = commitments;
         verification_key.alphas[0] = alpha;
         verification_key.public_inputs = public_inputs;
         Ok(())
+    }
+
+    fn receive_public_inputs<
+        C: HonkCurve<TranscriptFieldType>,
+        T: NoirWitnessExtensionProtocol<C::ScalarField>,
+        H: TranscriptHasherCT<C>,
+    >(
+        vk_count: &FieldCT<C::ScalarField>,
+        num_public_inputs: usize,
+        transcript: &mut TranscriptCT<C, H>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> HonkProofResult<Vec<FieldCT<C::ScalarField>>> {
+        let expected = C::ScalarField::from(num_public_inputs as u64);
+        // An invalid public header must not determine an allocation or loop bound.
+        if T::get_public(&vk_count.get_value(builder, driver))
+            .is_some_and(|value| value != expected)
+        {
+            return Err(co_noir_common::honk_proof::HonkProofError::CorruptedKey);
+        }
+        vk_count.assert_equal(&FieldCT::from(expected), builder, driver);
+        (0..num_public_inputs)
+            .map(|i| transcript.receive_fr_from_prover(format!("public_input_{i}")))
+            .collect()
     }
 
     /**
@@ -233,5 +242,98 @@ impl OinkRecursiveVerifier {
         }
 
         Ok(numerator.divide(&denominator, builder, driver)?)
+    }
+}
+
+#[cfg(test)]
+mod public_input_count_tests {
+    use super::*;
+    use crate::transcript_ct::Poseidon2SpongeCT;
+    use ark_bn254::{Fr, G1Projective};
+    use co_acvm::PlainAcvmSolver;
+    #[test]
+    fn recursive_public_input_count_rejects_zero_and_oversized_headers() {
+        use ark_ff::{One, Zero};
+        for count in [Fr::zero(), Fr::one(), Fr::from(u64::MAX), -Fr::one()] {
+            let mut builder =
+                GenericUltraCircuitBuilder::<G1Projective, PlainAcvmSolver<Fr>>::new_minimal(0);
+            let mut driver = PlainAcvmSolver::default();
+            let count = FieldCT::from_witness(count, &mut builder);
+            let mut transcript =
+                TranscriptCT::<G1Projective, Poseidon2SpongeCT<G1Projective>>::new_verifier(
+                    vec![FieldCT::default(); 8],
+                );
+            assert!(matches!(
+                OinkRecursiveVerifier::receive_public_inputs(
+                    &count,
+                    8,
+                    &mut transcript,
+                    &mut builder,
+                    &mut driver
+                ),
+                Err(co_noir_common::honk_proof::HonkProofError::CorruptedKey)
+            ));
+        }
+    }
+    #[test]
+    fn recursive_public_input_count_binds_shared_headers_without_opening_them() {
+        use co_acvm::{Rep3AcvmSolver, Rep3AcvmType};
+        use mpc_core::protocols::rep3::{conversion::A2BType, share_field_elements};
+        use mpc_net::local::LocalNetwork;
+        let values = [8u64, 0, u64::MAX].map(Fr::from);
+        let shares = share_field_elements(&values, &mut rand::thread_rng());
+        let workers: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                std::thread::spawn(move || {
+                    let mut driver =
+                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                    let mut results = Vec::new();
+                    for share in shares {
+                        let mut builder =
+                            GenericUltraCircuitBuilder::<G1Projective, _>::new_minimal(0);
+                        let count =
+                            FieldCT::from_witness(Rep3AcvmType::Shared(share), &mut builder);
+                        // A prior arithmetic use stands in for the VK hash, which
+                        // is computed before the count is tied to the fixed shape.
+                        let square = count.multiply(&count, &mut builder, &mut driver).unwrap();
+                        let mut transcript = TranscriptCT::<
+                            G1Projective,
+                            Poseidon2SpongeCT<G1Projective>,
+                        >::new_verifier(
+                            vec![FieldCT::default(); 8]
+                        );
+                        let public_inputs = OinkRecursiveVerifier::receive_public_inputs(
+                            &count,
+                            8,
+                            &mut transcript,
+                            &mut builder,
+                            &mut driver,
+                        )
+                        .unwrap();
+                        assert_eq!(public_inputs.len(), 8);
+                        assert_eq!(
+                            count.get_value(&builder, &mut driver),
+                            Rep3AcvmType::Public(Fr::from(8u64))
+                        );
+                        match square.get_value(&builder, &mut driver) {
+                            Rep3AcvmType::Shared(square) => results.push(square.a),
+                            _ => panic!("prior shared arithmetic output must stay shared"),
+                        }
+                    }
+                    results
+                })
+            })
+            .collect();
+        let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        for (case, original) in values.into_iter().enumerate() {
+            let square: Fr = results.iter().map(|party| party[case]).sum();
+            assert_eq!(square, original * original);
+            // The correct count satisfies its earlier arithmetic gate. An
+            // incorrect count now conflicts with that gate, so fixing the
+            // host allocation does not discard the witness binding.
+            assert_eq!(square == Fr::from(64u64), case == 0);
+        }
     }
 }

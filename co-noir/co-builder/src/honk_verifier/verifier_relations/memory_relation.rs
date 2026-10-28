@@ -21,13 +21,15 @@ pub(crate) struct MemoryRelationEvals<F: PrimeField> {
     pub(crate) r3: FieldCT<F>,
     pub(crate) r4: FieldCT<F>,
     pub(crate) r5: FieldCT<F>,
+    pub(crate) r6: FieldCT<F>,
+    pub(crate) r7: FieldCT<F>,
 }
 
-impl_relation_evals!(MemoryRelationEvals, r0, r1, r2, r3, r4, r5);
+impl_relation_evals!(MemoryRelationEvals, r0, r1, r2, r3, r4, r5, r6, r7);
 pub(crate) struct MemoryRelation;
 
 impl MemoryRelation {
-    pub(crate) const NUM_RELATIONS: usize = 6;
+    pub(crate) const NUM_RELATIONS: usize = 8;
 }
 
 impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for MemoryRelation {
@@ -294,6 +296,103 @@ impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for MemoryRelation {
 
         accumulator.r0 = accumulator.r0.add(&memory_identity, builder, driver);
 
+        let one = FieldCT::from(C::ScalarField::one());
+        let one_minus_q1 = one.sub(q_1, builder, driver);
+        let table = q_2.multiply(&one_minus_q1, builder, driver)?;
+        let read = q_4.multiply(&one_minus_q1, builder, driver)?;
+        let any = table.add(&read, builder, driver);
+        // Preserve BB's left-to-right gate allocation as well as its equation:
+        // equivalent regrouping changes the recursive circuit's verification key.
+        let eta_value = w_2.multiply(eta, builder, driver)?;
+        let index_and_value = w_1.add(&eta_value, builder, driver);
+        let eta2_array = q_c.multiply(eta_two, builder, driver)?;
+        let denom = index_and_value.add(&eta2_array, builder, driver).add(
+            &relation_parameters.rom_logup_gamma,
+            builder,
+            driver,
+        );
+        let inverse_selector = q_memory_by_scaling.multiply(&any, builder, driver)?;
+        let check = w_4
+            .multiply(&denom, builder, driver)?
+            .sub(&one, builder, driver);
+        let inverse_check = inverse_selector.multiply(&check, builder, driver)?;
+        accumulator.r6.add_assign(&inverse_check, builder, driver);
+
+        // This sum must not be multiplied by the gate-separator scaling factor.
+        let count = table.multiply(w_3, builder, driver)?;
+        let sum = read
+            .sub(&count, builder, driver)
+            .multiply(w_4, builder, driver)?
+            .multiply(q_memory, builder, driver)?;
+        accumulator.r7.add_assign(&sum, builder, driver);
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod rom_logup_tests {
+    use super::*;
+    use crate::prelude::UltraCircuitBuilder;
+    use ark_ff::{Field, Zero};
+    use co_acvm::PlainAcvmSolver;
+    use co_noir_common::types::Bn254G1;
+    type Fr = ark_bn254::Fr;
+
+    fn evaluate(read: bool, count: u64, array: u64, weight: u64, bad_inverse: bool) -> (Fr, Fr) {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        let mut input = AllEntities::<FieldCT<Fr>, FieldCT<Fr>>::default();
+        *input.precomputed.q_memory_mut() = FieldCT::from_witness(Fr::one(), &mut builder);
+        if read {
+            *input.precomputed.q_4_mut() = FieldCT::from_witness(Fr::one(), &mut builder);
+        } else {
+            *input.precomputed.q_r_mut() = FieldCT::from_witness(Fr::one(), &mut builder);
+        }
+        *input.precomputed.q_c_mut() = FieldCT::from_witness(Fr::from(array), &mut builder);
+        *input.witness.w_l_mut() = FieldCT::from_witness(Fr::from(2u64), &mut builder);
+        *input.witness.w_r_mut() = FieldCT::from_witness(Fr::from(5u64), &mut builder);
+        *input.witness.w_o_mut() = FieldCT::from_witness(Fr::from(count), &mut builder);
+        let inverse = if bad_inverse {
+            Fr::zero()
+        } else {
+            (Fr::from(28u64) + Fr::from(9u64) * Fr::from(array))
+                .inverse()
+                .unwrap()
+        };
+        *input.witness.w_4_mut() = FieldCT::from_witness(inverse, &mut builder);
+        let parameters = RelationParameters {
+            eta_1: FieldCT::from_witness(Fr::from(3u64), &mut builder),
+            eta_2: FieldCT::from_witness(Fr::from(9u64), &mut builder),
+            eta_3: FieldCT::from_witness(Fr::from(27u64), &mut builder),
+            rom_logup_gamma: FieldCT::from_witness(Fr::from(11u64), &mut builder),
+            ..Default::default()
+        };
+        let mut acc = MemoryRelationEvals::default();
+        <MemoryRelation as Relation<Bn254G1>>::accumulate_evaluations(
+            &mut acc,
+            &input,
+            &parameters,
+            &FieldCT::from(Fr::from(weight)),
+            &mut builder,
+            &mut driver,
+        )
+        .unwrap();
+        (
+            acc.r6.get_value(&builder, &mut driver),
+            acc.r7.get_value(&builder, &mut driver),
+        )
+    }
+
+    #[test]
+    fn rom_logup_recursive_evaluations_preserve_weights_and_array_binding() {
+        let table = evaluate(false, 2, 0, 3, false);
+        let read_a = evaluate(true, 0, 0, 7, false);
+        let read_b = evaluate(true, 0, 0, 13, false);
+        assert!(table.0.is_zero() && read_a.0.is_zero() && read_b.0.is_zero());
+        assert!((table.1 + read_a.1 + read_b.1).is_zero());
+        assert_eq!(evaluate(true, 0, 0, 1, false).1, read_a.1);
+        assert_eq!(evaluate(true, 0, 0, 7, true).0, -Fr::from(7u64));
+        assert!(!(evaluate(false, 1, 0, 1, false).1 + evaluate(true, 0, 1, 1, false).1).is_zero());
     }
 }

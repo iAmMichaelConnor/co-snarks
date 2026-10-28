@@ -9,6 +9,7 @@ use co_noir::UltraHonk;
 use co_noir_common::crs::parse::CrsParser;
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_proof::TranscriptFieldType;
+use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::transcript::{Poseidon2Sponge, TranscriptHasher};
 use co_noir_common::types::Bn254G1;
 use co_noir_common::types::ZeroKnowledge;
@@ -105,4 +106,70 @@ fn add3_test_poseidon2sponge() {
 
     plain_test::<Poseidon2Sponge>(PROOF_FILE, CIRCUIT_FILE, WITNESS_FILE, ZeroKnowledge::No);
     plain_test::<Poseidon2Sponge>(PROOF_FILE, CIRCUIT_FILE, WITNESS_FILE, ZeroKnowledge::Yes);
+}
+
+fn vk_kat_test(
+    vk_file: &str,
+    vk_to_buffer: fn(&VerifyingKeyBarretenberg<Bn254G1>) -> Vec<u8>,
+    circuit_file: &str,
+    witness_file: &str,
+) {
+    let constraint_system =
+        constraint_system_from_reader(File::open(circuit_file).unwrap()).unwrap();
+    let witness = noir_types::witness_from_reader(File::open(witness_file).unwrap()).unwrap();
+    let mut driver = PlainAcvmSolver::new();
+
+    let recursion_crs_size = constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>();
+    let recursion_crs = if recursion_crs_size > 0 {
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, recursion_crs_size, ZeroKnowledge::No)
+            .unwrap()
+    } else {
+        ProverCrs::default()
+    };
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness,
+        HonkRecursion::UltraHonk,
+        &recursion_crs,
+        &mut driver,
+    )
+    .unwrap();
+    let crs_size = builder.compute_dyadic_size();
+    let crs = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+        CRS_PATH_G1,
+        CRS_PATH_G2,
+        crs_size,
+        ZeroKnowledge::No,
+    )
+    .unwrap();
+    let (prover_crs, verifier_crs) = crs.split();
+
+    let (_proving_key, verifying_key) = builder
+        .create_keys::<Bn254>(prover_crs.into(), verifier_crs, &mut driver)
+        .unwrap();
+
+    let vk_u8 = vk_to_buffer(&verifying_key.inner_vk);
+    let read_vk_u8 = std::fs::read(vk_file).unwrap();
+    assert_eq!(vk_u8, read_vk_u8);
+}
+
+#[test]
+fn recursion_vk_kat() {
+    vk_kat_test(
+        "../test_vectors/noir/recursion/kat/recursion_vk_with_pos",
+        VerifyingKeyBarretenberg::<Bn254G1>::to_buffer,
+        "../test_vectors/noir/recursion/kat/recursion.json",
+        "../test_vectors/noir/recursion/kat/recursion.gz",
+    );
+}
+
+#[test]
+fn recursion_zk_vk_kat() {
+    vk_kat_test(
+        "../test_vectors/noir/recursion_zk/kat/recursion_zk_vk_with_pos",
+        VerifyingKeyBarretenberg::<Bn254G1>::to_buffer,
+        "../test_vectors/noir/recursion_zk/kat/recursion_zk.json",
+        "../test_vectors/noir/recursion_zk/kat/recursion_zk.gz",
+    );
 }

@@ -286,6 +286,7 @@ pub(crate) struct RomRecord<F: Clone> {
     pub(crate) value_column1_witness: u32,
     pub(crate) value_column2_witness: u32,
     pub(crate) index: F,
+    pub(crate) is_read: bool,
     pub(crate) record_witness: u32,
     pub(crate) gate_index: usize,
 }
@@ -341,6 +342,8 @@ pub(crate) struct RomTranscript<F: Clone> {
     // + The value in the memory slot
     // + The actual index value
     pub(crate) records: Vec<RomRecord<F>>,
+    // Single-value arrays use LogUp; pair arrays retain the sorted argument.
+    pub(crate) use_logup: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]

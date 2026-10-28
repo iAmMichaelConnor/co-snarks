@@ -1,7 +1,7 @@
 use super::types::{PolyF, PolyG, PolyGShift};
 use crate::{
-    CONST_PROOF_SIZE_LOG_N, NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_OPENING_CLAIMS,
-    SMALL_IPA_CLAIM_COMMITMENT_INDICES,
+    CONST_PROOF_SIZE_LOG_N, NUM_LIBRA_COMMITMENTS, NUM_SMALL_IPA_EVALUATIONS,
+    NUM_SMALL_IPA_OPENING_CLAIMS,
     decider::{
         decider_verifier::DeciderVerifier,
         types::{ClaimedEvaluations, VerifierCommitments},
@@ -62,7 +62,10 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         virtual_log_n: u32,
         transcript: &mut Transcript<TranscriptFieldType, H>,
     ) -> HonkVerifyResult<Vec<P::Affine>> {
-        let fold_commitments: Vec<_> = (0..virtual_log_n - 1)
+        // saturating_sub: virtual_log_n is >= 1 in practice (the VK loader rejects
+        // log_circuit_size = 0), but guard the subtraction so a stray 0 yields an empty range
+        // rather than an unsigned underflow to u32::MAX.
+        let fold_commitments: Vec<_> = (0..virtual_log_n.saturating_sub(1))
             .map(|i| transcript.receive_point_from_prover::<P>(format!("Gemini:FOLD_{}", i + 1)))
             .collect::<Result<_, _>>()?;
         Ok(fold_commitments)
@@ -163,9 +166,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let gemini_eval_challenge_powers =
             Self::powers_of_evaluation_challenge(gemini_evaluation_challenge, virtual_log_n);
 
-        // The SmallSubgroupIPA evaluations G(r), A(g*r), A(r), A(1) = 0, Q(r). The boundary value A(1) = 0 is not
-        // part of the transcript.
-        let mut libra_evaluations = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
+        let mut libra_evaluations = [P::ScalarField::zero(); NUM_SMALL_IPA_EVALUATIONS];
         if has_zk == ZeroKnowledge::Yes {
             libra_evaluations[0] =
                 transcript.receive_fr_from_prover::<P>("Libra:concatenation_eval".to_string())?;
@@ -173,7 +174,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 .receive_fr_from_prover::<P>("Libra:shifted_grand_sum_eval".to_string())?;
             libra_evaluations[2] =
                 transcript.receive_fr_from_prover::<P>("Libra:grand_sum_eval".to_string())?;
-            libra_evaluations[4] =
+            libra_evaluations[3] =
                 transcript.receive_fr_from_prover::<P>("Libra:quotient_eval".to_string())?;
         }
 
@@ -531,9 +532,9 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
                 .inverse()
                 .expect("Non-zero denominator");
 
-            // The prover now honestly computes and sends real (non-zeroed) fold constants for virtual
-            // rounds too, matching the zero-extended `batched_evaluation` seed, so the recursion must
-            // always propagate the genuinely computed value here (no indicator-based freeze).
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
             eval_pos_prev = eval_pos;
             fold_pos_evaluations.push(eval_pos_prev);
         }
@@ -567,7 +568,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         scalars: &mut Vec<P::ScalarField>,
         constant_term_accumulator: &mut P::ScalarField,
         libra_commitments: &[P::Affine; NUM_LIBRA_COMMITMENTS],
-        libra_evaluations: &[P::ScalarField; NUM_SMALL_IPA_OPENING_CLAIMS],
+        libra_evaluations: &[P::ScalarField; NUM_SMALL_IPA_EVALUATIONS],
         gemini_evaluation_challenge: &P::ScalarField,
         shplonk_batching_challenge_powers: &[P::ScalarField],
         shplonk_evaluation_challenge: &P::ScalarField,
@@ -578,36 +579,52 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             commitments.push(commitment);
         }
 
-        // Compute Shplonk denominators 1 / (z - x_i) for the opening points {r, g*r, r, 1, r} and invert them
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
+        let mut batching_scalars = [P::ScalarField::zero(); NUM_SMALL_IPA_OPENING_CLAIMS];
         let subgroup_generator = P::get_subgroup_generator();
-        let inv_z_minus_challenge = (*shplonk_evaluation_challenge - *gemini_evaluation_challenge)
+
+        // Compute Shplonk denominators and invert them
+        denominators[0] = (*shplonk_evaluation_challenge - *gemini_evaluation_challenge)
             .inverse()
             .expect("non-zero");
-        let inv_z_minus_shifted = (*shplonk_evaluation_challenge
+        denominators[1] = (*shplonk_evaluation_challenge
             - subgroup_generator * *gemini_evaluation_challenge)
             .inverse()
             .expect("non-zero");
-        let inv_z_minus_one = (*shplonk_evaluation_challenge - P::ScalarField::one())
+        denominators[2] = denominators[0];
+        denominators[3] = (*shplonk_evaluation_challenge - P::ScalarField::one())
             .inverse()
             .expect("non-zero");
-        let denominators = [
-            inv_z_minus_challenge,
-            inv_z_minus_shifted,
-            inv_z_minus_challenge,
-            inv_z_minus_one,
-            inv_z_minus_challenge,
+        denominators[4] = denominators[0];
+
+        // The evaluations of the five claims; slot 3 is the fixed boundary value A(1) = 0.
+        let claim_evaluations = [
+            libra_evaluations[0],
+            libra_evaluations[1],
+            libra_evaluations[2],
+            P::ScalarField::zero(),
+            libra_evaluations[3],
         ];
 
-        // Compute the per-claim batching scalars and group them by commitment, so that claims referring to the same
-        // commitment are folded into a single scalar mul
-        let mut grouped_scalars = [P::ScalarField::zero(); NUM_LIBRA_COMMITMENTS];
+        // Compute the scalars to be multiplied against the commitments [libra_concatenated], [grand_sum], and
+        // [libra_quotient]
         for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
             let scaling_factor =
                 denominators[idx] * shplonk_batching_challenge_powers[2 * virtual_log_n + idx];
-            grouped_scalars[SMALL_IPA_CLAIM_COMMITMENT_INDICES[idx]] -= scaling_factor;
-            *constant_term_accumulator += scaling_factor * libra_evaluations[idx];
+            batching_scalars[idx] = -scaling_factor;
+            *constant_term_accumulator += scaling_factor * claim_evaluations[idx];
         }
-        scalars.extend(grouped_scalars);
+
+        // To save scalar muls, group the batching scalars of the claims backed by the grand sum
+        // commitment (A(g*r), A(r), and A(1))
+        scalars.reserve(NUM_LIBRA_COMMITMENTS);
+        scalars.push(batching_scalars[0]);
+        scalars.push(batching_scalars[1] + batching_scalars[2] + batching_scalars[3]);
+        scalars.push(batching_scalars[4]);
         Ok(())
     }
 
@@ -649,8 +666,7 @@ impl<P: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let concatenated_at_r = libra_evaluations[0];
         let grand_sum_shifted_eval = libra_evaluations[1];
         let grand_sum_eval = libra_evaluations[2];
-        // libra_evaluations[3] is the boundary value A(1) = 0, enforced by the PCS opening
-        let quotient_eval = libra_evaluations[4];
+        let quotient_eval = libra_evaluations[3];
 
         // Compute the evaluation of
         // L_1(X) * A(X) + (X - 1/g) (A(gX) - A(X) - F(X) G(X)) + L_{|H|}(X)(A(X) - s) - Z_H(X) * Q(X)

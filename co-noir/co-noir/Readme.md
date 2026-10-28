@@ -1,21 +1,27 @@
 # UltraHonk
 
-This crate uses our rewrite of Atec's UltraHonk prover and verifier in Rust (see `co-snarks/co-noir/ultrahonk`). It is compatible with Barretenberg v5.0.0. To get Barretenberg with this version, use the following commands:
+This crate implements Aztec's UltraHonk prover and verifier in Rust. The integration targets Barretenberg **v6.0.0-rc.6** (commit `0df91ba1799012435c62c6108a0926b357fef88c`) and its Noir submodule **v1.0.0-rc.3** (commit `5a7ee9bf5ed8973076df7bb0d2b723024db09ae7`). Tool pins live in [`versions.env`](../../../versions.env).
+
+Build the independent Barretenberg oracle from the exact source checkout:
 
 ```bash
 git clone https://github.com/AztecProtocol/aztec-packages.git
 cd aztec-packages
-git checkout tags/v5.0.0
-```
-
-To compile Barretenberg, one can use:
-
-```bash
+git checkout --detach 0df91ba1799012435c62c6108a0926b357fef88c
 cd barretenberg/cpp
-mkdir build
-cmake --preset default
-cmake --build --preset default --parallel --target bb
+cmake --preset default -DAVM=OFF -DBB_LITE=OFF
+cmake --build build --target bb -j 8
 ```
+
+Source builds report a placeholder version. Record the source commit and build options beside the binary; the version string alone does not identify a proof-compatible oracle.
+
+Existing v5 proofs, verification keys, and serialized proving-key shares are not compatible with this protocol. Regenerate them with the paired compiler and prover. Proving-key shares use positional bincode without a version envelope; old caches must not be passed to the v6 CLI.
+
+## Building this workspace
+
+- Requires **Rust ≥ 1.90** — pinned by `rust-toolchain.toml` at the repo root, so rustup selects (and if needed installs) the right toolchain automatically.
+- The scripts in `examples/` (`run_full_poseidon.sh`, `compare.sh`, `compare_mpc.sh`, …) must be run **from the `examples/` directory** — all their relative paths (`test_vectors/`, `configs/`, `../../co-noir-common/…`) assume it.
+- Warning: `compare.sh`/`compare_mpc.sh` run `cleanup.sh` after every test case, which deletes proof/witness artifacts in `examples/` and `test_vectors/` — don't keep hand-made artifacts there while they run.
 
 The prover in this repository, ``UltraHonk::prove`` in `src/prover.rs`, is compatible with `UltraProver_<UltraFlavor>/UltraProver_<UltraZKFlavor>/UltraProver_<UltraKeccakFlavor>/UltraProver_<UltraKeccakZKFlavor>` (depending on the used transcript hasher) in Barretenberg. Similar, the ``Ultrahonk::verify`` verifier in `src/verifier.rs` is compatible with `UltraVerifier_<UltraFlavor>/UltraVerifier_<UltraZKFlavor>/UltraVerifier_<UltraKeccakFlavor>/UltraVerifier_<UltraKeccakZKFlavor>` in Barretenberg.
 
@@ -27,7 +33,7 @@ First, one needs to create the circuit file from a Noir source code. Your Noir p
 - `Nargo.toml`: Similar to Cargo.toml, just for Noir projects.
 - `Prover.toml`: The inputs for the main function in `src/main.nr` used in proof generation.
 
-To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0-rc.5.
+To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0-rc.3.
 Then you can just execute the following command:
 
 ```bash

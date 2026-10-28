@@ -1,6 +1,6 @@
 use ark_ec::short_weierstrass::Affine;
-use ark_ec::{AffineRepr, CurveGroup, short_weierstrass};
-use ark_ff::{AdditiveGroup, BigInt, Field, One, PrimeField};
+use ark_ec::{CurveGroup, short_weierstrass};
+use ark_ff::{BigInt, Field, One, PrimeField};
 use ark_grumpkin::GrumpkinConfig;
 use num_bigint::BigUint;
 use std::str::FromStr;
@@ -30,14 +30,33 @@ pub trait HonkCurve<Des: PrimeField>: CurveGroup<BaseField: PrimeField> {
     /// Panics if the coordinates are not a point of the prime-order subgroup.
     fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine;
 
-    /// Computes an MSM with [`taceo_ark_algebra::msm::msm_unchecked`], chopping the slices to the
-    /// shorter of the two lengths.
+    /// Computes an MSM using the upstream algebra backend.
     fn fast_msm(bases: &[Self::Affine], scalars: &[Self::ScalarField]) -> Self;
+    /// Fallible variant of [`Self::g1_affine_from_xy`] for the untrusted
+    /// deserialization boundary (proof / VK parsing): reconstruct the affine
+    /// point without the on-curve `assert!` in ark-ec's `Affine::new`, then
+    /// reject a point that is not on the curve (or not in the prime-order
+    /// subgroup) with a clean error instead of panicking.
+    fn g1_affine_from_xy_checked(
+        x: Self::BaseField,
+        y: Self::BaseField,
+    ) -> crate::honk_proof::HonkProofResult<Self::Affine>;
+    fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField);
 
-    /// The coordinates of a G1 point, `(0, 0)` for the point at infinity.
-    fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField) {
-        p.xy()
-            .unwrap_or((Self::BaseField::ZERO, Self::BaseField::ZERO))
+    /// Validate that the raw field-element limbs of a serialized base-field
+    /// coordinate form a *canonical* encoding, BEFORE they are recombined by
+    /// [`Self::convert_basefield_back`]. This mirrors barretenberg's
+    /// `field_conversion` assertions, which abort in EVERY build; co-noir's
+    /// recombination only `debug_assert!`s the limb bounds (compiled out in
+    /// release) and then silently reduces an out-of-range value mod the
+    /// base-field modulus. Without this check a release-build verifier would
+    /// accept a non-canonical encoding that bb rejects — a verifier-set
+    /// divergence and a loss of encoding uniqueness. Call it at the untrusted
+    /// parse boundary (proof transcript / VK loading). The default is a no-op
+    /// for curves whose `convert_basefield_back` is an identity mapping and so
+    /// has no limb structure to validate.
+    fn validate_basefield_limbs(_frs: &[Des]) -> crate::honk_proof::HonkProofResult<()> {
+        Ok(())
     }
 
     fn convert_scalarfield_into(src: &Self::ScalarField) -> Vec<Des>;
@@ -80,6 +99,27 @@ impl HonkCurve<ark_bn254::Fr> for ark_ec::short_weierstrass::Projective<ark_bn25
 
     fn fast_msm(bases: &[Self::Affine], scalars: &[Self::ScalarField]) -> Self {
         taceo_ark_algebra::msm::msm_unchecked(bases, scalars)
+    }
+
+    fn g1_affine_from_xy_checked(
+        x: ark_bn254::Fq,
+        y: ark_bn254::Fq,
+    ) -> crate::honk_proof::HonkProofResult<ark_bn254::G1Affine> {
+        let p = ark_bn254::G1Affine::new_unchecked(x, y);
+        if p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve() {
+            Ok(p)
+        } else {
+            Err(crate::honk_proof::HonkProofError::PointNotOnCurve)
+        }
+    }
+
+    fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField) {
+        (p.x, p.y)
+    }
+
+    fn validate_basefield_limbs(frs: &[ark_bn254::Fr]) -> crate::honk_proof::HonkProofResult<()> {
+        debug_assert_eq!(frs.len(), Self::NUM_BASEFIELD_ELEMENTS);
+        validate_bn254_fq_limbs(&frs[0], &frs[1])
     }
 
     fn convert_scalarfield_into(src: &ark_bn254::Fr) -> Vec<ark_bn254::Fr> {
@@ -174,6 +214,22 @@ impl HonkCurve<ark_bn254::Fr> for short_weierstrass::Projective<GrumpkinConfig> 
 
     fn fast_msm(bases: &[Self::Affine], scalars: &[Self::ScalarField]) -> Self {
         taceo_ark_algebra::msm::msm_unchecked(bases, scalars)
+    }
+
+    fn g1_affine_from_xy_checked(
+        x: Self::BaseField,
+        y: Self::BaseField,
+    ) -> crate::honk_proof::HonkProofResult<Self::Affine> {
+        let p = ark_grumpkin::Affine::new_unchecked(x, y);
+        if p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve() {
+            Ok(p)
+        } else {
+            Err(crate::honk_proof::HonkProofError::PointNotOnCurve)
+        }
+    }
+
+    fn g1_affine_to_xy(p: &Self::Affine) -> (Self::BaseField, Self::BaseField) {
+        (p.x, p.y)
     }
 
     fn convert_scalarfield_into(src: &Self::ScalarField) -> Vec<ark_bn254::Fr> {
@@ -293,6 +349,37 @@ fn bn254_fq_to_fr_rev(res0: &ark_bn254::Fr, res1: &ark_bn254::Fr) -> ark_bn254::
 
     let value = res0 + (res1 << (NUM_LIMB_BITS * 2));
     ark_bn254::Fq::from(value)
+}
+
+/// Release-safe validation of a two-limb `ark_bn254::Fq` coordinate encoding at
+/// the untrusted parse boundary. [`bn254_fq_to_fr_rev`] only guards the limb
+/// bounds with `debug_assert!` (compiled out in release) and then reduces an
+/// oversized value mod p, so a malicious prover could craft a non-canonical
+/// encoding that a release-build co-noir verifier accepts but bb rejects. This
+/// mirrors barretenberg's `field_conversion.hpp` assertions: `res0 < 2^136`,
+/// `res1 < 2^118`, and the recombined `value < Fq::MODULUS`.
+fn validate_bn254_fq_limbs(
+    res0: &ark_bn254::Fr,
+    res1: &ark_bn254::Fr,
+) -> crate::honk_proof::HonkProofResult<()> {
+    use crate::honk_proof::HonkProofError;
+
+    let res0 = BigUint::from(*res0);
+    let res1 = BigUint::from(*res1);
+
+    if res0 >= (BigUint::one() << (NUM_LIMB_BITS * 2)) {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    }
+    if res1 >= (BigUint::one() << (TOTAL_BITS - NUM_LIMB_BITS * 2)) {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    }
+
+    let value = res0 + (res1 << (NUM_LIMB_BITS * 2));
+    if value >= BigUint::from(ark_bn254::Fq::MODULUS) {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    }
+
+    Ok(())
 }
 
 fn convert_grumpkin_fr_to_bn254_frs(val: &ark_grumpkin::Fr) -> (ark_bn254::Fr, ark_bn254::Fr) {

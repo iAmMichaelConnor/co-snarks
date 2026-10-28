@@ -269,3 +269,19 @@ fn zk_recursion_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
 }
+
+#[test]
+fn rom_logup_shared_proofs_match_v6_oracle() {
+    for zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        proof_test::<Poseidon2Sponge>(
+            "rom_shared",
+            zk,
+            "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_pos",
+        );
+        proof_test::<Keccak256>(
+            "rom_shared",
+            zk,
+            "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_kec",
+        );
+    }
+}

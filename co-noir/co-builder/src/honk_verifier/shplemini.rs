@@ -17,8 +17,7 @@ use co_noir_common::{
 };
 use co_noir_common::{
     constants::{
-        NUM_SMALL_IPA_OPENING_CLAIMS, SHIFTED_WITNESS_ENTITIES_SIZE,
-        SMALL_IPA_CLAIM_COMMITMENT_INDICES,
+        NUM_SMALL_IPA_EVALUATIONS, NUM_SMALL_IPA_OPENING_CLAIMS, SHIFTED_WITNESS_ENTITIES_SIZE,
     },
     polynomials::entities::PRECOMPUTED_ENTITIES_SIZE,
     types::ZeroKnowledge,
@@ -102,9 +101,7 @@ impl ShpleminiVerifier {
             );
         }
 
-        // The SmallSubgroupIPA evaluations G(r), A(g*r), A(r), A(1) = 0, Q(r). The boundary value A(1) = 0 is not
-        // part of the transcript.
-        let mut libra_evaluations: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
+        let mut libra_evaluations: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS] =
             array::from_fn(|_| FieldCT::default());
         if has_zk == ZeroKnowledge::Yes {
             libra_evaluations[0] =
@@ -113,7 +110,7 @@ impl ShpleminiVerifier {
                 transcript.receive_fr_from_prover("Libra:shifted_grand_sum_eval".to_string())?;
             libra_evaluations[2] =
                 transcript.receive_fr_from_prover("Libra:grand_sum_eval".to_string())?;
-            libra_evaluations[4] =
+            libra_evaluations[3] =
                 transcript.receive_fr_from_prover("Libra:quotient_eval".to_string())?;
         }
 
@@ -403,9 +400,9 @@ impl ShpleminiVerifier {
             )?;
             eval_pos = eval_pos.multiply(&tmp, builder, driver)?;
 
-            // The prover now honestly computes and sends real (non-zeroed) fold constants for virtual
-            // rounds too, matching the zero-extended `batched_evaluation` seed, so the recursion must
-            // always propagate the genuinely computed value here (no indicator-based freeze).
+            // Current `eval_pos` A₍ₗ₋₁₎(r²⁽ˡ⁻¹⁾) becomes `eval_pos_prev` in the round l-2. All
+            // (virtual) rounds are processed uniformly: the prover honestly computes and commits
+            // the constant fold polynomials of the virtual rounds, so no padding gating is needed.
             eval_pos_prev = eval_pos;
             fold_pos_evaluations.push(eval_pos_prev.clone());
         }
@@ -517,9 +514,7 @@ impl ShpleminiVerifier {
             let rhs = scaling_factor_pos.multiply(&gemini_pos_evaluations[j], builder, driver)?;
             constant_term_accumulator.add_assign(&lhs.add(&rhs, builder, driver), builder, driver);
 
-            // Place the scaling factor to the 'scalars' vector. The prover sends real (non-zeroed)
-            // fold constants for virtual/padding rounds too, so the recursion must always propagate
-            // the genuinely computed value here (no indicator-based freeze), matching bb exactly.
+            // Place the scaling factor to the 'scalars' vector
             scalars.push(
                 scaling_factor_neg
                     .add(&scaling_factor_pos, builder, driver)
@@ -616,7 +611,7 @@ impl ShpleminiVerifier {
         scalars: &mut Vec<FieldCT<C::ScalarField>>,
         constant_term_accumulator: &mut FieldCT<C::ScalarField>,
         libra_commitments: &[BigGroup<C::ScalarField, T>; NUM_LIBRA_COMMITMENTS],
-        libra_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS],
+        libra_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS],
         gemini_evaluation_challenge: &FieldCT<C::ScalarField>,
         shplonk_batching_challenge_powers: &[FieldCT<C::ScalarField>],
         shplonk_evaluation_challenge: &FieldCT<C::ScalarField>,
@@ -626,15 +621,23 @@ impl ShpleminiVerifier {
         // Add Libra commitments to the vector of commitments
         commitments.extend_from_slice(libra_commitments);
 
-        // Compute Shplonk denominators 1 / (z - x_i) for the opening points {r, g*r, r, 1, r}
+        // Compute corresponding scalars and the correction to the constant term. The five opening
+        // claims (in transcript order) are G(r), A(g*r), A(r), A(1) = 0, Q(r), where the fourth is
+        // the untransmitted boundary opening of the grand sum polynomial at 1 (its evaluation is
+        // hardcoded to zero and enforced by the batched PCS opening).
+        let mut denominators: [FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS] =
+            array::from_fn(|_| FieldCT::default());
+
+        // Compute Shplonk denominators and invert them
         let one = FieldCT::from(C::ScalarField::ONE);
-        let inv_z_minus_challenge = one.divide(
+        denominators[0] = one.divide(
             &shplonk_evaluation_challenge.sub(gemini_evaluation_challenge, builder, driver),
             builder,
             driver,
         )?;
+
         let subgroup_generator = FieldCT::from(C::get_subgroup_generator());
-        let inv_z_minus_shifted = one.divide(
+        denominators[1] = one.divide(
             &shplonk_evaluation_challenge.sub(
                 &subgroup_generator.multiply(gemini_evaluation_challenge, builder, driver)?,
                 builder,
@@ -643,21 +646,32 @@ impl ShpleminiVerifier {
             builder,
             driver,
         )?;
-        let inv_z_minus_one = one.divide(
+
+        denominators[2] = denominators[0].clone();
+        denominators[3] = one.divide(
             &shplonk_evaluation_challenge.sub(&one, builder, driver),
             builder,
             driver,
         )?;
-        let denominators = [
-            &inv_z_minus_challenge,
-            &inv_z_minus_shifted,
-            &inv_z_minus_challenge,
-            &inv_z_minus_one,
-            &inv_z_minus_challenge,
+        denominators[4] = denominators[0].clone();
+
+        // The evaluations of the five claims (in transcript order G(r), A(g*r), A(r), A(1), Q(r));
+        // slot 3 is the fixed boundary value A(1) = 0, which is not transmitted.
+        let claim_evaluations = [
+            libra_evaluations[0].clone(),
+            libra_evaluations[1].clone(),
+            libra_evaluations[2].clone(),
+            FieldCT::from(C::ScalarField::ZERO),
+            libra_evaluations[3].clone(),
         ];
 
-        // Compute the per-claim batching scalars and group them by commitment, so that claims referring to the same
-        // commitment are folded into a single scalar mul
+        // Compute the scalars to be multiplied against the commitments. Per-claim batching scalars
+        // are grouped by backing commitment (bb: `SMALL_IPA_CLAIMS[idx].commitment_index`), so the
+        // claims backed by the grand sum commitment (A(g*r), A(r), A(1)) fold into a single scalar.
+        // The grouping subtraction is emitted INSIDE the loop, between the nu-power multiplication
+        // and the evaluation multiplication, to match bb's gate emission order
+        // (`batch_small_ipa_opening_claims` in commitment_schemes/shplonk/shplemini.hpp).
+        const COMMITMENT_INDEX: [usize; NUM_SMALL_IPA_OPENING_CLAIMS] = [0, 1, 1, 1, 2];
         let mut grouped_scalars: [FieldCT<C::ScalarField>; NUM_LIBRA_COMMITMENTS] =
             array::from_fn(|_| FieldCT::from(C::ScalarField::ZERO));
         for idx in 0..NUM_SMALL_IPA_OPENING_CLAIMS {
@@ -666,15 +680,18 @@ impl ShpleminiVerifier {
                 builder,
                 driver,
             )?;
-            let grouped = &mut grouped_scalars[SMALL_IPA_CLAIM_COMMITMENT_INDICES[idx]];
-            *grouped = grouped.sub(&scaling_factor, builder, driver);
+            grouped_scalars[COMMITMENT_INDEX[idx]] =
+                grouped_scalars[COMMITMENT_INDEX[idx]].sub(&scaling_factor, builder, driver);
             *constant_term_accumulator = constant_term_accumulator.add(
-                &scaling_factor.multiply(&libra_evaluations[idx], builder, driver)?,
+                &scaling_factor.multiply(&claim_evaluations[idx], builder, driver)?,
                 builder,
                 driver,
             );
         }
-        scalars.extend(grouped_scalars);
+
+        for scalar in grouped_scalars {
+            scalars.push(scalar);
+        }
 
         Ok(())
     }
@@ -687,7 +704,7 @@ impl ShpleminiVerifier {
         C: HonkCurve<TranscriptFieldType>,
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
     >(
-        libra_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS],
+        libra_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS],
         gemini_evaluation_challenge: &FieldCT<C::ScalarField>,
         multilinear_challenge: &[FieldCT<C::ScalarField>],
         inner_product_eval_claim: &FieldCT<C::ScalarField>,
@@ -775,7 +792,7 @@ impl ShpleminiVerifier {
         C: HonkCurve<TranscriptFieldType>,
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
     >(
-        small_ipa_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_OPENING_CLAIMS],
+        small_ipa_evaluations: &[FieldCT<C::ScalarField>; NUM_SMALL_IPA_EVALUATIONS],
         small_ipa_eval_challenge: &FieldCT<C::ScalarField>,
         challenge_polynomial: &[FieldCT<C::ScalarField>],
         inner_product_eval_claim: &FieldCT<C::ScalarField>,
@@ -799,8 +816,7 @@ impl ShpleminiVerifier {
         let concatenated_at_r = &small_ipa_evaluations[0];
         let grand_sum_shifted_eval = &small_ipa_evaluations[1];
         let grand_sum_eval = &small_ipa_evaluations[2];
-        // small_ipa_evaluations[3] is the boundary value A(1) = 0, enforced by the PCS opening
-        let quotient_eval = &small_ipa_evaluations[4];
+        let quotient_eval = &small_ipa_evaluations[3];
 
         // Compute the evaluation of L_1(X) * A(X) + (X - 1/g) (A(gX) - A(X) - F(X) G(X)) + L_{|H|}(X)(A(X) - s) -
         // Z_H(X) * Q(X)
@@ -838,12 +854,12 @@ impl ShpleminiVerifier {
         let zero = FieldCT::from(C::ScalarField::ZERO);
         diff.assert_equal(&zero, builder, driver);
 
-        // TODO(https://github.com/AztecProtocol/barretenberg/issues/1186).
-        // Insecure pattern.
-        // TACEO TODO: We could also ignore the result?
+        // This host-side diagnostic is available only for public witnesses.
+        // Shared values remain private; the equality constraint above is the
+        // verifier check and rejects an invalid witness in either case.
         Ok(T::get_public(&diff.get_value(builder, driver))
-            .expect("Is this ever shared?")
-            .is_zero())
+            .map(|value| value.is_zero())
+            .unwrap_or(true))
     }
 
     fn compute_batched_barycentric_evaluations<

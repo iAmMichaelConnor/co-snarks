@@ -41,6 +41,7 @@ impl SumcheckVerifier {
         relation_parameters: &RelationParameters<FieldCT<C::ScalarField>>,
         alphas: &[FieldCT<C::ScalarField>; NUM_SUBRELATIONS - 1],
         gate_challenges: &[FieldCT<C::ScalarField>],
+        virtual_log_n: usize,
         builder: &mut GenericUltraCircuitBuilder<C, T>,
         has_zk: ZeroKnowledge,
         driver: &mut T,
@@ -63,8 +64,10 @@ impl SumcheckVerifier {
         };
 
         // MegaRecursiveFlavor does not have ZK
-        let mut multivariate_challenge = Vec::with_capacity(VIRTUAL_LOG_N);
-        for round_idx in 0..VIRTUAL_LOG_N {
+        // All (virtual) sumcheck rounds are processed uniformly: the prover computes honest round
+        // univariates for the virtual rounds, so no padding indicator is needed.
+        let mut multivariate_challenge = Vec::with_capacity(virtual_log_n);
+        for round_idx in 0..virtual_log_n {
             let round_univariate = transcript
                 .receive_n_from_prover(format!("Sumcheck:univariate_{round_idx}"), SIZE)?;
 
@@ -75,9 +78,7 @@ impl SumcheckVerifier {
 
             SumcheckVerifier::check_sum(&round_univariate, target_sum, builder, driver)?;
 
-            // Update the target sum for the next round. Matches bb's `compute_next_target_sum`,
-            // which unconditionally sets target_total_sum for every round (real or virtual/padding) —
-            // bb has no round-skipping/freezing indicator here at all.
+            // Update the target sum for the next round
             *target_sum = FieldCT::evaluate_with_domain_start::<{ SIZE }, _, _>(
                 &round_univariate.try_into().unwrap(),
                 &round_challenge,
@@ -103,8 +104,9 @@ impl SumcheckVerifier {
         let claimed_evaluations =
             AllEntities::from_elements(witness.to_vec(), precomputed.to_vec());
 
-        // Evaluate the Honk relation at the sumcheck challenge; for ZK flavors every relation is scaled by the
-        // row-disabling factor (1 - \sum L_i)(u), where the sum is over the rows where all relations are disabled.
+        // Evaluate the Honk relation at the point (u_0, ..., u_{d-1}) using claimed evaluations of prover polynomials.
+        // For ZK Flavors, the row-disabling factor is applied inside, per subrelation (bb's
+        // emission order), and the evaluation is then corrected by full_libra_purported_value.
         let mut full_honk_purported_value = compute_full_relation_purported_value(
             &claimed_evaluations,
             &mut AllRelationsEvals::default(),
@@ -116,8 +118,8 @@ impl SumcheckVerifier {
             driver,
         )?;
 
-        // For ZK Flavors: correct the evaluation by the libra univariate used to hide the contribution from the
-        // actual Honk relation
+        // For ZK Flavors: the libra univariate evaluation hides the contribution from the actual
+        // Honk relation
         let libra_evaluation = if is_zk {
             let libra_evaluation =
                 transcript.receive_fr_from_prover("Libra:claimed_evaluation".to_owned())?;
@@ -164,21 +166,16 @@ impl SumcheckVerifier {
         driver: &mut T,
     ) -> HonkProofResult<()> {
         let total_sum = univariate[0].add(&univariate[1], builder, driver);
-
         target_sum.assert_equal(&total_sum, builder, driver);
         Ok(())
     }
 
     /**
-     * @brief Evaluate the Row Disabling Polynomial (1 - \sum L_i) at the sumcheck challenge.
-     *
-     * @param multivariate_challenge Sumcheck evaluation challenge, of length virtual_log_n.
-     *
-     * Matches bb's call site `evaluate_at_challenge(multivariate_challenge, multivariate_challenge.size())`:
-     * the row-disabling polynomial is circuit-size independent and evaluated over ALL challenges, with no
-     * indicator-based exclusion of virtual/padding rounds.
+     * @brief Compute the evaluation of 1 - L at the sumcheck challenge, i.e.
+     * 1 - \prod_{k=2}^{d-1} (1 - u_k). This is circuit-size independent: it is evaluated over ALL
+     * (virtual) sumcheck challenges, so no padding indicator is needed.
      */
-    pub fn evaluate_at_challenge_with_padding<
+    pub fn evaluate_at_challenge<
         C: HonkCurve<TranscriptFieldType>,
         T: NoirWitnessExtensionProtocol<C::ScalarField>,
     >(
@@ -189,9 +186,9 @@ impl SumcheckVerifier {
         let one = FieldCT::from(C::ScalarField::ONE);
         let mut evaluation_at_multivariate_challenge = one.clone();
 
-        for val in multivariate_challenge.iter().skip(2) {
+        for challenge in multivariate_challenge.iter().skip(2) {
             evaluation_at_multivariate_challenge = evaluation_at_multivariate_challenge.multiply(
-                &one.sub(val, builder, driver),
+                &one.sub(challenge, builder, driver),
                 builder,
                 driver,
             )?;

@@ -22,6 +22,8 @@ pub(crate) struct MemoryRelationAcc<T: NoirUltraHonkProver<P>, P: CurveGroup> {
     pub(crate) r3: SharedUnivariate<T, P, 6>,
     pub(crate) r4: SharedUnivariate<T, P, 6>,
     pub(crate) r5: SharedUnivariate<T, P, 6>,
+    pub(crate) r6: SharedUnivariate<T, P, 6>,
+    pub(crate) r7: SharedUnivariate<T, P, 6>,
 }
 
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Default for MemoryRelationAcc<T, P> {
@@ -33,6 +35,8 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Default for MemoryRelationAcc<T, 
             r3: Default::default(),
             r4: Default::default(),
             r5: Default::default(),
+            r6: Default::default(),
+            r7: Default::default(),
         }
     }
 }
@@ -46,6 +50,8 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> MemoryRelationAcc<T, P> {
         self.r3.scale_inplace(elements[3]);
         self.r4.scale_inplace(elements[4]);
         self.r5.scale_inplace(elements[5]);
+        self.r6.scale_inplace(elements[6]);
+        self.r7.scale_inplace(elements[7]);
     }
 
     pub(crate) fn extend_and_batch_univariates<const SIZE: usize>(
@@ -95,14 +101,26 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> MemoryRelationAcc<T, P> {
             partial_evaluation_result,
             true,
         );
+        self.r6.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            true,
+        );
+        self.r7.extend_and_batch_univariates(
+            result,
+            extended_random_poly,
+            partial_evaluation_result,
+            false,
+        );
     }
 }
 
 pub(crate) struct MemoryRelation {}
 
 impl MemoryRelation {
-    pub(crate) const NUM_RELATIONS: usize = 6;
-    pub(crate) const CRAND_PAIRS_FACTOR: usize = 7;
+    pub(crate) const NUM_RELATIONS: usize = 8;
+    pub(crate) const CRAND_PAIRS_FACTOR: usize = 9;
 }
 
 impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P>
@@ -356,9 +374,23 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P
         lhs.extend(index_delta_is_zero);
         rhs.extend(timestamp_delta);
 
+        // The two ROM products are independent of the existing six products.
+        // Batch them here to preserve the number of communication rounds.
+        let mut rom_denom = T::add_many(w_1, &T::scale_many(w_2, eta));
+        for (denom, array_id) in rom_denom.iter_mut().zip_eq(q_c.iter()) {
+            *denom = T::add_with_public(
+                eta_two * array_id + relation_parameters.rom_logup_gamma,
+                *denom,
+                id,
+            );
+        }
+        lhs.extend_from_slice(w_4);
+        rhs.extend(rom_denom);
+        lhs.extend_from_slice(w_4);
+        rhs.extend_from_slice(w_3);
         let mul = T::mul_many(&lhs, &rhs, net, state)?;
-        let mul = mul.chunks_exact(mul.len() / 6).collect_vec();
-        debug_assert_eq!(mul.len(), 6);
+        let mul = mul.chunks_exact(mul.len() / 8).collect_vec();
+        debug_assert_eq!(mul.len(), 8);
 
         let neg_index_delta_sqr = mul[0];
         let adjacent_values_match_if_adjacent_indices_match = mul[1]; // index_delta_is_zero * record_delta 
@@ -453,6 +485,104 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> Relation<T, P
         T::add_assign_many(&mut memory_identity, &ram_consistency_check_identity); // deg 5 ( = deg 5 + (deg 3 or deg 5))
 
         fold_accumulator!(univariate_accumulator.r0, memory_identity); // deg 5
+
+        let mut rom_inverse_checks = Vec::with_capacity(w_4.len());
+        let mut rom_sums = Vec::with_capacity(w_4.len());
+        for i in 0..w_4.len() {
+            let table = q_2[i] * (P::ScalarField::one() - q_1[i]);
+            let read = q_4[i] * (P::ScalarField::one() - q_1[i]);
+            let check = T::add_with_public(-P::ScalarField::one(), mul[6][i], id);
+            rom_inverse_checks.push(T::mul_with_public(
+                q_memory_by_scaling[i] * (table + read),
+                check,
+            ));
+            // No gate separator: this relation is a global sum over all rows.
+            let sum = T::sub(
+                T::mul_with_public(read, w_4[i]),
+                T::mul_with_public(table, mul[7][i]),
+            );
+            rom_sums.push(T::mul_with_public(q_memory[i], sum));
+        }
+        fold_accumulator!(univariate_accumulator.r6, rom_inverse_checks);
+        fold_accumulator!(univariate_accumulator.r7, rom_sums);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod rom_logup_tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ff::Field;
+    use co_noir_common::constants::MAX_PARTIAL_RELATION_LENGTH;
+    use co_noir_common::mpc::plain::PlainUltraHonkDriver;
+
+    #[test]
+    fn rom_logup_mpc_batch_preserves_global_sum_weighting() {
+        type Driver = PlainUltraHonkDriver;
+        let params = RelationParameters {
+            eta_1: Fr::from(3u64),
+            eta_2: Fr::from(9u64),
+            eta_3: Fr::from(27u64),
+            rom_logup_gamma: Fr::from(11u64),
+            ..Default::default()
+        };
+        let mut acc = MemoryRelationAcc::<Driver, G1Projective>::default();
+        for (read, count, weight) in [(false, 2u64, 3u64), (true, 0, 7), (true, 0, 13)] {
+            let mut batch = ProverUnivariatesBatch::<Driver, G1Projective>::new();
+            for poly in batch.precomputed.iter_mut() {
+                poly.resize(MAX_PARTIAL_RELATION_LENGTH, Fr::zero());
+            }
+            for poly in batch.witness.iter_mut() {
+                poly.resize(MAX_PARTIAL_RELATION_LENGTH, Fr::zero());
+            }
+            for poly in batch.shifted_witness.iter_mut() {
+                poly.resize(MAX_PARTIAL_RELATION_LENGTH, Fr::zero());
+            }
+            batch.precomputed.q_memory_mut().fill(Fr::one());
+            if read {
+                batch.precomputed.q_4_mut().fill(Fr::one());
+            } else {
+                batch.precomputed.q_r_mut().fill(Fr::one());
+            }
+            batch.witness.w_l_mut().fill(Fr::from(2u64));
+            batch.witness.w_r_mut().fill(Fr::from(5u64));
+            batch.witness.w_o_mut().fill(Fr::from(count));
+            batch
+                .witness
+                .w_4_mut()
+                .fill(Fr::from(28u64).inverse().unwrap());
+            <MemoryRelation as Relation<Driver, G1Projective>>::accumulate(
+                &(),
+                &mut Default::default(),
+                &mut acc,
+                &batch,
+                &params,
+                &vec![Fr::from(weight); MAX_PARTIAL_RELATION_LENGTH],
+            )
+            .unwrap();
+        }
+        assert!(acc.r6.evaluations.iter().all(Zero::is_zero));
+        assert!(acc.r7.evaluations.iter().all(Zero::is_zero));
+        acc.r7.evaluations.fill(Fr::from(23u64));
+        let mut out = SharedUnivariate::<Driver, G1Projective, 8>::default();
+        acc.r0 = Default::default();
+        acc.r1 = Default::default();
+        acc.r2 = Default::default();
+        acc.r3 = Default::default();
+        acc.r4 = Default::default();
+        acc.r5 = Default::default();
+        acc.extend_and_batch_univariates(
+            &mut out,
+            &Univariate {
+                evaluations: [Fr::from(17u64); 8],
+            },
+            &Fr::from(19u64),
+        );
+        assert!(
+            out.evaluations
+                .iter()
+                .all(|value| *value == Fr::from(23u64))
+        );
     }
 }
