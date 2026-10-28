@@ -1,13 +1,13 @@
 # UltraHonk
 
-This crate implements Aztec's UltraHonk prover and verifier in Rust. The integration targets Barretenberg **v6.0.0-rc.6** (commit `0df91ba1799012435c62c6108a0926b357fef88c`) and its Noir submodule **v1.0.0-rc.3** (commit `5a7ee9bf5ed8973076df7bb0d2b723024db09ae7`). Tool pins live in [`versions.env`](../../../versions.env).
+This crate implements Aztec's UltraHonk prover and verifier in Rust. The integration targets Barretenberg **v6.0.0** (commit `0219f11d8133970df3974fe5ae65e006bf8c193a`) and its Noir submodule **v1.0.0-rc.3** (commit `5a7ee9bf5ed8973076df7bb0d2b723024db09ae7`). Tool pins live in [`versions.env`](../../../versions.env).
 
 Build the independent Barretenberg oracle from the exact source checkout:
 
 ```bash
 git clone https://github.com/AztecProtocol/aztec-packages.git
 cd aztec-packages
-git checkout --detach 0df91ba1799012435c62c6108a0926b357fef88c
+git checkout --detach 0219f11d8133970df3974fe5ae65e006bf8c193a
 cd barretenberg/cpp
 cmake --preset default -DAVM=OFF -DBB_LITE=OFF
 cmake --build build --target bb -j 8

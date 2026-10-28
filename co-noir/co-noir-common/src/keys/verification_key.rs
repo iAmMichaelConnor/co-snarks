@@ -176,9 +176,8 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         buffer
     }
 
-    /// Decode v6's field-based VK format. Like BB FrCodec, integer metadata
-    /// is normalized to its low 64 bits after field decoding. Acceptance does
-    /// not imply a unique byte encoding; serialization returns the normalized key.
+    /// Decode final v6's field-based VK format. Every field word must be
+    /// canonical, and integer metadata must fit in 64 bits.
     pub fn from_buffer(buf: &[u8]) -> HonkProofResult<Self> {
         let size = buf.len();
         let mut offset = 0;
@@ -186,36 +185,37 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             return Err(HonkProofError::InvalidKeyLength);
         }
 
-        // Read data. Note `BigUint::to_u64_digits()` returns an EMPTY vec for zero,
-        // so index `[0]` would panic on a genuinely-zero (or malformed all-zero) VK
-        // header; take the low limb with a 0 default instead.
+        // Final BB rejects non-canonical serialized Fr words before decoding
+        // either metadata or point-coordinate limbs.
+        let modulus: BigUint = TranscriptFieldType::MODULUS.into();
+        if buf
+            .chunks_exact(32)
+            .any(|word| BigUint::from_bytes_be(word) >= modulus)
+        {
+            return Err(HonkProofError::NonCanonicalFieldEncoding);
+        }
+
         let log_circuit_size: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
         let log_circuit_size: u64 = log_circuit_size
-            .to_u64_digits()
-            .first()
-            .copied()
-            .unwrap_or(0);
+            .try_into()
+            .map_err(|_| HonkProofError::CorruptedKey)?;
         let num_public_inputs: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
         let num_public_inputs: u64 = num_public_inputs
-            .to_u64_digits()
-            .first()
-            .copied()
-            .unwrap_or(0);
+            .try_into()
+            .map_err(|_| HonkProofError::CorruptedKey)?;
         let pub_inputs_offset: BigUint = {
             let fe = SerializeF::<TranscriptFieldType>::read_field_element(buf, &mut offset);
             fe.into()
         };
         let pub_inputs_offset: u64 = pub_inputs_offset
-            .to_u64_digits()
-            .first()
-            .copied()
-            .unwrap_or(0);
+            .try_into()
+            .map_err(|_| HonkProofError::CorruptedKey)?;
 
         let mut commitments = PrecomputedEntities::default();
 
@@ -245,9 +245,9 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
         })
     }
 
-    /// Decode v6's U256 VK format. Metadata follows BB U256Codec's low-64-bit
-    /// normalization; point coordinates must instead be canonical base-field
-    /// integers, including the all-zero encoding of infinity.
+    /// Decode final v6's U256 VK format. Integer metadata must fit in 64 bits;
+    /// point coordinates must be canonical base-field integers, including the
+    /// all-zero encoding of infinity.
     pub fn from_buffer_keccak(buf: &[u8]) -> HonkProofResult<Self> {
         let size = buf.len();
         let mut offset = 0;
@@ -255,18 +255,16 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             return Err(HonkProofError::InvalidKeyLength);
         }
 
-        // Each slice below is exactly 32 bytes by construction (fixed-width
-        // offset steps within a buffer whose total length was just checked
-        // above), so `U256::from_buffer` can never return its length-mismatch
-        // `Err` here; `expect` documents that as an invariant, not a fallible
-        // parse of attacker-controlled length.
-        let log_circuit_size: u64 = U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let read_metadata = |word: &[u8]| -> HonkProofResult<u64> {
+            BigUint::from_bytes_be(word)
+                .try_into()
+                .map_err(|_| HonkProofError::CorruptedKey)
+        };
+        let log_circuit_size = read_metadata(&buf[offset..offset + 32])?;
         offset += 32;
-        let num_public_inputs: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let num_public_inputs = read_metadata(&buf[offset..offset + 32])?;
         offset += 32;
-        let pub_inputs_offset: u64 =
-            U256::from_buffer(&buf[offset..offset + 32])[0].0.as_limbs()[0];
+        let pub_inputs_offset = read_metadata(&buf[offset..offset + 32])?;
         offset += 32;
 
         let mut commitments = PrecomputedEntities::default();
@@ -363,6 +361,68 @@ mod encoding_tests {
         let parsed = VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(&bytes)
             .expect("serialized infinity commitments must parse");
         assert_eq!(parsed.to_buffer_keccak(), bytes);
+    }
+
+    #[test]
+    fn vk_metadata_rejects_high_integer_bits() {
+        let vk = VerifyingKeyBarretenberg::<G1Projective> {
+            log_circuit_size: 4,
+            num_public_inputs: 8,
+            pub_inputs_offset: 1,
+            commitments: PrecomputedEntities::default(),
+        };
+        for keccak in [false, true] {
+            let canonical = if keccak {
+                vk.to_buffer_keccak()
+            } else {
+                vk.to_buffer()
+            };
+            for header in 0..3 {
+                let mut alias = canonical.clone();
+                let word = &mut alias[header * 32..(header + 1) * 32];
+                let value = BigUint::from_bytes_be(word) + (BigUint::from(1u8) << 64usize);
+                let bytes = value.to_bytes_be();
+                word.fill(0);
+                word[32 - bytes.len()..].copy_from_slice(&bytes);
+                let parsed = if keccak {
+                    VerifyingKeyBarretenberg::<G1Projective>::from_buffer_keccak(&alias)
+                } else {
+                    VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&alias)
+                };
+                assert!(
+                    parsed.is_err(),
+                    "accepted high integer bits in header {header}, keccak={keccak}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn poseidon_vk_rejects_outer_field_modulus_aliases() {
+        let mut vk = VerifyingKeyBarretenberg::<G1Projective> {
+            log_circuit_size: 4,
+            num_public_inputs: 8,
+            pub_inputs_offset: 1,
+            commitments: PrecomputedEntities::default(),
+        };
+        vk.commitments.elements[0] = ark_bn254::G1Affine::generator();
+        let canonical = vk.to_buffer();
+        let modulus: BigUint = ark_bn254::Fr::MODULUS.into();
+        for word in 0..canonical.len() / 32 {
+            let mut alias = canonical.clone();
+            let output = &mut alias[word * 32..(word + 1) * 32];
+            let value = BigUint::from_bytes_be(output) + &modulus;
+            let bytes = value.to_bytes_be();
+            output.fill(0);
+            output[32 - bytes.len()..].copy_from_slice(&bytes);
+            assert!(
+                matches!(
+                    VerifyingKeyBarretenberg::<G1Projective>::from_buffer(&alias),
+                    Err(HonkProofError::NonCanonicalFieldEncoding)
+                ),
+                "accepted outer field modulus alias at word {word}"
+            );
+        }
     }
 
     #[test]

@@ -198,6 +198,20 @@ where
         HonkProof::new(self.proof_data)
     }
 
+    /// Assert the verifier consumed the entire proof buffer. Called once, after
+    /// the final field element has been read, to reject proofs carrying trailing
+    /// data (bb rejects such proofs; without this check co-noir would accept a
+    /// valid proof with junk appended). Only meaningful on the verifier side.
+    pub fn assert_fully_consumed(&self) -> HonkProofResult<()> {
+        if self.num_frs_read != self.proof_data.len() {
+            return Err(HonkProofError::ProofNotFullyConsumed {
+                read: self.num_frs_read,
+                total: self.proof_data.len(),
+            });
+        }
+        Ok(())
+    }
+
     #[expect(dead_code)]
     pub(crate) fn print(&self) {
         self.manifest.print();
