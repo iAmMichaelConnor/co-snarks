@@ -1,3 +1,7 @@
+#[path = "rep3_bigfield.rs"]
+mod bigfield;
+#[path = "rep3_naf.rs"]
+mod naf;
 use super::plain::PlainAcvmSolver;
 use super::{DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, downcast};
 use ark_ec::{AffineRepr, CurveGroup};
@@ -451,6 +455,14 @@ fn get_base_powers<const NUM_SLICES: usize>(base: u64) -> [BigUint; NUM_SLICES] 
 impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
     for Rep3AcvmSolver<'a, F, N>
 {
+    fn supports_private_recursion() -> bool {
+        TypeId::of::<F>() == TypeId::of::<ark_bn254::Fr>()
+    }
+
+    fn agree_recursion_input_visibility(&mut self, reveal: bool) -> eyre::Result<()> {
+        super::agree_recursion_visibility(self.net, 3, reveal)
+    }
+
     type Lookup = Rep3FieldLookupTable<F>;
 
     type ArithmeticShare = Rep3PrimeFieldShare<F>;
@@ -2686,8 +2698,12 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                         .collect()
                 });
         }
-        unimplemented!(
-            "Functionality compute_naf_entries not implemented for Rep3 in the shared case"
+        let scalar = Self::get_shared(scalar).expect("public case handled above");
+        Ok(
+            naf::entries(scalar, max_num_bits, self.net, &mut self.state)?
+                .into_iter()
+                .map(Rep3AcvmType::Shared)
+                .collect(),
         )
     }
 
@@ -2720,9 +2736,11 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             (Rep3AcvmType::Public(lhs), Rep3AcvmType::Public(rhs)) => {
                 Rep3AcvmType::Public(lhs - rhs)
             }
-            (Rep3AcvmType::Public(public), Rep3AcvmType::Shared(shared))
-            | (Rep3AcvmType::Shared(shared), Rep3AcvmType::Public(public)) => {
+            (Rep3AcvmType::Public(public), Rep3AcvmType::Shared(shared)) => {
                 Rep3AcvmType::Shared(arithmetic::sub_public_by_shared(public, shared, self.id))
+            }
+            (Rep3AcvmType::Shared(shared), Rep3AcvmType::Public(public)) => {
+                Rep3AcvmType::Shared(arithmetic::sub_shared_by_public(shared, public, self.id))
             }
             (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
                 let result = arithmetic::sub(lhs, rhs);
@@ -2776,7 +2794,8 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 Ok(Rep3AcvmType::Public(lhs / rhs))
             }
             (Rep3AcvmType::Public(lhs), Rep3AcvmType::Shared(rhs)) => {
-                let rhs_inv = arithmetic::inv(rhs, self.net, &mut self.state)?;
+                let rhs_inv = bigfield::inv0(bigfield::cast(&rhs)?, self.net, &mut self.state)?;
+                let rhs_inv = bigfield::cast(&rhs_inv)?;
                 self.mul_other_acvm_types::<C>(
                     Rep3AcvmType::Public(lhs),
                     Rep3AcvmType::Shared(rhs_inv),
@@ -2790,7 +2809,8 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )))
             }
             (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
-                let rhs_inv = arithmetic::inv(rhs, self.net, &mut self.state)?;
+                let rhs_inv = bigfield::inv0(bigfield::cast(&rhs)?, self.net, &mut self.state)?;
+                let rhs_inv = bigfield::cast(&rhs_inv)?;
                 self.mul_other_acvm_types::<C>(
                     Rep3AcvmType::Shared(lhs),
                     Rep3AcvmType::Shared(rhs_inv),
@@ -2810,7 +2830,8 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                     .ok_or_else(|| eyre::eyre!("Element has no inverse"))?,
             )),
             Rep3AcvmType::Shared(shared) => {
-                let inv = arithmetic::inv(shared, self.net, &mut self.state)?;
+                let inv = bigfield::inv0(bigfield::cast(&shared)?, self.net, &mut self.state)?;
+                let inv = bigfield::cast(&inv)?;
                 Ok(Rep3AcvmType::Shared(inv))
             }
         }
@@ -2833,9 +2854,11 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             .into();
             return Ok(result.into());
         }
-        unimplemented!(
-            "functionality acvm_type_limbs_to_other_acvm_type not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let limbs = bigfield::cast(limbs)?;
+        let value =
+            bigfield::reconstruct::<NUM_LIMBS, LIMB_BITS, _>(&limbs, self.net, &mut self.state)?;
+        bigfield::cast(&Rep3AcvmType::Shared(value))
     }
 
     fn other_acvm_type_to_acvm_type_limbs<
@@ -2855,9 +2878,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 .collect::<Vec<_>>();
             return Ok(limbs.try_into().expect("We have NUM_LIMBS elements"));
         }
-        unimplemented!(
-            "functionality other_acvm_type_to_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let input: Rep3AcvmType<ark_bn254::Fq> = bigfield::cast(input)?;
+        let Rep3AcvmType::Shared(value) = input else {
+            unreachable!()
+        };
+        let result =
+            bigfield::decompose::<NUM_LIMBS, LIMB_BITS, _>(value, self.net, &mut self.state)?;
+        bigfield::cast(&result)
     }
 
     fn add_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2876,9 +2904,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 PlainAcvmSolver::new().add_acvm_type_limbs::<C>(&lhs_limbs, &rhs_limbs)?;
             return Ok(result_limbs.map(Rep3AcvmType::Public));
         }
-        unimplemented!(
-            "functionality add_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let result = bigfield::add(
+            &bigfield::cast(lhs)?,
+            &bigfield::cast(rhs)?,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&result)
     }
 
     fn sub_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2902,9 +2935,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 .try_into()
                 .expect("We have 4 elements"));
         }
-        unimplemented!(
-            "functionality sub_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let result = bigfield::sub(
+            &bigfield::cast(lhs)?,
+            &bigfield::cast(rhs)?,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&result)
     }
 
     fn mul_mod_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2926,7 +2964,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         a: &[Self::AcvmType; 4],
     ) -> eyre::Result<[Self::AcvmType; 4]> {
         let other_acvm_type = self.acvm_type_limbs_to_other_acvm_type::<4, 68, C>(a)?;
-        let other_acvm_type_inv = self.inverse_other_acvm_type::<C>(other_acvm_type)?;
+        // Plain limb inversion uses modular exponentiation, including inv0(0)=0.
+        let other_acvm_type_inv = match other_acvm_type {
+            Rep3AcvmType::Public(value) => {
+                Rep3AcvmType::Public(value.inverse().unwrap_or_default())
+            }
+            value => self.inverse_other_acvm_type::<C>(value)?,
+        };
         let limbs_inv =
             self.other_acvm_type_to_acvm_type_limbs::<4, 68, C>(&other_acvm_type_inv)?;
         Ok(limbs_inv)
@@ -2953,9 +2997,9 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 },
             );
         }
-        unimplemented!(
-            "functionality div_mod_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let result = bigfield::divmod(&bigfield::cast(a)?, self.net, &mut self.state)?;
+        bigfield::cast(&result)
     }
 
     fn madd_div_mod_acvm_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2999,9 +3043,19 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let additions = to_add
+            .iter()
+            .map(bigfield::cast)
+            .collect::<eyre::Result<Vec<_>>>()?;
+        let result = bigfield::madd(
+            &[bigfield::cast(a)?],
+            &[bigfield::cast(b)?],
+            &additions,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&result)
     }
 
     fn madd_div_mod_many_acvm_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -3057,9 +3111,21 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_many_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let a = a
+            .iter()
+            .map(bigfield::cast)
+            .collect::<eyre::Result<Vec<_>>>()?;
+        let b = b
+            .iter()
+            .map(bigfield::cast)
+            .collect::<eyre::Result<Vec<_>>>()?;
+        let additions = to_add
+            .iter()
+            .map(bigfield::cast)
+            .collect::<eyre::Result<Vec<_>>>()?;
+        let result = bigfield::madd(&a, &b, &additions, self.net, &mut self.state)?;
+        bigfield::cast(&result)
     }
 }
 

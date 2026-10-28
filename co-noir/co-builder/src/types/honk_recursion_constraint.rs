@@ -4,7 +4,7 @@ use crate::honk_verifier::recursive_decider_verification_key::{
 };
 use crate::honk_verifier::ultra_recursive_verifier::UltraRecursiveVerifier;
 use crate::keys::proving_key::create_keys_barretenberg;
-use crate::prelude::GenericUltraCircuitBuilder;
+use crate::prelude::{GenericUltraCircuitBuilder, RecursionInputVisibility};
 use crate::transcript_ct::{Poseidon2SpongeCT, TranscriptCT, TranscriptHasherCT};
 use crate::types::big_group::BigGroup;
 use crate::types::types::{AddQuad, PairingPoints, RecursionConstraint};
@@ -29,6 +29,7 @@ use co_noir_common::polynomials::entities::{PrecomputedEntities, WITNESS_ENTITIE
 use co_noir_common::transcript::{Poseidon2Sponge, Transcript};
 use co_noir_common::types::ZeroKnowledge;
 use co_ultrahonk::prelude::CoUltraHonk;
+use itertools::izip;
 use mpc_core::{MpcState, PlainState};
 use rand::SeedableRng;
 use std::any::{Any, TypeId};
@@ -105,6 +106,65 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
 impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::ScalarField>>
     GenericUltraCircuitBuilder<C, T>
 {
+    fn prepare_recursion_inputs(
+        &mut self,
+        input: &RecursionConstraint<C::ScalarField>,
+        driver: &mut T,
+    ) -> eyre::Result<()> {
+        // Every party participates, even when its own inputs are already public.
+        // This exchanges only a public policy tag and precedes all secret openings.
+        driver.agree_recursion_input_visibility(
+            self.recursion_input_visibility == RecursionInputVisibility::RevealToParticipants,
+        )?;
+        match self.recursion_input_visibility {
+            RecursionInputVisibility::KeepSecret => {
+                eyre::ensure!(
+                    T::supports_private_recursion(),
+                    "Private recursive witness generation is not supported by this driver; the private profile requires secret accumulator blinding even when the supplied recursive inputs are public"
+                );
+                Ok(())
+            }
+            RecursionInputVisibility::RevealToParticipants => {
+                self.open_recursion_inputs_for_public_verification(input, driver)
+            }
+        }
+    }
+
+    // Called only after explicit opt-in: reconstruct the complete recursion
+    // input set for every participant, including inner public inputs and predicate.
+    fn open_recursion_inputs_for_public_verification(
+        &mut self,
+        input: &RecursionConstraint<C::ScalarField>,
+        driver: &mut T,
+    ) -> eyre::Result<()> {
+        let proof_indices =
+            create_indices_for_reconstructed_proof(&input.proof, &input.public_inputs);
+        let mut to_open: (Vec<T::ArithmeticShare>, Vec<usize>) = (
+            Vec::with_capacity(proof_indices.len() + input.key.len() + 2),
+            Vec::with_capacity(proof_indices.len() + input.key.len() + 2),
+        );
+        // Collect all witness indices: proof, key, key_hash and optional predicate witness.
+        for idx in proof_indices
+            .iter()
+            .chain(input.key.iter())
+            .chain(std::iter::once(&input.key_hash))
+            .chain(std::iter::once(&input.predicate.index).filter(|_| !input.predicate.is_constant))
+        {
+            if T::is_shared(&self.get_variable(*idx as usize)) {
+                to_open.0.push(
+                    T::get_shared(&self.get_variable(*idx as usize))
+                        .expect("We already checked it is shared"),
+                );
+                to_open.1.push(*idx as usize);
+            }
+        }
+        let opened_values = driver.open_many(&to_open.0)?;
+        for (idx, value) in izip!(to_open.1.iter(), opened_values.iter()) {
+            self.set_variable(*idx as u32, T::AcvmType::from(*value));
+        }
+        Ok(())
+    }
+
     /// Add constraints required to recursively verify an UltraHonk proof
     pub(crate) fn create_honk_recursion_constraints(
         &mut self,
@@ -144,25 +204,9 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
             "create_honk_recursion_constraints: ACIR proof size mismatch."
         );
 
-        // Shared recursive witness generation is not implemented in this layer.
-        // Reject before any predicate conversion or disclosure, including false predicates.
-        eyre::ensure!(
-            input
-                .proof
-                .iter()
-                .chain(&input.key)
-                .chain(&input.public_inputs)
-                .chain(std::iter::once(&input.key_hash))
-                .chain(
-                    std::iter::once(&input.predicate.index)
-                        .filter(|_| !input.predicate.is_constant)
-                )
-                .all(|index| !T::is_shared(&self.get_variable(*index as usize))),
-            "Shared recursive inputs require private recursive witness support; refusing disclosure"
-        );
-
         // Decide disclosure before predicate conversion or any recursive computation.
         // A false predicate does not authorize opening its guarded inputs.
+        self.prepare_recursion_inputs(input, driver)?;
 
         // Currently no IPA support
 
@@ -216,13 +260,11 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         if !predicate.is_constant() {
             let mut transcript = Transcript::<TranscriptFieldType, Poseidon2Sponge>::new();
             let honk_vk_hash = honk_vk_to_be_set.hash_with_origin_tagging("", &mut transcript);
-            // If the predicate is a witness, we conditionally assign a valid vk, proof and vk hash so that verification
-            // succeeds. Note: in doing this, we create some new witnesses that are only used in the conditional assignment.
-            // It would be optimal to hard-code these values in the selectors, but due to the randomness needed to generate
-            // valid ZK proofs, we cannot do that without adding a dependency of the VKs on the witness values. Note that
-            // the new witnesses are used only in the recursive verification when the predicate is set to true, so they
-            // don't create a soundness issue and can be filled with anything - as long as they contain a valid vk, proof
-            // and vk hash
+            // A false predicate selects a valid dummy key, proof and key hash.
+            // A true predicate selects the original inputs, so these extra
+            // witnesses cannot bypass an enabled verification. Keep dummy values
+            // in witnesses: hard-coding a freshly randomized ZK proof in selectors
+            // would make the outer verification key depend on that randomness.
             let vk_elements = honk_vk_to_be_set.to_field_elements();
             for (vk_witness, vk_element) in vk_fields.iter_mut().zip(vk_elements.iter()) {
                 let valid_vk_witness = FieldCT::from_witness((*vk_element).into(), self);
@@ -604,82 +646,66 @@ fn populate_field_elements_for_mock_commitments<
 }
 
 #[cfg(test)]
-mod shared_recursion_rejection_tests {
+mod verification_key_length_tests {
     use super::*;
-    use crate::types::types::WitnessOrConstant;
     use ark_bn254::{Fr, G1Projective};
-    use co_acvm::{Rep3AcvmSolver, Rep3AcvmType};
-    use mpc_core::protocols::rep3::{conversion::A2BType, share_field_elements};
-    use mpc_net::{Network, local::LocalNetwork};
+    use co_noir_common::{constants::ULTRA_VERIFICATION_KEY_LENGTH, honk_proof::HonkProofError};
+
+    type Builder = GenericUltraCircuitBuilder<G1Projective, PlainAcvmSolver<Fr>>;
+    type Key = RecursiveVerificationKey<G1Projective, PlainAcvmSolver<Fr>>;
+
+    fn valid_fields() -> Vec<FieldCT<Fr>> {
+        Builder::create_mock_honk_vk(16, 0)
+            .to_field_elements()
+            .into_iter()
+            .map(FieldCT::from)
+            .collect()
+    }
 
     #[test]
-    fn shared_recursive_inputs_reject_without_network_disclosure() {
-        let values = [101u64, 103, 107, 109, 0].map(Fr::from);
-        let shares = share_field_elements(&values, &mut rand::thread_rng());
-        let workers: Vec<_> = LocalNetwork::new_3_parties()
-            .into_iter()
-            .zip(shares)
-            .map(|(net, shares)| {
-                std::thread::spawn(move || {
-                    let mut driver =
-                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
-                    for proof_type in [ProofType::Honk, ProofType::HonkZk] {
-                        for private_role in 0..5 {
-                            let mut builder =
-                                GenericUltraCircuitBuilder::<G1Projective, _>::new_minimal(0);
-                            let indices: Vec<_> = values
-                                .iter()
-                                .enumerate()
-                                .map(|(role, value)| {
-                                    builder.add_variable(if role == private_role {
-                                        Rep3AcvmType::Shared(shares[role])
-                                    } else {
-                                        Rep3AcvmType::Public(*value)
-                                    })
-                                })
-                                .collect();
-                            let fixed_size = if matches!(proof_type, ProofType::Honk) {
-                                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS
-                            } else {
-                                ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK
-                            };
-                            let input = RecursionConstraint {
-                                proof: vec![indices[0]; PUBLIC_INPUTS_SIZE + fixed_size],
-                                key: vec![indices[1]; ULTRA_VERIFICATION_KEY_LENGTH],
-                                key_hash: indices[2],
-                                public_inputs: vec![indices[3]],
-                                predicate: WitnessOrConstant::from_index(indices[4]),
-                                proof_type: proof_type as u32,
-                            };
-                            let before: Vec<_> = net.get_connection_stats().iter().collect();
-                            let result = builder.create_honk_recursion_constraints(
-                                &input,
-                                &ProverCrs::default(),
-                                &mut driver,
-                            );
-                            assert!(result.is_err());
-                            assert!(
-                                result
-                                    .err()
-                                    .unwrap()
-                                    .to_string()
-                                    .contains("refusing disclosure")
-                            );
-                            assert_eq!(
-                                before,
-                                net.get_connection_stats().iter().collect::<Vec<_>>()
-                            );
-                            assert!(matches!(
-                                builder.get_variable(indices[private_role] as usize),
-                                Rep3AcvmType::Shared(_)
-                            ));
-                        }
-                    }
-                })
-            })
-            .collect();
-        for worker in workers {
-            worker.join().unwrap();
+    fn recursive_vk_accepts_exact_field_count() {
+        let fields = valid_fields();
+        assert_eq!(fields.len(), ULTRA_VERIFICATION_KEY_LENGTH);
+        let mut builder = Builder::new(1);
+        let mut driver = PlainAcvmSolver::default();
+        assert!(Key::new(&fields, &mut builder, &mut driver).is_ok());
+    }
+
+    #[test]
+    fn recursive_vk_rejects_malformed_lengths_without_panicking() {
+        let fields = valid_fields();
+        let mut failures = Vec::new();
+        for length in [
+            0,
+            1,
+            2,
+            3,
+            fields.len() - 1,
+            fields.len() + 1,
+            fields.len() + 4,
+        ] {
+            let mut malformed = fields.clone();
+            malformed.resize(length, FieldCT::default());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut builder = Builder::new(1);
+                let mut driver = PlainAcvmSolver::default();
+                Key::new(&malformed, &mut builder, &mut driver)
+            }));
+            if !matches!(result, Ok(Err(HonkProofError::InvalidKeyLength))) {
+                failures.push(length);
+            }
         }
+        assert!(
+            failures.is_empty(),
+            "malformed keys did not return InvalidKeyLength: {failures:?}"
+        );
     }
 }
+
+#[cfg(test)]
+#[path = "recursion_input_visibility_tests.rs"]
+mod recursion_input_visibility_tests;
+
+#[cfg(test)]
+#[path = "conditional_recursion_tests.rs"]
+mod conditional_recursion_tests;

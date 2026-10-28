@@ -61,6 +61,11 @@ pub fn create_prover_instance<
     let mut proving_key = ProvingKey {
         polynomials: Polynomials::new(dyadic_circuit_size),
         public_inputs: Vec::with_capacity(circuit.public_inputs.len()),
+        proof_privacy: if circuit.recursion_public_output_indices.is_empty() {
+            co_noir_common::keys::proof_privacy::ProofPrivacy::Standard
+        } else {
+            co_noir_common::keys::proof_privacy::ProofPrivacy::PrivateRecursion
+        },
         circuit_size: dyadic_circuit_size as u32,
         final_active_wire_idx,
         num_public_inputs: circuit.public_inputs.len() as u32,
@@ -83,6 +88,37 @@ pub fn create_prover_instance<
 
     construct_lookup_polynomials(&mut proving_key, &mut circuit, dyadic_circuit_size, driver)?;
 
+    // Only the final, already blinded recursive accumulator is declassified.
+    // Keep the witness trace shared and retain errors for any other shared
+    // public input; inner proof/key/input witnesses must never be opened here.
+    let designated = &circuit.recursion_public_output_indices;
+    for index in &circuit.public_inputs {
+        if U::is_shared(&circuit.get_variable(*index as usize)) && !designated.contains(index) {
+            return Err(HonkProofError::ExpectedPublicWitness);
+        }
+    }
+    let output_shares: Vec<_> = designated
+        .iter()
+        .filter_map(|index| {
+            U::get_shared(&circuit.get_variable(*index as usize)).map(|share| (*index, share))
+        })
+        .collect();
+    let opened = if output_shares.is_empty() {
+        Vec::new()
+    } else {
+        driver.open_many(
+            &output_shares
+                .iter()
+                .map(|(_, share)| *share)
+                .collect::<Vec<_>>(),
+        )?
+    };
+    let opened_outputs: std::collections::HashMap<_, _> = output_shares
+        .into_iter()
+        .map(|(index, _)| index)
+        .zip(opened)
+        .collect();
+
     // Construct the public inputs array
     let block = circuit.blocks.get_pub_inputs();
     proving_key.pub_inputs_offset = block.trace_offset;
@@ -92,6 +128,7 @@ pub fn create_prover_instance<
         .cloned()
     {
         let var = U::get_public(&circuit.get_variable(var_idx as usize))
+            .or_else(|| opened_outputs.get(&var_idx).copied())
             .ok_or(HonkProofError::ExpectedPublicWitness)?;
         proving_key.public_inputs.push(var);
     }
@@ -339,4 +376,59 @@ pub fn construct_lookup_polynomials<
     )?;
     crate::phase_timing("pkgen/lookup_read_counts", t_read_counts);
     Ok(())
+}
+
+#[cfg(test)]
+#[path = "recursive_public_output_tests.rs"]
+mod recursive_public_output_tests;
+
+#[cfg(test)]
+mod proof_privacy_tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use co_acvm::PlainAcvmSolver;
+    use co_noir_common::{keys::proof_privacy::ProofPrivacy, mpc::plain::PlainUltraHonkDriver};
+
+    fn builder(
+        private: bool,
+    ) -> (
+        GenericUltraCircuitBuilder<G1Projective, PlainAcvmSolver<Fr>>,
+        PlainAcvmSolver<Fr>,
+    ) {
+        let mut driver = PlainAcvmSolver::new();
+        let mut builder = GenericUltraCircuitBuilder::new_minimal(0);
+        builder.add_default_to_public_inputs();
+        if private {
+            builder.recursion_public_output_indices = builder.public_inputs.clone();
+        }
+        builder.finalize_circuit(&mut driver).unwrap();
+        (builder, driver)
+    }
+
+    #[test]
+    fn both_key_constructors_preserve_private_recursion_requirement() {
+        for private in [false, true] {
+            let expected = if private {
+                ProofPrivacy::PrivateRecursion
+            } else {
+                ProofPrivacy::Standard
+            };
+            let (circuit, mut driver) = builder(private);
+            let co_key = create_prover_instance::<G1Projective, PlainUltraHonkDriver, _>(
+                0,
+                circuit,
+                &mut driver,
+            )
+            .unwrap();
+            assert_eq!(co_key.proof_privacy, expected);
+            let (mut circuit, mut driver) = builder(private);
+            let plain_key = crate::keys::plain_proving_key::create_prover_instance(
+                &mut circuit,
+                Default::default(),
+                &mut driver,
+            )
+            .unwrap();
+            assert_eq!(plain_key.proof_privacy, expected);
+        }
+    }
 }

@@ -1,0 +1,10 @@
+Aztec v6.0.0-rc.6, commit 0df91ba1799012435c62c6108a0926b357fef88c.
+Noir v1.0.0-rc.3, commit 5a7ee9bf5ed8973076df7bb0d2b723024db09ae7.
+Source copied byte-for-byte from sibling recursion_private; compiled with matching nargo execute.
+Generated ACIR bytecode and ABI equal the sibling recursion_private artifacts.
+The enabled predicate is false. Original inner proof field40 (zero-based), the first
+sumcheck scalar after eight accumulator fields and eight four-field Oink commitments,
+is increased by one. All point encodings, key, key hash and inner public inputs are unchanged.
+All outer arguments, including inner public inputs and enable predicate, are private.
+The same scalar corruption with an enabled predicate is rejected by the retained
+conditional_recursion_tests actual-verifier outer-proof regression.

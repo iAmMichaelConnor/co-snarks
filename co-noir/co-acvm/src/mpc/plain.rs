@@ -64,6 +64,14 @@ impl<F: PrimeField> Default for PlainAcvmSolver<F> {
 }
 
 impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
+    fn supports_private_recursion() -> bool {
+        true
+    }
+
+    fn agree_recursion_input_visibility(&mut self, _reveal: bool) -> eyre::Result<()> {
+        Ok(())
+    }
+
     type Lookup = PlainLookupTableProvider<F>;
     type ArithmeticShare = F;
     type OtherArithmeticShare<C: CurveGroup<ScalarField = F, BaseField: PrimeField>> = C::BaseField;

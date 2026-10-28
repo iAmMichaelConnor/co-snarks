@@ -1757,5 +1757,9 @@ mod tests {
 }
 
 #[cfg(test)]
+#[path = "naf_constraint_tests.rs"]
+mod naf_constraint_tests;
+
+#[cfg(test)]
 #[path = "one_bit_scalar_tests.rs"]
 mod one_bit_scalar_tests;

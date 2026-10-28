@@ -186,6 +186,10 @@ impl<F: PrimeField> From<ShamirBrilligType<F>> for ShamirAcvmType<F> {
 impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
     for ShamirAcvmSolver<'a, F, N>
 {
+    fn agree_recursion_input_visibility(&mut self, reveal: bool) -> eyre::Result<()> {
+        super::agree_recursion_visibility(self.net, self.state.num_parties, reveal)
+    }
+
     type Lookup = Rep3FieldLookupTable<F>; // This is just a dummy and unused
 
     type ArithmeticShare = ShamirPrimeFieldShare<F>;
