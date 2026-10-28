@@ -4,8 +4,8 @@ version = 4
 
 [[package]]
 name = "acir"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir_field",
  "base64",
@@ -25,8 +25,8 @@ dependencies = [
 
 [[package]]
 name = "acir_field"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.6.0",
@@ -40,8 +40,8 @@ dependencies = [
 
 [[package]]
 name = "acvm"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -56,8 +56,8 @@ dependencies = [
 
 [[package]]
 name = "acvm_blackbox_solver"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir",
  "aes 0.9.3",
@@ -944,8 +944,8 @@ dependencies = [
 
 [[package]]
 name = "brillig"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir_field",
  "itertools 0.15.0",
@@ -955,8 +955,8 @@ dependencies = [
 
 [[package]]
 name = "brillig_vm"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -1487,6 +1487,8 @@ dependencies = [
  "ark-ec",
  "ark-ff 0.6.0",
  "ark-poly",
+ "ark-serialize 0.6.0",
+ "bytes",
  "co-noir-common",
  "criterion",
  "eyre",
@@ -2366,8 +2368,8 @@ dependencies = [
 
 [[package]]
 name = "fm"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "codespan-reporting 0.13.1",
  "iter-extended",
@@ -2785,8 +2787,8 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "iter-extended"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 
 [[package]]
 name = "itertools"
@@ -3257,8 +3259,8 @@ dependencies = [
 
 [[package]]
 name = "msgpack_tagged"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "msgpack_tagged_derive",
  "rmp",
@@ -3269,8 +3271,8 @@ dependencies = [
 
 [[package]]
 name = "msgpack_tagged_derive"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3315,8 +3317,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_abi"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -3332,8 +3334,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_artifacts"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acir",
  "acvm",
@@ -3352,8 +3354,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_errors"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "codespan-reporting 0.13.1",
  "fm",
@@ -3365,8 +3367,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_printable_type"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -3377,8 +3379,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_span"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.5#0f759ffe9176ffbbe7f67b159ac2c3202e0748a0"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
 dependencies = [
  "codespan 0.13.1",
  "serde",
@@ -5200,7 +5202,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

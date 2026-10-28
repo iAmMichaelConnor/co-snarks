@@ -532,9 +532,12 @@ impl<F: PrimeField> Plookup<F> {
 
         const TABLE_BIT_SIZE: usize = 6;
         let num_entries = UINT_SIZE / TABLE_BIT_SIZE;
+        // +1 for the remaining-bits table: the column coefficients/step sizes must cover ALL
+        // slots including the last slice, or its accumulator step is wrong.
+        let total_tables = num_entries + 1;
         let base = 1 << TABLE_BIT_SIZE;
         let mut table =
-            PlookupMultiTable::<F>::new(id, base.into(), base.into(), base.into(), num_entries);
+            PlookupMultiTable::<F>::new(id, base.into(), base.into(), base.into(), total_tables);
 
         for _ in 0..num_entries {
             table.slice_sizes.push(base);
@@ -579,9 +582,11 @@ impl<F: PrimeField> Plookup<F> {
 
         const TABLE_BIT_SIZE: usize = 6;
         let num_entries = UINT_SIZE / TABLE_BIT_SIZE;
+        // +1 for the remaining-bits table (see get_uint_xor_table).
+        let total_tables = num_entries + 1;
         let base = 1 << TABLE_BIT_SIZE;
         let mut table =
-            PlookupMultiTable::<F>::new(id, base.into(), base.into(), base.into(), num_entries);
+            PlookupMultiTable::<F>::new(id, base.into(), base.into(), base.into(), total_tables);
 
         for _ in 0..num_entries {
             table.slice_sizes.push(base);
@@ -2570,11 +2575,13 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
                 Self::generate_sparse_table_with_rotation::<28, 11, 6>(id, index)
             }
             BasicTableId::Sha256Base28Rotate3 => {
-                // 10-bit (not 11) for use with L2 slot of SHA256_CH_INPUT
+                // 10-bit (not 11) for use with the L2 slot of SHA256_CH_INPUT: the backing basic
+                // table must not be larger than the declared slice size, or a prover can witness
+                // an out-of-range slice.
                 Self::generate_sparse_table_with_rotation::<28, 10, 3>(id, index)
             }
             BasicTableId::Sha256Base16 => {
-                // 10-bit (not 11) for use with L2 slot of SHA256_MAJ_INPUT
+                // 10-bit (not 11) for use with the L2 slot of SHA256_CH_INPUT (see above).
                 Self::generate_sparse_table_with_rotation::<16, 10, 0>(id, index)
             }
             BasicTableId::Sha256WitnessSlice3 => {

@@ -7,7 +7,7 @@ use crate::types::types::{CycleNode, CyclicPermutation};
 use ark_ec::CurveGroup;
 use ark_ff::One;
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
-use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUT_WIRE_INDEX};
+use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUT_WIRE_INDEX, TRACE_OFFSET};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::polynomials::entities::PrecomputedEntities;
@@ -21,7 +21,6 @@ use co_noir_common::{
     mpc::rep3::Rep3UltraHonkDriver,
     mpc::shamir::ShamirUltraHonkDriver,
     polynomials::entities::Polynomials,
-    polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK,
 };
 use mpc_core::MpcState;
 
@@ -75,8 +74,7 @@ pub fn create_prover_instance<
     // First and last lagrange polynomials (in the full circuit size). lagrange_first marks row
     // NUM_DISABLED_ROWS_IN_SUMCHECK, the row immediately preceding the first real trace content
     // (rows before it are disabled in Sumcheck for ZK masking/shift compatibility).
-    proving_key.polynomials.precomputed.lagrange_first_mut()
-        [NUM_DISABLED_ROWS_IN_SUMCHECK as usize] = C::ScalarField::one();
+    proving_key.polynomials.precomputed.lagrange_first_mut()[TRACE_OFFSET] = C::ScalarField::one();
     proving_key.polynomials.precomputed.lagrange_last_mut()[final_active_wire_idx] =
         C::ScalarField::one();
 
@@ -110,6 +108,13 @@ fn populate_memory_records<
     tracing::trace!("Adding memory records to proving key");
 
     let ram_rom_offset = builder.blocks.memory.trace_offset;
+
+    proving_key.rom_logup_records.extend(
+        builder
+            .rom_logup_records
+            .iter()
+            .map(|index| index + ram_rom_offset),
+    );
 
     for &index in builder.memory_read_records.iter() {
         proving_key.memory_read_records.push(index + ram_rom_offset);
@@ -159,12 +164,13 @@ fn populate_trace<
     proving_key.active_region_data = active_region_data;
 
     // Compute the permutation argument polynomials (sigma/id) and add them to proving key
+
     compute_permutation_argument_polynomials(
         &mut proving_key.polynomials.precomputed,
         builder,
         copy_cycles,
         circuit_size,
-        &proving_key.active_region_data,
+        proving_key.final_active_wire_idx,
     );
 }
 
@@ -179,11 +185,16 @@ fn populate_wires_and_selectors_and_compute_copy_cycles<
     active_region_data: &mut ActiveRegionData,
 ) -> Vec<CyclicPermutation> {
     // At most one copy cycle per variable.
+
     let mut copy_cycles = vec![vec![]; builder.variables.len()];
 
     let wires: &mut [_; NUM_WIRES] = polynomials.witness.get_wires_mut().try_into().unwrap();
 
     let mut selectors = polynomials.precomputed.get_selectors_mut();
+
+    // Accumulated per-pass wall time (reported once, only under CO_NOIR_PHASE_TIMINGS=1):
+    // the wire pass copies witness *values* (per-proof), the selector pass copies circuit
+    // *structure* (identical for every proof of this circuit).
 
     // For each block in the trace, populate wire polys, copy cycles and selector polys.
     for block in builder.blocks.get() {

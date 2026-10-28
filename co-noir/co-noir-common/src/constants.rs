@@ -11,13 +11,19 @@ use crate::{
 pub const CONST_PROOF_SIZE_LOG_N: usize = 25;
 // For ZK Flavors: the number of the commitments required by Libra and SmallSubgroupIPA.
 pub const NUM_LIBRA_COMMITMENTS: usize = 3;
+// Number of SmallSubgroupIPA evaluations transmitted on the wire: G(r), A(g*r), A(r), Q(r).
 pub const NUM_SMALL_IPA_EVALUATIONS: usize = 4;
-/// Number of SmallSubgroupIPA opening claims: the transmitted evaluations plus the boundary opening A(1) = 0.
-pub const NUM_SMALL_IPA_OPENING_CLAIMS: usize = 5;
-/// For each SmallSubgroupIPA opening claim G(r), A(g*r), A(r), A(1) = 0, Q(r), the index of the commitment
-/// (`[G]`, `[A]` or `[Q]`) it refers to.
-pub const SMALL_IPA_CLAIM_COMMITMENT_INDICES: [usize; NUM_SMALL_IPA_OPENING_CLAIMS] =
-    [0, 1, 1, 1, 2];
+// Total number of SmallSubgroupIPA opening claims batched into Shplonk. On top of the 4 transmitted
+// evaluations, this includes the untransmitted boundary opening A(1) = 0 (in transcript order the
+// claims are G(r), A(g*r), A(r), A(1), Q(r)).
+pub const NUM_SMALL_IPA_OPENING_CLAIMS: usize = NUM_SMALL_IPA_EVALUATIONS + 1;
+
+// The number of rows reserved at the top of the trace for row-disabling / ZK masking. Row 0 is the
+// zero row (for shifts), rows {1, 2, 3} hold the ZK masking values (zeros for non-ZK flavors),
+// lagrange_first sits at row TRACE_OFFSET, and the trace content starts at row
+// TRACE_OFFSET + NUM_ZERO_ROWS.
+pub const TRACE_OFFSET: usize =
+    crate::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK as usize;
 
 pub const SHIFTED_WITNESS_ENTITIES_SIZE: usize = 5;
 
@@ -73,6 +79,21 @@ pub const DECIDER_PROOF_LENGTH_ZK: usize =
                /* 15. KZG W commitment */ (NUM_FRS_COMM);
 
 pub const OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS: usize = WITNESS_ENTITIES_SIZE * 4;
+
+// Target invariants at bb v5-next (mirrors bb's static_asserts): the proof-with-pairing-points
+// sizes accepted in-contract are 410 (non-ZK) / 458 (ZK) frs, and the VK is 115 frs. A change in
+// any component constant above must fail here loudly rather than silently drift the proof format.
+const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS + PUBLIC_INPUTS_SIZE == 410);
+const _: () = assert!(ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK + PUBLIC_INPUTS_SIZE == 458);
+const _: () = assert!(ULTRA_VERIFICATION_KEY_LENGTH == 115);
+// Further format-defining constants pinned at their bb v5-next values: each of these moved (or was
+// explicitly reviewed) in the 20260324→20260708 sync. Any component change must fail loudly here.
+const _: () = assert!(NUM_ALL_ENTITIES == 41);
+const _: () = assert!(TRACE_OFFSET == 4);
+const _: () = assert!(CONST_PROOF_SIZE_LOG_N == 25);
+const _: () = assert!(NUM_LIBRA_COMMITMENTS == 3);
+const _: () = assert!(NUM_SMALL_IPA_EVALUATIONS == 4);
+const _: () = assert!(NUM_SMALL_IPA_OPENING_CLAIMS == 5);
 
 pub const MOCK_PROOF_DYADIC_SIZE: usize = 1 << 6;
 

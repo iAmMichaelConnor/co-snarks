@@ -1,0 +1,14 @@
+# Generated prover/verifier artifacts from compare.sh / compare_mpc.sh /
+# bench-0_5.sh runs — never committed (tracked fixtures are Nargo.toml,
+# Prover.toml, *.gz, *.json, src/, kat/). Scoped to each circuit dir.
+*/proof
+*/proof_plaindriver
+*/vk
+*/vk_plaindriver
+*/vk_hash
+*/public_inputs
+*/public_inputs_plaindriver
+*/zk_proof*
+*/cosnark_*
+*/*.shared
+*/*.proof

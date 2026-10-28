@@ -111,8 +111,20 @@ impl<C: HonkCurve<TranscriptFieldType>> Relation<C> for UltraPermutationRelation
         );
 
         let mut mul_raw_data = FieldCT::multiply_many_raw(
-            &[t1, t5, lagrange_last.clone(), lagrange_last.clone()],
-            &[t2, t6, public_input_delta.clone(), z_perm_shift.clone()],
+            &[
+                t1,
+                t5,
+                lagrange_last.clone(),
+                lagrange_last.clone(),
+                lagrange_first.clone(),
+            ],
+            &[
+                t2,
+                t6,
+                public_input_delta.clone(),
+                z_perm_shift.clone(),
+                z_perm.clone(),
+            ],
             builder,
             driver,
         )?;

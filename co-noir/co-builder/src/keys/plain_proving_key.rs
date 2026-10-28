@@ -6,13 +6,13 @@ use ark_ec::CurveGroup;
 use ark_ff::One;
 use co_acvm::{PlainAcvmSolver, mpc::NoirWitnessExtensionProtocol};
 use co_noir_common::{
-    constants::{NUM_WIRES, NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR},
+    constants::{NUM_WIRES, NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR, TRACE_OFFSET},
     crs::ProverCrs,
     honk_proof::HonkProofResult,
     keys::{plain_proving_key::PlainProvingKey, types::ActiveRegionData},
     polynomials::{
         entities::PrecomputedEntities,
-        polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, Polynomial, Polynomials},
+        polynomial::{Polynomial, Polynomials},
     },
 };
 use num_bigint::BigUint;
@@ -58,11 +58,8 @@ pub fn create_prover_instance<P: CurveGroup>(
     // Construct and add to proving key the wire, selector and copy constraint polynomials
     populate_trace(&mut proving_key, circuit, dyadic_circuit_size);
 
-    // Set the lagrange polynomials. lagrange_first marks row NUM_DISABLED_ROWS_IN_SUMCHECK, the
-    // row immediately preceding the first real trace content (rows before it are disabled in
-    // Sumcheck for ZK masking/shift compatibility).
-    proving_key.polynomials.precomputed.lagrange_first_mut()
-        [NUM_DISABLED_ROWS_IN_SUMCHECK as usize] = P::ScalarField::one();
+    // Set the lagrange polynomials (lagrange_first at the first active row after the disabled region)
+    proving_key.polynomials.precomputed.lagrange_first_mut()[TRACE_OFFSET] = P::ScalarField::one();
     proving_key.polynomials.precomputed.lagrange_last_mut()[final_active_wire_idx] =
         P::ScalarField::one();
 
@@ -88,6 +85,13 @@ fn populate_memory_records<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::Sca
     tracing::trace!("Adding memory records to proving key");
 
     let ram_rom_offset = builder.blocks.memory.trace_offset;
+
+    proving_key.rom_logup_records.extend(
+        builder
+            .rom_logup_records
+            .iter()
+            .map(|index| index + ram_rom_offset),
+    );
 
     for &index in builder.memory_read_records.iter() {
         proving_key.memory_read_records.push(index + ram_rom_offset);
@@ -120,7 +124,7 @@ fn populate_trace<P: CurveGroup>(
         builder,
         copy_cycles,
         circuit_size,
-        &proving_key.active_region_data,
+        proving_key.final_active_wire_idx,
     );
 }
 
@@ -194,7 +198,7 @@ pub fn compute_permutation_argument_polynomials<
     circuit: &GenericUltraCircuitBuilder<P, T>,
     copy_cycles: Vec<CyclicPermutation>,
     circuit_size: usize,
-    active_region_data: &ActiveRegionData,
+    final_active_wire_idx: usize,
 ) {
     tracing::trace!("Computing permutation argument polynomials");
     let mapping = compute_permutation_mapping(circuit_size, circuit, copy_cycles);
@@ -202,20 +206,17 @@ pub fn compute_permutation_argument_polynomials<
     // Rows [NUM_ZERO_ROWS, first_active_row) are disabled-in-Sumcheck header rows that precede
     // the first circuit block; bb still fills them in the sigma/id polynomials with the identity
     // mapping (see `permutation_lib.hpp`'s full-range init pass), so we must too.
-    let first_active_row = circuit.blocks.pub_inputs.trace_offset as usize;
 
     // Compute Honk-style sigma and ID polynomials from the corresponding mappings
     compute_honk_style_permutation_lagrange_polynomials_from_mapping::<P>(
         polys.get_sigmas_mut(),
         mapping.sigmas,
-        active_region_data,
-        first_active_row,
+        final_active_wire_idx,
     );
     compute_honk_style_permutation_lagrange_polynomials_from_mapping::<P>(
         polys.get_ids_mut(),
         mapping.ids,
-        active_region_data,
-        first_active_row,
+        final_active_wire_idx,
     );
 }
 
@@ -298,27 +299,15 @@ pub(crate) fn compute_permutation_mapping<
 fn compute_honk_style_permutation_lagrange_polynomials_from_mapping<P: CurveGroup>(
     permutation_polynomials: &mut [Polynomial<P::ScalarField>],
     permutation_mappings: Mapping,
-    active_region_data: &ActiveRegionData,
-    first_active_row: usize,
+    final_active_wire_idx: usize,
 ) {
     // SEPARATOR ensures that the evaluations of `id_i` (`sigma_i`) and `id_j`(`sigma_j`) polynomials on the boolean
     // hypercube do not intersect for i != j.
     assert!(permutation_polynomials[0].len() < PERMUTATION_ARGUMENT_VALUE_SEPARATOR as usize);
 
-    let domain_size = active_region_data.size();
-    // TACEO TODO Barrettenberg uses multithreading here
-
     for (wire_idx, current_permutation_poly) in permutation_polynomials.iter_mut().enumerate() {
-        // The disabled-in-Sumcheck header rows before the first circuit block are outside any
-        // copy cycle, so the mapping there is still the untouched self-referencing identity from
-        // `PermutationMapping::new`; write that identity value explicitly to match bb.
-        for poly_idx in NUM_ZERO_ROWS..first_active_row {
-            current_permutation_poly[poly_idx] = P::ScalarField::from(
-                poly_idx as u32 + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * wire_idx as u32,
-            );
-        }
-        for i in 0..domain_size {
-            let poly_idx = active_region_data.get_idx(i);
+        // v6 includes reserved head rows and row TRACE_OFFSET in the identity range.
+        for poly_idx in NUM_ZERO_ROWS..=final_active_wire_idx {
             let idx = poly_idx as isize;
             let current_row_idx = permutation_mappings[wire_idx][idx as usize].row_index;
             let current_col_idx = permutation_mappings[wire_idx][idx as usize].column_index;
@@ -366,9 +355,9 @@ pub fn construct_lookup_table_polynomials<
     circuit: &GenericUltraCircuitBuilder<P, T>,
     dyadic_circuit_size: usize,
 ) {
-    // Create lookup selector polynomials which interpolate each table column, starting at the row
-    // where the `lookup` gate block actually begins in the execution trace (matching bb's
-    // `construct_lookup_table_polynomials`, which starts at `circuit.blocks.lookup.trace_offset()`).
+    // Create lookup table polynomials which interpolate each table column. The table data is placed
+    // at the lookup block's trace offset (which is always past the disabled head region), aligned
+    // with the lookup read counts/tags.
     let mut offset = circuit.blocks.lookup.trace_offset as usize;
     assert!(dyadic_circuit_size >= offset + circuit.get_tables_size());
 

@@ -789,15 +789,17 @@ impl<F: PrimeField, T: NoirWitnessExtensionProtocol<F>> BigGroup<F, T> {
             naf_entries[num_rounds - 1 - i] = bit;
         }
 
-        // The most significant NAF entry is always (+1) for scalars < 2^{max_num_bits} (false = +1).
-        // We need to pin it to false: `process_strauss_msm_rounds` does not consume `naf_entries[0]`
-        // (it hardcodes the +1 contribution), so the 0-th naf entry is effectively used only for
-        // reconstructing the scalar.
+        // The most significant NAF entry is always (+1) as we are working with scalars < 2^{max_num_bits}.
+        // Recall that true represents (-1) and false represents (+1).
         naf_entries[0] = BoolCT::from_witness_ct(
             WitnessCT::from_acvm_type(F::zero().into(), builder),
             builder,
             true,
         );
+        // The Strauss MSM rounds do not consume naf_entries[0] (the +1 contribution is hardcoded
+        // via the chain's initial entry), so outside the scalar-reconstruction sum below this
+        // entry is otherwise unconstrained — pin it to false (+1) with a fix-witness gate, as bb
+        // does (biggroup_nafs.hpp).
         builder.fix_witness(naf_entries[0].witness_index, F::zero());
 
         // Validate correctness of NAF

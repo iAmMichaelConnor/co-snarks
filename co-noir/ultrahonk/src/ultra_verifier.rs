@@ -30,7 +30,8 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let mut transcript = Transcript::<TranscriptFieldType, H>::new_verifier(honk_proof);
 
         let oink_verifier = OinkVerifier::new("".to_string());
-        let oink_result = oink_verifier.verify(verifying_key, &mut transcript, has_zk)?;
+        let (oink_result, parsed_public_inputs) =
+            oink_verifier.verify(verifying_key, &mut transcript, has_zk)?;
 
         let log_circuit_size = verifying_key.inner_vk.log_circuit_size;
         let crs = verifying_key.crs;
@@ -44,13 +45,11 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         memory.gate_challenges = Self::generate_gate_challenges(&mut transcript, virtual_log_n);
         let decider_verifier = DeciderVerifier::new(memory);
         decider_verifier.verify::<P>(
-            log_circuit_size
-                .try_into()
-                .expect("log circuit size fits in u32"),
             &crs,
             transcript,
             has_zk,
             virtual_log_n,
+            &parsed_public_inputs,
         )
     }
 }
