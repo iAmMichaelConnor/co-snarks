@@ -6,7 +6,8 @@ pub use crate::types::generators::{derive_generators, offset_generator, offset_g
 pub use crate::types::honk_recursion_constraint::RecursiveVerificationKey;
 pub use crate::types::types::AGGREGATION_OBJECT_SIZE;
 pub use crate::ultra_builder::{
-    GenericUltraCircuitBuilder, Rep3CoBuilder, ShamirCoBuilder, UltraCircuitBuilder,
+    GenericUltraCircuitBuilder, RecursionInputVisibility, Rep3CoBuilder, ShamirCoBuilder,
+    UltraCircuitBuilder,
 };
 pub use co_acvm::PlainAcvmSolver;
 pub use noir_types::SerializeF;

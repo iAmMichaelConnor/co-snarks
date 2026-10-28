@@ -34,6 +34,9 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
     ) -> HonkProofResult<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, false)?;
         tracing::trace!("UltraHonk prove");
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
@@ -60,5 +63,34 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         let decider = Decider::new(memory, has_zk);
         let proof = decider.prove(circuit_size, &crs, transcript, virtual_log_n)?;
         Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
+    }
+}
+
+#[cfg(test)]
+mod proof_privacy_tests {
+    use super::*;
+    use co_noir_common::types::Bn254G1 as G1Projective;
+    use co_noir_common::{keys::proof_privacy::ProofPrivacy, transcript::Poseidon2Sponge};
+
+    #[test]
+    fn native_prover_rejects_private_non_zk_before_proving() {
+        let key = PlainProvingKey::<G1Projective> {
+            proof_privacy: ProofPrivacy::PrivateRecursion,
+            ..Default::default()
+        };
+        let vk = VerifyingKeyBarretenberg {
+            log_circuit_size: 0,
+            num_public_inputs: 0,
+            pub_inputs_offset: 0,
+            commitments: Default::default(),
+        };
+        let error = UltraHonk::<_, Poseidon2Sponge>::prove(key, ZeroKnowledge::No, &vk)
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("Private recursion requires a zero-knowledge outer proof")
+        );
     }
 }

@@ -200,6 +200,9 @@ for c in "${CIRCUITS[@]}"; do
   circuit="${CIRCUIT_PATH[$c]}"; witness="${WITNESS_PATH[$c]}"
   fam=$(family "$c")
   REPS=$(reps_for "$c")
+  # These fixtures contain public inner proofs and use BB's public profile.
+  recursion_flags=()
+  case "$c" in recursion|recursion_zk) recursion_flags=(--reveal-recursion-inputs);; esac
   progress "$c"; CIRC_T0=$SECONDS
 
   # ---- circuit features (once; untimed for the matrix, cheap) ----
@@ -253,7 +256,7 @@ for c in "${CIRCUITS[@]}"; do
             --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat \
             --input "test_vectors/$c/Prover.toml" --witness "$witness" \
             --circuit "$circuit" \
-            --hasher poseidon2 --out-dir "test_vectors/$c" $zflag
+            --hasher poseidon2 --out-dir "test_vectors/$c" "${recursion_flags[@]}" $zflag
         _extract_phase_timings_to \
           "$BENCH_OUT/phase-timings/${c}_plaindriver_${z}_prove_r${r}.json" \
           "$c" plaindriver "$z" "$r" "$BENCH_OUT/${c}_plaindriver_${z}_r${r}.log"
@@ -276,7 +279,7 @@ for c in "${CIRCUITS[@]}"; do
       "$PLAINDRIVER" --prover-crs ../../co-noir-common/src/crs/bn254_g1.dat \
         --verifier-crs ../../co-noir-common/src/crs/bn254_g2.dat \
         --input "test_vectors/$c/Prover.toml" --circuit "$circuit" \
-        --hasher poseidon2 --out-dir "test_vectors/$c" --zk
+        --hasher poseidon2 --out-dir "test_vectors/$c" "${recursion_flags[@]}" --zk
     _extract_phase_timings_to \
       "$BENCH_OUT/phase-timings/${c}_plaindriver_zk_solveprove_r1.json" \
       "$c" plaindriver zk 1 "$BENCH_OUT/${c}_plaindriver_zk_r1.log" "$pd_log_pre" ;;
@@ -291,7 +294,7 @@ for c in "${CIRCUITS[@]}"; do
       env CO_NOIR_PHASE_TIMINGS=1 \
       "$BIN" create-vk --circuit "$circuit" \
         --crs ../../co-noir-common/src/crs/bn254_g1.dat --hasher poseidon2 \
-        --vk "test_vectors/$c/cosnark_vk"
+        --vk "test_vectors/$c/cosnark_vk" "${recursion_flags[@]}"
     _extract_phase_timings_to "$BENCH_OUT/phase-timings/${c}_co-noir_vkgen_r1.json" \
       "$c" co-noir - 1 "$BENCH_OUT/${c}_co-noir_-_r1.log"
     for r in $(seq 1 "$REPS"); do
@@ -343,7 +346,7 @@ for c in "${CIRCUITS[@]}"; do
               --circuit "$circuit" \
               --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol "$proto" \
               --hasher poseidon2 --config "configs/party$((i + 1)).toml" \
-              --out "$out" $pubflag $zflag --vk "test_vectors/$c/cosnark_vk" \
+              --out "$out" $pubflag $zflag --vk "test_vectors/$c/cosnark_vk" "${recursion_flags[@]}" \
               >>"$BENCH_OUT/${c}_${proto}_${z}_prove_r${r}.log" 2>&1 &
             pids[$i]=$!
           done
@@ -399,7 +402,7 @@ for c in "${CIRCUITS[@]}"; do
                 --circuit "$circuit" \
                 --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol "$proto2" \
                 --hasher poseidon2 --config "configs/party$((i + 1)).toml" \
-                --out "$out" $pubflag $zflag --vk "test_vectors/$c/cosnark_vk" \
+                --out "$out" $pubflag $zflag --vk "test_vectors/$c/cosnark_vk" "${recursion_flags[@]}" \
                 >>"$BENCH_OUT/${c}_${proto2}_${z}_prove_r${r}.log" 2>&1 &
               pids[$i]=$!
             done

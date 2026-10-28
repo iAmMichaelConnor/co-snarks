@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 #[derive(Default)]
 pub struct PlainProvingKey<P: CurveGroup> {
+    pub proof_privacy: crate::keys::proof_privacy::ProofPrivacy,
     pub crs: Arc<ProverCrs<P>>,
     pub circuit_size: u32,
     pub public_inputs: Vec<P::ScalarField>,

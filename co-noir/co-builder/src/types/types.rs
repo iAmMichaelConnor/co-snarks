@@ -4,7 +4,7 @@ use crate::prelude::GenericUltraCircuitBuilder;
 use crate::transcript_ct::{TranscriptCT, TranscriptFieldType, TranscriptHasherCT};
 use crate::types::field_ct::BoolCT;
 use ark_ec::CurveGroup;
-use ark_ff::PrimeField;
+use ark_ff::{One, PrimeField, Zero};
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
 use co_noir_common::constants::{
     NUM_SELECTORS, NUM_WIRES, NUM_ZERO_ROWS, PAIRING_POINT_ACCUMULATOR_SIZE, TRACE_OFFSET,
@@ -551,6 +551,80 @@ impl<C: CurveGroup, T: NoirWitnessExtensionProtocol<C::ScalarField>> PairingPoin
         Ok(result)
     }
 
+    /// Hide the final recursive accumulator while preserving pairing validity.
+    /// With the matching trusted CRS, independent uniform r and nonzero s map
+    /// P to s*P + r*(tau*G, -G). Valid pairs become uniform on the pairing kernel;
+    /// invalid pairs become uniform on its complement, hiding their residual.
+    pub(crate) fn blind_for_private_recursion(
+        &mut self,
+        crs: &co_noir_common::crs::ProverCrs<C>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> eyre::Result<()>
+    where
+        C::BaseField: PrimeField,
+    {
+        use ark_ec::AffineRepr;
+        eyre::ensure!(
+            crs.monomials.len() >= 2,
+            "Private recursion needs the first two CRS points"
+        );
+        eyre::ensure!(
+            crs.monomials[0] == C::generator().into_affine() && !crs.monomials[1].is_zero(),
+            "Private recursion needs the standard nonzero CRS kernel basis"
+        );
+        let randomness = driver.rand()?;
+        let scaling: T::AcvmType = driver.rand()?.into();
+        // A zero fresh scalar or inversion mask can cause a negligible random
+        // failure. Both are independent of the inner proof and its witnesses.
+        let scaling_inverse = driver.invert(scaling.clone())?;
+        let scalar = FieldCT::from_witness(randomness.into(), builder);
+        let scaling = FieldCT::from_witness(scaling, builder);
+        let scaling_inverse = FieldCT::from_witness(scaling_inverse, builder);
+        self.blind_with_scalars(crs, &scalar, &scaling, &scaling_inverse, builder, driver)
+    }
+
+    fn blind_with_scalars(
+        &mut self,
+        crs: &co_noir_common::crs::ProverCrs<C>,
+        scalar: &FieldCT<C::ScalarField>,
+        scaling: &FieldCT<C::ScalarField>,
+        scaling_inverse: &FieldCT<C::ScalarField>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> eyre::Result<()>
+    where
+        C::BaseField: PrimeField,
+    {
+        use ark_ec::AffineRepr;
+        // Constrain nonzero s inside the circuit; without this, a malicious
+        // prover could erase an invalid accumulator by setting s=0.
+        let scaling_index = scaling.get_witness_index(builder, driver);
+        let inverse_index = scaling_inverse.get_witness_index(builder, driver);
+        builder.create_arithmetic_gate(&PolyTriple {
+            a: scaling_index,
+            b: inverse_index,
+            c: builder.zero_idx,
+            q_m: C::ScalarField::one(),
+            q_l: C::ScalarField::zero(),
+            q_r: C::ScalarField::zero(),
+            q_o: C::ScalarField::zero(),
+            q_c: -C::ScalarField::one(),
+        });
+        self.p0 = self.p0.scalar_mul(scaling, 0, builder, driver)?;
+        self.p1 = self.p1.scalar_mul(scaling, 0, builder, driver)?;
+        let mut basis0 = BigGroup::from_constant_affine::<C>(&crs.monomials[1])?;
+        let mut basis1 =
+            BigGroup::from_constant_affine::<C>(&(-crs.monomials[0].into_group()).into_affine())?;
+        // A full-field witness scalar and complete addition handle r=0 and
+        // cancellation without an input-dependent exception or public branch.
+        let mut mask0 = basis0.scalar_mul(scalar, 0, builder, driver)?;
+        let mut mask1 = basis1.scalar_mul(scalar, 0, builder, driver)?;
+        self.p0.add_assign(&mut mask0, builder, driver)?;
+        self.p1.add_assign(&mut mask1, builder, driver)?;
+        Ok(())
+    }
+
     pub fn set_public(
         &mut self,
         builder: &mut GenericUltraCircuitBuilder<C, T>,
@@ -963,3 +1037,7 @@ pub(crate) struct NonNativeMultiplicationFieldWitnesses<F: PrimeField> {
     pub(crate) r: [u32; 4],
     pub(crate) neg_modulus: [F; 4],
 }
+
+#[cfg(test)]
+#[path = "accumulator_blinding_tests.rs"]
+mod accumulator_blinding_tests;

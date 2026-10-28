@@ -7,7 +7,7 @@ use ark_ff::PrimeField;
 use co_acvm::{solver::PlainCoSolver, PlainAcvmSolver};
 use co_builder::{
     keys::proving_key,
-    prelude::{HonkRecursion, UltraCircuitBuilder},
+    prelude::{HonkRecursion, RecursionInputVisibility, UltraCircuitBuilder},
 };
 use co_noir::{Bn254G1, HonkProof};
 use co_noir_common::{
@@ -68,13 +68,14 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     } else {
         ProverCrs::default()
     };
-    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
         &constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         &recursion_crs,
         &mut driver,
+        RecursionInputVisibility::RevealToParticipants,
     )
     .unwrap();
 
@@ -141,13 +142,14 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     } else {
         ProverCrs::default()
     };
-    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit_with_recursion_input_visibility(
         &constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         &recursion_crs,
         &mut driver,
+        RecursionInputVisibility::RevealToParticipants,
     )
     .unwrap();
 
