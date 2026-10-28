@@ -27,7 +27,7 @@ The example comparison scripts use relative paths and must run from
 
 ```sh
 cd co-noir/co-noir/examples
-BB_TARGET=/tmp/bb-v6-oracle/bb bash compare.sh
+BARRETENBERG_BINARY=/tmp/bb-v6-oracle/bb bash compare.sh
 ```
 
 The build helper exports both `barretenberg/cpp` and the final release's
@@ -39,14 +39,14 @@ use the provenance record to identify them. The final BB CLI also accepts named
 verifier targets: `noir-recursive[-no-zk]` for Poseidon2 and `evm[-no-zk]` for
 Keccak. The older explicit scheme/hash options remain available.
 
-## Changes from rc.6
+## Verification and circuit requirements
 
 Verification-key decoding rejects non-canonical field words and integer headers
 that exceed 64 bits, matching the final release codecs. The native verifier
 rejects trailing proof data and non-padded ZK keys with
 fewer than three sumcheck rounds, matching final BB. Finite PCS points,
 mixed-infinity accumulator rejection, short scalar recursive aggregation and
-the five SmallSubgroupIPA opening claims were already implemented.
+the five SmallSubgroupIPA opening claims follow the final release protocol.
 
 Grumpkin multi-scalar multiplication checks arbitrary constant bases against
 Straus offset collisions. Only the standard generator and fixed lookup-table
