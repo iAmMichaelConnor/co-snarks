@@ -168,6 +168,48 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
 
             // For the simple case of one root we compute (−r)⁻¹ and
             let root_inverse = (-*root).inverse().expect("Root is not zero here");
+            // Each block is the affine recurrence b_out = a^len*b_in + B,
+            // with a = -root_inverse. Prefix the block carries, then correct
+            // their local zero-carry results. All operations are local and linear.
+            // Two parallel passes do more arithmetic than the serial recurrence.
+            // Keep the serial path when there are too few workers to amortize it.
+            if self.len() >= 32768 && rayon::current_num_threads() >= 4 {
+                let block = 8192;
+                let summaries: Vec<_> = self
+                    .coefficients
+                    .par_chunks_mut(block)
+                    .map(|chunk| {
+                        let mut carry = T::ArithmeticShare::default();
+                        for value in chunk.iter_mut() {
+                            carry = T::mul_with_public(root_inverse, T::sub(*value, carry));
+                            *value = carry;
+                        }
+                        (carry, chunk.len())
+                    })
+                    .collect();
+                let a = -root_inverse;
+                let mut carry = T::ArithmeticShare::default();
+                let starts: Vec<_> = summaries
+                    .into_iter()
+                    .map(|(last, len)| {
+                        let start = carry;
+                        carry = T::add(last, T::mul_with_public(a.pow([len as u64]), carry));
+                        start
+                    })
+                    .collect();
+                self.coefficients
+                    .par_chunks_mut(block)
+                    .zip(starts)
+                    .for_each(|(chunk, start)| {
+                        let mut correction = start;
+                        for value in chunk {
+                            correction = T::mul_with_public(a, correction);
+                            *value = T::add(*value, correction);
+                        }
+                    });
+                self.coefficients.pop();
+                return;
+            }
             // set b₋₁ = 0
             let mut temp = Default::default();
             // We start multiplying lower coefficient by the inverse and subtracting those from higher coefficients
@@ -409,3 +451,7 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> IndexMut<usize> for SharedPolynom
         &mut self.coefficients[index]
     }
 }
+
+#[cfg(test)]
+#[path = "polynomial_division_tests.rs"]
+mod division_tests;

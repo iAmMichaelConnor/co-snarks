@@ -68,6 +68,53 @@ pub fn b2a_selector<F: FieldUint, N: Network>(
     }
 }
 
+/// Decompose canonical field values into arithmetic-shared little-endian limbs.
+///
+/// Canonicalize the entire input before selecting its low `total_bits` bits.
+/// Each selected bit is converted by the existing masked bit-injection
+/// protocol, then recomposed locally. This avoids a full-field garbled masked
+/// addition for every output limb. The input conversion respects `a2b_type`.
+/// Widths and message sizes depend only on these public arguments.
+pub fn decompose_arithmetic_many<F: FieldUint, N: Network>(
+    inputs: &[Rep3PrimeFieldShare<F>],
+    net: &N,
+    state: &mut Rep3State,
+    total_bits: usize,
+    limb_bits: usize,
+) -> eyre::Result<Vec<Rep3PrimeFieldShare<F>>> {
+    eyre::ensure!(limb_bits > 0, "Decomposition limb width must be positive");
+    eyre::ensure!(
+        total_bits <= F::MODULUS_BIT_SIZE as usize,
+        "Decomposition width exceeds the field width"
+    );
+    if inputs.is_empty() || total_bits == 0 {
+        return Ok(Vec::new());
+    }
+    let binary = a2b_selector_many(inputs, net, state)?;
+    let one = F::Uint::from(1u64);
+    let bits: Vec<_> = binary
+        .iter()
+        .flat_map(|value| {
+            (0..total_bits).map(move |bit| {
+                Rep3UintShare::<F>::new((value.a >> bit) & one, (value.b >> bit) & one)
+            })
+        })
+        .collect();
+    let arithmetic_bits = bit_inject_many(&bits, net, state)?;
+    Ok(arithmetic_bits
+        .chunks(total_bits)
+        .flat_map(|value| {
+            value.chunks(limb_bits).map(|limb| {
+                limb.iter()
+                    .rev()
+                    .fold(Rep3PrimeFieldShare::zero_share(), |acc, bit| {
+                        arithmetic::add(arithmetic::mul_public(acc, F::from(2u64)), *bit)
+                    })
+            })
+        })
+        .collect())
+}
+
 /// Transforms the replicated shared value x from an arithmetic sharing to a binary sharing. I.e., x = x_1 + x_2 + x_3 gets transformed into x = x'_1 xor x'_2 xor x'_3.
 pub fn a2b<F: FieldUint, N: Network>(
     x: Rep3PrimeFieldShare<F>,
