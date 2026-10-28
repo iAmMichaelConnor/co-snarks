@@ -4,7 +4,6 @@ use ark_ff::Field;
 use ark_serialize::CanonicalDeserialize;
 use bytes::Bytes;
 use co_noir_common::mpc::rep3::Rep3UltraHonkDriver;
-use co_noir_common::polynomials::entities::Polynomials;
 use co_noir_common::transcript::Poseidon2Sponge;
 use mpc_core::protocols::rep3::{Rep3State, conversion::A2BType, share_field_element};
 use mpc_net::{ConnectionStats, local::LocalNetwork};
@@ -64,8 +63,12 @@ fn lookup_inversion_openings_do_not_reveal_secret_read_tags() {
                 for (row, shares) in (TRACE_OFFSET..N).zip(shared_tags) {
                     pk.polynomials.witness.lookup_read_tags_mut()[row] = shares[id];
                 }
-                let mut oink =
-                    CoOink::<_, _, Poseidon2Sponge, _>::new(&net, &mut state, ZeroKnowledge::No);
+                let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(
+                    &net,
+                    &mut state,
+                    ZeroKnowledge::No,
+                    None,
+                );
                 // Both compressed terms equal gamma; all denominators outside
                 // the publicly disabled head are 49, independently of the tags.
                 oink.memory.challenges.gamma = Fr::from(7u64);
@@ -134,7 +137,8 @@ fn lookup_inverse_activation_preserves_boolean_and_zero_cases() {
         }
     }
     let mut state = Default::default();
-    let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(&(), &mut state, ZeroKnowledge::No);
+    let mut oink =
+        CoOink::<_, _, Poseidon2Sponge, _>::new(&(), &mut state, ZeroKnowledge::No, None);
     oink.memory.challenges.gamma = gamma;
     oink.compute_logderivative_inverses(&pk).unwrap();
     for row in 0..16 {
@@ -178,8 +182,12 @@ fn rom_inversion_opens_every_public_record_without_revealing_multiplicities() {
                     pk.polynomials.witness.w_o_mut()[row] = shares[id];
                     pk.polynomials.precomputed.q_c_mut()[row] = Fr::from(3u64);
                 }
-                let mut oink =
-                    CoOink::<_, _, Poseidon2Sponge, _>::new(&net, &mut state, ZeroKnowledge::No);
+                let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(
+                    &net,
+                    &mut state,
+                    ZeroKnowledge::No,
+                    None,
+                );
                 oink.memory.w_4 = Polynomial::new_default(N);
                 oink.memory.challenges.eta_1 = Fr::from(5u64);
                 oink.memory.challenges.eta_2 = Fr::from(25u64);

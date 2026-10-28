@@ -29,6 +29,7 @@ pub mod sponge_hasher;
 pub mod transcript;
 pub mod types;
 pub mod utils;
+pub mod zk_masking;
 
 pub fn compute_opening_proof<
     P: HonkCurve<TranscriptFieldType>,
@@ -88,6 +89,30 @@ impl CoUtils {
         crs: &ProverCrs<P>,
     ) -> T::PointShare {
         Self::msm::<T, P>(poly, &crs.monomials)
+    }
+
+    /// Commit to a shared polynomial and immediately open the commitment.
+    /// Use this (not `commit` + `open_point`) whenever the commitment goes
+    /// straight to the transcript: replicated-sharing protocols then do half
+    /// the MSM work for the same opened point (L0d, co-groth16 pattern).
+    pub fn commit_and_open<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        poly: &[T::ArithmeticShare],
+        crs: &ProverCrs<P>,
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<P> {
+        T::commit_and_open(&crs.monomials[..poly.len()], poly, net, state)
+    }
+
+    /// Commit to many shared polynomials and immediately open all commitments
+    /// in one round. See [`Self::commit_and_open`].
+    pub fn commit_and_open_many<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        polys: &[&[T::ArithmeticShare]],
+        crs: &ProverCrs<P>,
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<Vec<P>> {
+        T::commit_and_open_many(&crs.monomials, polys, net, state)
     }
 
     pub fn msm<T: NoirUltraHonkProver<P>, P: CurveGroup>(
