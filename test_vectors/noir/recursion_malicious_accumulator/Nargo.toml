@@ -1,0 +1,7 @@
+[package]
+name = "recursion_malicious_accumulator"
+type = "bin"
+authors = [""]
+compiler_version = ">=1.0.0"
+
+[dependencies]
