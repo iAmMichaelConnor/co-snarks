@@ -13,9 +13,13 @@ use co_noir_types::Rep3Type;
 use co_ultrahonk::prelude::{Rep3CoUltraHonk, UltraHonk};
 use itertools::izip;
 use mpc_core::protocols::rep3::share_field_element;
-use mpc_net::local::LocalNetwork;
+use mpc_net::{bytes::Bytes, local::LocalNetwork, ConnectionStats, Network};
 use sha3::Keccak256;
-use std::{fs::File, sync::Arc};
+use std::{
+    collections::HashSet,
+    fs::File,
+    sync::{Arc, Mutex},
+};
 
 fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     name: &str,
@@ -184,6 +188,143 @@ fn witness_and_proof_test<H: TranscriptHasher<TranscriptFieldType>>(
 
     let is_valid = UltraHonk::<_, H>::verify(proof, &public_input, &vk, has_zk).unwrap();
     assert!(is_valid);
+}
+
+/// A [`Network`] that records every frame a party sends or receives.
+struct RecordingNetwork {
+    inner: LocalNetwork,
+    log: Arc<Mutex<Vec<Bytes>>>,
+}
+
+impl Network for RecordingNetwork {
+    fn id(&self) -> usize {
+        self.inner.id()
+    }
+
+    fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+        self.log.lock().unwrap().push(data.clone());
+        self.inner.send(to, data)
+    }
+
+    fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+        let data = self.inner.recv(from)?;
+        self.log.lock().unwrap().push(data.clone());
+        Ok(data)
+    }
+
+    fn get_connection_stats(&self) -> ConnectionStats {
+        self.inner.get_connection_stats()
+    }
+}
+
+/// Returns the first (frame, offset) at which a 32-byte window of `frames` is one of `patterns`.
+fn find_pattern(frames: &[Bytes], patterns: &HashSet<[u8; 32]>) -> Option<(usize, usize)> {
+    frames.iter().enumerate().find_map(|(index, frame)| {
+        frame
+            .windows(32)
+            .position(|window| patterns.contains(<&[u8; 32]>::try_from(window).unwrap()))
+            .map(|offset| (index, offset))
+    })
+}
+
+/// Records all traffic of a full REP3 run from secret-shared inputs (witness extension, proving key and proof) and
+/// checks that no private witness value is sent in plaintext, in its canonical or its Montgomery little-endian
+/// encoding, at any offset of any frame. Only values with at least 16 nonzero bytes are searched, so small values
+/// cannot match structural bytes by chance; a uniformly random share matches a given 32-byte pattern with
+/// probability 2^-256. This is a tripwire for code that sends a witness value where a share or a masked value
+/// belongs, not a privacy proof: opening a value sends only shares, and values that are encoded differently or
+/// split across frames are not found.
+#[test]
+fn poseidon_network_traffic_contains_no_plaintext_witness() {
+    use ark_ff::{BigInteger, PrimeField};
+
+    const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_pos";
+    let circuit_file = "../test_vectors/noir/poseidon/kat/poseidon.json";
+    let witness_file = "../test_vectors/noir/poseidon/kat/poseidon.gz";
+    let prover_toml = "../test_vectors/noir/poseidon/Prover.toml";
+
+    let program_artifact = co_noir::program_artifact_from_reader(File::open(circuit_file).unwrap())
+        .expect("failed to parse program artifact");
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+
+    let witness = co_noir::witness_from_reader(File::open(witness_file).unwrap()).unwrap();
+    let mut patterns = HashSet::new();
+    for (index, value) in witness.iter().enumerate() {
+        if constraint_system.public_inputs.contains(&(index as u32)) {
+            continue;
+        }
+        let canonical: [u8; 32] = value.into_bigint().to_bytes_le().try_into().unwrap();
+        if canonical.iter().filter(|byte| **byte != 0).count() >= 16 {
+            patterns.insert(canonical);
+            patterns.insert(value.0.to_bytes_le().try_into().unwrap());
+        }
+    }
+    assert!(
+        patterns.len() >= 64,
+        "too few private witness values to search for"
+    );
+    let planted = [&[0xab; 7][..], patterns.iter().next().unwrap(), &[0xcd; 5]].concat();
+    assert_eq!(find_pattern(&[planted.into()], &patterns), Some((0, 7)));
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+    );
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+    let inputs = noir_types::partially_read_abi_bn254(
+        File::open(prover_toml).unwrap(),
+        &program_artifact.abi,
+        &program_artifact.bytecode.functions[0]
+            .public_inputs()
+            .indices(),
+    )
+    .unwrap();
+    let mut threads = Vec::with_capacity(3);
+    for (inner, input) in izip!(
+        LocalNetwork::new_3_parties(),
+        co_noir::split_input_rep3(inputs)
+    ) {
+        let net = RecordingNetwork {
+            inner,
+            log: log.clone(),
+        };
+        let prover_crs = prover_crs.clone();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+        let artifact = program_artifact.clone();
+        threads.push(std::thread::spawn(move || {
+            let witness = co_noir::generate_witness_rep3(input, artifact, &net).unwrap();
+            let pk =
+                co_noir::generate_proving_key_rep3(&constraint_system, witness, &net, &prover_crs)
+                    .unwrap();
+            let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+            let (proof, _) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                &net,
+                pk,
+                &prover_crs,
+                ZeroKnowledge::No,
+                &vk.inner_vk,
+            )
+            .unwrap();
+            proof
+        }));
+    }
+    let proofs: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    // The recorded run is the real protocol: its proof is barretenberg's.
+    assert_eq!(
+        Poseidon2Sponge::to_buffer(proofs[0].inner_as_ref()),
+        std::fs::read(PROOF_FILE).unwrap()
+    );
+
+    let frames = Arc::try_unwrap(log).unwrap().into_inner().unwrap();
+    let total_bytes: usize = frames.iter().map(Bytes::len).sum();
+    assert!(total_bytes >= 100_000, "recorded only {total_bytes} bytes");
+    if let Some((frame, offset)) = find_pattern(&frames, &patterns) {
+        panic!(
+            "private witness value in plaintext in frame {frame} at offset {offset} ({} frames, {total_bytes} bytes)",
+            frames.len()
+        );
+    }
 }
 
 #[test]
