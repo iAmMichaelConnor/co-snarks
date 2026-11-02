@@ -16,6 +16,43 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
+/// The default maximum number of shared-index lookup gates whose one-hot vectors are built
+/// together when the proving key's lookup read counts are constructed, see
+/// [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`].
+pub const DEFAULT_LOOKUP_READ_COUNT_BATCH: usize = 4096;
+
+/// The number of shared-index lookup gates, for tables of the given lengths, that go into the
+/// next batch of the lookup read-count construction.
+///
+/// A batch has at most `max_gates` gates and, since one message carries a field element per
+/// one-hot entry, at most half of [`mpc_net::DEFAULT_MAX_FRAME_LENGTH`] in padded table entries
+/// (the rest is left for the framing and the other messages of the batch). The read-tag
+/// products of a batch, including each table's running product, have no more entries than its
+/// one-hot vectors. A table larger than this budget forms a batch on its own. `None` puts all
+/// gates into one batch. The lengths are public, so all parties form the same batches.
+pub fn lookup_read_count_batch_len<F: PrimeField>(
+    max_gates: Option<usize>,
+    table_lengths: impl Iterator<Item = usize>,
+) -> usize {
+    let Some(max_gates) = max_gates else {
+        return table_lengths.count();
+    };
+    // The size of a serialized field element
+    let element_size = (F::MODULUS_BIT_SIZE as usize).div_ceil(64) * 8;
+    let max_entries = (mpc_net::DEFAULT_MAX_FRAME_LENGTH / 2) / element_size;
+    let mut entries = 0usize;
+    let mut count = 0;
+    for len in table_lengths.take(max_gates.max(1)) {
+        let padded = len.next_power_of_two();
+        if count > 0 && padded > max_entries.saturating_sub(entries) {
+            break;
+        }
+        entries = entries.saturating_add(padded);
+        count += 1;
+    }
+    count
+}
+
 /// A trait representing the MPC operations required for extending the secret-shared Noir witness in MPC.
 /// The operations are generic over public and private (i.e., secret-shared) inputs.
 pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
@@ -194,6 +231,34 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         index: Self::ArithmeticShare,
         len: usize,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>>;
+
+    /// Creates shared one-hot-encoded vectors from many shared indices, `indices[i]` indexing a
+    /// table of `lens[i]` entries, see [`Self::one_hot_vector_from_shared_index`]. The default
+    /// calls it for each index; implementations can batch the communication.
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        eyre::ensure!(
+            indices.len() == lens.len(),
+            "Every index needs a table length"
+        );
+        indices
+            .iter()
+            .zip(lens)
+            .map(|(index, len)| self.one_hot_vector_from_shared_index(index.to_owned(), *len))
+            .collect()
+    }
+
+    /// The maximum number of shared-index lookup gates whose one-hot vectors are built together
+    /// in one batch when the proving key's lookup read counts are constructed (further bounded
+    /// by [`lookup_read_count_batch_len`]). `None` puts all gates into one batch: the fewest
+    /// rounds, but memory grows with all one-hot vectors at once. The read counts and read tags
+    /// are the same for every batch size. All parties must use the same value.
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        None
+    }
 
     /// Reads from a LUT at a shared index and additionally returns the shared one-hot-encoded vector of the index
     /// (with at least the length of the LUT), such that it can be reused without recomputing it.

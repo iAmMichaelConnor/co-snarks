@@ -2193,6 +2193,118 @@ mod ring_share {
         apply_to_all!(rep3_rand_ohv_test_t, [u8, u16]);
     }
 
+    /// Counts the messages a party sends.
+    struct CountingNetwork {
+        inner: LocalNetwork,
+        sent: std::sync::atomic::AtomicUsize,
+    }
+
+    impl mpc_net::Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: mpc_net::bytes::Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<mpc_net::bytes::Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> mpc_net::ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    #[test]
+    fn rep3_batched_ohv_mixed_lengths() {
+        use mpc_core::protocols::rep3_ring::lut_field::Rep3FieldLookupTable;
+        use rand::{rngs::StdRng, SeedableRng};
+        use std::sync::atomic::Ordering;
+
+        type F = ark_bn254::Fr;
+        // The table sizes reach different levels of the recursion, and 129, 257 and 513 need
+        // more than one packed element per AND. Non-powers of two are padded with zeros.
+        // Repeated indices check that independent sharings agree.
+        let mut lengths = Vec::new();
+        let mut indices = Vec::new();
+        for len in [2usize, 3, 7, 8, 9, 17, 33, 65, 129, 257, 513] {
+            for index in [0, len - 1, len / 2, len / 2] {
+                lengths.push(len);
+                indices.push(index);
+            }
+        }
+        let values: Vec<F> = indices.iter().map(|&index| F::from(index as u64)).collect();
+        let mut rng = StdRng::seed_from_u64(0x4856);
+        let shares = rep3::share_field_elements(&values, &mut rng);
+        let workers: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(inner, shares)| {
+                let lengths = lengths.clone();
+                std::thread::spawn(move || {
+                    let net = CountingNetwork {
+                        inner,
+                        sent: Default::default(),
+                    };
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    net.sent.store(0, Ordering::SeqCst);
+                    assert!(Rep3FieldLookupTable::<F>::ohv_from_index_many(
+                        &[],
+                        &[],
+                        &net,
+                        &mut state
+                    )
+                    .unwrap()
+                    .is_empty());
+                    assert_eq!(net.sent.load(Ordering::SeqCst), 0);
+
+                    let batched = Rep3FieldLookupTable::<F>::ohv_from_index_many(
+                        &shares, &lengths, &net, &mut state,
+                    )
+                    .unwrap();
+                    let batched_messages = net.sent.swap(0, Ordering::SeqCst);
+
+                    // A single index of the largest table.
+                    Rep3FieldLookupTable::<F>::ohv_from_index_many(
+                        &shares[..1],
+                        &[513],
+                        &net,
+                        &mut state,
+                    )
+                    .unwrap();
+                    let single_messages = net.sent.swap(0, Ordering::SeqCst);
+                    (batched, batched_messages, single_messages)
+                })
+            })
+            .collect();
+        let results: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        for (gate, (&len, &index)) in lengths.iter().zip(&indices).enumerate() {
+            for party in &results {
+                assert_eq!(party.0.len(), lengths.len());
+                assert_eq!(party.0[gate].len(), len.next_power_of_two());
+            }
+            let reconstructed = rep3::combine_field_elements(
+                &results[0].0[gate],
+                &results[1].0[gate],
+                &results[2].0[gate],
+            );
+            let expected: Vec<F> = (0..len.next_power_of_two())
+                .map(|row| F::from(u64::from(row == index)))
+                .collect();
+            assert_eq!(reconstructed, expected, "table length {len}, index {index}");
+        }
+        // All 44 indices together take as many messages as one index of the largest table.
+        for (_, batched, single) in &results {
+            assert_eq!(batched, single);
+        }
+    }
+
     fn rep3_lut_test_t<T: IntRing2k>()
     where
         Standard: Distribution<T>,

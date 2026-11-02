@@ -462,3 +462,167 @@ fn zk_recursion_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
 }
+
+/// Builds the REP3 proving key with the given lookup read-count batch size, proves, and returns
+/// the proof together with the messages party 0 sent during key generation.
+fn prove_rep3_with_lookup_batch_size(name: &str, batch_size: Option<usize>) -> (Vec<u8>, usize) {
+    use co_acvm::{Rep3AcvmSolver, Rep3AcvmType};
+    use co_builder::{
+        keys::proving_key::create_prover_instance,
+        prelude::{HonkRecursion, Rep3CoBuilder},
+    };
+    use co_noir_common::crs::ProverCrs;
+    use mpc_core::protocols::rep3::{conversion::A2BType, id::PartyID};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingNetwork {
+        inner: LocalNetwork,
+        sent: AtomicUsize,
+    }
+
+    impl Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    let artifact = co_noir::program_artifact_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
+    )
+    .unwrap();
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&artifact);
+    let witness = co_noir::witness_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.gz")).unwrap(),
+    )
+    .unwrap();
+    let mut shares: [Vec<Rep3AcvmType<Fr>>; 3] = Default::default();
+    for (index, value) in witness.into_iter().enumerate() {
+        let value: [Rep3AcvmType<Fr>; 3] =
+            if constraint_system.public_inputs.contains(&(index as u32)) {
+                std::array::from_fn(|_| Rep3AcvmType::from(value))
+            } else {
+                share_field_element(value, &mut rand::thread_rng()).map(Rep3AcvmType::from)
+            };
+        for (shares, value) in shares.iter_mut().zip(value) {
+            shares.push(value);
+        }
+    }
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+    );
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), shares)
+        .map(|(inner, witness)| {
+            let prover_crs = prover_crs.clone();
+            let constraint_system = co_noir::get_constraint_system_from_artifact(&artifact);
+            std::thread::spawn(move || {
+                let net = CountingNetwork {
+                    inner,
+                    sent: AtomicUsize::new(0),
+                };
+                let mut driver = Rep3AcvmSolver::new(&net, A2BType::default()).unwrap();
+                driver.set_lookup_read_count_batch_size(batch_size);
+                let before = net.sent.load(Ordering::SeqCst);
+                let builder = Rep3CoBuilder::create_circuit(
+                    &constraint_system,
+                    0,
+                    witness,
+                    HonkRecursion::UltraHonk,
+                    &ProverCrs::default(),
+                    &mut driver,
+                )
+                .unwrap();
+                let id = PartyID::try_from(net.id()).unwrap();
+                let pk = create_prover_instance(id, builder, &mut driver).unwrap();
+                let sent = net.sent.load(Ordering::SeqCst) - before;
+                let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
+                let (proof, _) = Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                    &net,
+                    pk,
+                    &prover_crs,
+                    ZeroKnowledge::No,
+                    &vk.inner_vk,
+                )
+                .unwrap();
+                (Poseidon2Sponge::to_buffer(proof.inner_as_ref()), sent)
+            })
+        })
+        .collect();
+    let mut results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let (proof, sent) = results.remove(0);
+    for (other, _) in results {
+        assert_eq!(other, proof);
+    }
+    (proof, sent)
+}
+
+/// The non-ZK proof of a circuit with lookups at shared indices is the plain driver's proof for
+/// every lookup read-count batch size, and batching saves messages in key generation.
+#[test]
+fn lookup_read_count_batches_preserve_shared_proof() {
+    use co_acvm::PlainAcvmSolver;
+    use co_builder::prelude::{HonkRecursion, UltraCircuitBuilder};
+    use co_noir_common::crs::ProverCrs;
+
+    let name = "blackbox_and";
+    let constraint_system = co_noir::constraint_system_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
+    )
+    .unwrap();
+    let witness = co_noir::witness_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.gz")).unwrap(),
+    )
+    .unwrap();
+    let mut driver = PlainAcvmSolver::new();
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness,
+        HonkRecursion::UltraHonk,
+        &ProverCrs::default(),
+        &mut driver,
+    )
+    .unwrap();
+    let crs_size = builder.compute_dyadic_size();
+    let (prover_crs, verifier_crs) = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+        CRS_PATH_G1,
+        CRS_PATH_G2,
+        crs_size,
+        ZeroKnowledge::No,
+    )
+    .unwrap()
+    .split();
+    let (proving_key, verifying_key) = builder
+        .create_keys::<Bn254>(prover_crs.into(), verifier_crs, &mut driver)
+        .unwrap();
+    let (proof, _) = UltraHonk::<_, Poseidon2Sponge>::prove(
+        proving_key,
+        ZeroKnowledge::No,
+        &verifying_key.inner_vk,
+    )
+    .unwrap();
+    let expected = Poseidon2Sponge::to_buffer(proof.inner_as_ref());
+
+    let mut messages = Vec::new();
+    for batch_size in [Some(1), Some(3), Some(7), None, Some(0)] {
+        let (proof, sent) = prove_rep3_with_lookup_batch_size(name, batch_size);
+        assert_eq!(proof, expected, "lookup batch size {batch_size:?}");
+        messages.push(sent);
+    }
+    // One gate per batch takes the most messages; all gates in one batch the fewest.
+    assert!(messages[3] < messages[0], "{messages:?}");
+}
