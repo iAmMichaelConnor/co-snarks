@@ -1681,6 +1681,87 @@ mod field_share {
         assert_eq!(is_result, should_result);
     }
 
+    /// A total bit size below the chunk size gives a single chunk that is shorter than
+    /// the chunk size.
+    #[test]
+    fn rep3_decompose_shared_field_into_single_short_chunk_via_yao() {
+        const CHUNK_SIZE: usize = 14;
+        const TOTAL_BIT_SIZES: [usize; 3] = [1, 8, 13];
+
+        let nets = LocalNetwork::new_3_parties();
+        let mut rng = thread_rng();
+        let x = (0..4).map(|_| ark_bn254::Fr::rand(&mut rng)).collect_vec();
+        let x_shares = rep3::share_field_elements(&x, &mut rng);
+
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+
+        for (net, tx, x) in izip!(nets.into_iter(), [tx1, tx2, tx3], x_shares.into_iter()) {
+            std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let mut fr = Vec::new();
+                let mut fq = Vec::new();
+                for total_bit_size in TOTAL_BIT_SIZES {
+                    fr.push(
+                        yao::decompose_arithmetic_many(
+                            &x,
+                            &net,
+                            &mut state,
+                            total_bit_size,
+                            CHUNK_SIZE,
+                        )
+                        .unwrap(),
+                    );
+                    fr.push(
+                        yao::decompose_arithmetic(
+                            x[0],
+                            &net,
+                            &mut state,
+                            total_bit_size,
+                            CHUNK_SIZE,
+                        )
+                        .unwrap(),
+                    );
+                    fq.push(
+                        yao::decompose_arithmetic_to_other_field_many::<
+                            ark_bn254::Fr,
+                            ark_bn254::Fq,
+                            _,
+                        >(&x, &net, &mut state, total_bit_size, CHUNK_SIZE)
+                        .unwrap(),
+                    );
+                }
+                tx.send((fr, fq))
+            });
+        }
+
+        let (fr1, fq1) = rx1.recv().unwrap();
+        let (fr2, fq2) = rx2.recv().unwrap();
+        let (fr3, fq3) = rx3.recv().unwrap();
+        for (i, total_bit_size) in TOTAL_BIT_SIZES.into_iter().enumerate() {
+            let should_result = x
+                .iter()
+                .map(|x| x.to_uint() & U256::mask(total_bit_size))
+                .collect_vec();
+            let many = rep3::combine_field_elements(&fr1[2 * i], &fr2[2 * i], &fr3[2 * i]);
+            let single =
+                rep3::combine_field_elements(&fr1[2 * i + 1], &fr2[2 * i + 1], &fr3[2 * i + 1]);
+            let other = rep3::combine_field_elements(&fq1[i], &fq2[i], &fq3[i]);
+            let should_fr = should_result
+                .iter()
+                .map(ark_bn254::Fr::from_uint_unchecked)
+                .collect_vec();
+            let should_fq = should_result
+                .iter()
+                .map(ark_bn254::Fq::from_uint_unchecked)
+                .collect_vec();
+            assert_eq!(many, should_fr);
+            assert_eq!(single, should_fr[..1]);
+            assert_eq!(other, should_fq);
+        }
+    }
+
     fn rep3_slice_shared_field_many_via_yao_inner(msb: usize, lsb: usize, bitsize: usize) {
         const VEC_SIZE: usize = 10;
 
