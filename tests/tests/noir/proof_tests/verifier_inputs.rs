@@ -207,3 +207,48 @@ fn zk_verification_without_padding_requires_three_rounds() {
     vk.inner_vk.log_circuit_size = 2;
     assert!(verify::<Keccak256>(proof, &public_inputs, &vk, ZeroKnowledge::Yes).is_err());
 }
+
+/// The caller passes the application public inputs and the proof carries the pairing point
+/// accumulator. Moving an element across that boundary must not keep the proof valid.
+#[test]
+fn public_input_boundary_cannot_be_shifted() {
+    check_public_input_boundary::<Poseidon2Sponge>();
+    check_public_input_boundary::<Keccak256>();
+}
+
+fn check_public_input_boundary<H: TranscriptHasher<TranscriptFieldType>>() {
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        let (proof, public_inputs, vk) = prove::<H>(has_zk);
+        assert!(!public_inputs.is_empty());
+        assert!(verify::<H>(proof.clone(), &public_inputs, &vk, has_zk).unwrap());
+
+        // The last application input moves into the proof.
+        let (last, rest) = public_inputs.split_last().unwrap();
+        let mut longer_proof = vec![*last];
+        longer_proof.extend(proof.clone().inner());
+        assert!(verify::<H>(HonkProof::new(longer_proof), rest, &vk, has_zk).is_err());
+
+        // The first accumulator limb moves out of the proof.
+        let mut shorter_proof = proof.inner();
+        let mut more_inputs = public_inputs.clone();
+        more_inputs.push(shorter_proof.remove(0));
+        assert!(verify::<H>(HonkProof::new(shorter_proof), &more_inputs, &vk, has_zk).is_err());
+    }
+}
+
+#[test]
+fn invalid_key_metadata_is_an_error() {
+    let (proof, public_inputs, vk) = prove::<Poseidon2Sponge>(ZeroKnowledge::No);
+    for (log_circuit_size, num_public_inputs) in [(0, None), (u64::MAX, None), (6, Some(u64::MAX))]
+    {
+        let mut vk = vk.clone();
+        vk.inner_vk.log_circuit_size = log_circuit_size;
+        if let Some(num_public_inputs) = num_public_inputs {
+            vk.inner_vk.num_public_inputs = num_public_inputs;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify::<Poseidon2Sponge>(proof.clone(), &public_inputs, &vk, ZeroKnowledge::No)
+        }));
+        assert!(matches!(result, Ok(Err(_))), "{log_circuit_size}");
+    }
+}
