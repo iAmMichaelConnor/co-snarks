@@ -267,3 +267,48 @@ fn rep3_inverse_of_public_zero_limbs_matches_plain() {
         }
     }
 }
+
+#[test]
+fn rep3_non_native_subtraction_matches_plain() {
+    let mut rng = thread_rng();
+    let (a, b) = (Fq::rand(&mut rng), Fq::rand(&mut rng));
+    let sub = |driver: &mut Rep3Driver<'_>, mut x: Vec<_>| {
+        let lhs = x.remove(0);
+        Ok(driver.sub_other_acvm_types::<Bn254G1>(lhs, x.remove(0)))
+    };
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    let expected = plain.sub_other_acvm_types::<Bn254G1>(a, b);
+    assert_eq!(expected, a - b);
+    for (lhs, rhs) in [
+        (Input::Public(a), Input::Public(b)),
+        (Input::Public(a), Input::Shared(b)),
+        (Input::Shared(a), Input::Public(b)),
+        (Input::Shared(a), Input::Shared(b)),
+    ] {
+        assert_eq!(
+            rep3_other(&[lhs, rhs], sub).unwrap(),
+            expected,
+            "{lhs:?} - {rhs:?}"
+        );
+    }
+}
+
+#[test]
+fn madd_div_mod_many_rejects_mismatched_lengths() {
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    let one = [Fr::from(1u64), Fr::zero(), Fr::zero(), Fr::zero()];
+    assert!(plain
+        .madd_div_mod_many_acvm_limbs::<Bn254G1>(&[one, one], &[one], &[])
+        .is_err());
+    assert!(plain
+        .madd_div_mod_many_acvm_limbs::<Bn254G1>(&[one], &[one], &[])
+        .is_ok());
+    let outputs = run_rep3([(); 3], move |driver, ()| {
+        let one = one.map(Rep3AcvmType::from);
+        let (a, b) = (vec![one.clone()], vec![one.clone(), one]);
+        driver
+            .madd_div_mod_many_acvm_limbs::<Bn254G1>(&a, &b, &[])
+            .is_err()
+    });
+    assert_eq!(outputs, [true; 3]);
+}
