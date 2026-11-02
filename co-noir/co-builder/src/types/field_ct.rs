@@ -5030,4 +5030,68 @@ pub(crate) mod tests {
             );
         }
     }
+
+    type PlainCycleGroup = CycleGroupCT<Bn254G1, PlainAcvmSolver<Fr>>;
+    type Grumpkin = ark_grumpkin::Projective;
+
+    /// A circuit author can choose the constant base P = G0 - G1, where G0 and G1 are the first two offset
+    /// generators. With a top scalar slice of 1, the first Straus addition then has equal x-coordinates, so the
+    /// unconditional addition must not be used for P: the collision check has to make the circuit unsatisfiable.
+    #[test]
+    fn batch_mul_with_chosen_constant_point_rejects_degenerate_addition() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        let offsets = generators::derive_generators::<Grumpkin>(
+            PlainCycleGroup::OFFSET_GENERATOR_DOMAIN_SEPARATOR,
+            2,
+            0,
+        );
+        let point = offsets[0].into_group() - offsets[1];
+        let scalar = CycleScalarCT {
+            lo: FieldCT::from_witness(Fr::zero(), &mut builder),
+            hi: FieldCT::from_witness(Fr::from(BigUint::one() << 124usize), &mut builder),
+        };
+        let constant_scalar = CycleScalarCT {
+            lo: FieldCT::from(Fr::from(7u64)),
+            hi: FieldCT::default(),
+        };
+        let result = PlainCycleGroup::batch_mul(
+            vec![
+                PlainCycleGroup::from_group_element(point),
+                PlainCycleGroup::from_group_element(Grumpkin::generator()),
+            ],
+            vec![scalar, constant_scalar],
+            &mut builder,
+            &mut driver,
+        )
+        .unwrap();
+        let expected = point * ark_grumpkin::Fr::from(BigUint::one() << 252usize)
+            + Grumpkin::generator() * ark_grumpkin::Fr::from(7u64);
+        assert_eq!(result.get_value(&builder, &mut driver).unwrap(), expected);
+        assert!(!prove_and_verify(builder, &mut driver));
+    }
+
+    /// An arbitrary constant base with nondegenerate Straus additions proves and verifies.
+    #[test]
+    fn batch_mul_with_arbitrary_constant_point_verifies() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        let point = Grumpkin::generator() * ark_grumpkin::Fr::from(17u64);
+        let scalar = CycleScalarCT {
+            lo: FieldCT::from_witness(Fr::from(42u64), &mut builder),
+            hi: FieldCT::from_witness(Fr::zero(), &mut builder),
+        };
+        let result = PlainCycleGroup::batch_mul(
+            vec![PlainCycleGroup::from_group_element(point)],
+            vec![scalar],
+            &mut builder,
+            &mut driver,
+        )
+        .unwrap();
+        assert_eq!(
+            result.get_value(&builder, &mut driver).unwrap(),
+            point * ark_grumpkin::Fr::from(42u64)
+        );
+        assert!(prove_and_verify(builder, &mut driver));
+    }
 }

@@ -1530,6 +1530,75 @@ mod tests {
         types::{big_field::BigField, big_group::BigGroup, field_ct::FieldCT},
     };
 
+    /// Decodes a point from four public-input limbs (x_lo, x_hi, y_lo, y_hi; 136 + 118 bits) as the recursive
+    /// verifier does, and checks with a full proof whether the circuit accepts the encoding. Inspecting the decoded
+    /// (reduced) point is not enough: an aliased encoding decodes to the same point.
+    #[test]
+    fn recursive_point_decoding_rejects_malformed_limbs() {
+        use crate::types::field_ct::tests::prove_and_verify;
+        use ark_bn254::Fq;
+        use ark_ff::PrimeField;
+
+        fn split(value: BigUint) -> [Fr; 2] {
+            let mask = (BigUint::one() << 136usize) - BigUint::one();
+            [Fr::from(&value & mask), Fr::from(value >> 136usize)]
+        }
+        fn encode(x: BigUint, y: BigUint) -> [Fr; 4] {
+            let [x_lo, x_hi] = split(x);
+            let [y_lo, y_hi] = split(y);
+            [x_lo, x_hi, y_lo, y_hi]
+        }
+
+        let modulus: BigUint = Fq::MODULUS.into();
+        let one = BigUint::one;
+        let two = || BigUint::from(2u32);
+        let generator = encode(one(), two());
+        let point = (G1Affine::generator() * Fr::from(17u32)).into_affine();
+        let canonical = encode(point.x.into(), point.y.into());
+        let mut cases = vec![
+            ("generator", generator, true),
+            ("infinity", [Fr::zero(); 4], true),
+            ("multiple of the generator", canonical, true),
+            ("x plus modulus", encode(&modulus + 1u32, two()), false),
+            ("y plus modulus", encode(one(), &modulus + 2u32), false),
+            (
+                "infinity with x = modulus",
+                encode(modulus.clone(), BigUint::zero()),
+                false,
+            ),
+            (
+                "infinity with y = modulus",
+                encode(BigUint::zero(), modulus),
+                false,
+            ),
+            ("off curve", encode(one(), one()), false),
+        ];
+        // Move one unit from a high limb into its low limb: the encoded integer is unchanged, but the low limb has
+        // 137 bits.
+        for (name, low) in [("oversized x low limb", 0), ("oversized y low limb", 2)] {
+            let mut limbs = canonical;
+            limbs[low] += Fr::from(BigUint::one() << 136usize);
+            limbs[low + 1] -= Fr::one();
+            cases.push((name, limbs, false));
+        }
+        for (name, high) in [("oversized x high limb", 1), ("oversized y high limb", 3)] {
+            let mut limbs = generator;
+            limbs[high] = Fr::from(BigUint::one() << 118usize);
+            cases.push((name, limbs, false));
+        }
+
+        for (name, values, valid) in cases {
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let mut builder = GenericUltraCircuitBuilder::<Bn254G1, _>::new_minimal(0);
+            let limbs: Vec<_> = values
+                .into_iter()
+                .map(|value| FieldCT::from_witness_index(builder.add_variable(value)))
+                .collect();
+            BigGroup::reconstruct_from_public(&limbs, &mut builder, &mut driver).unwrap();
+            assert_eq!(prove_and_verify(builder, &mut driver), valid, "{name}");
+        }
+    }
+
     fn affine_to_biggroup(
         point: &G1Affine,
         builder: &mut GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>,

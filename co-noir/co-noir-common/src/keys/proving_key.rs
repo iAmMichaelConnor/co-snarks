@@ -148,3 +148,70 @@ impl<T: NoirUltraHonkProver<C>, C: CurveGroup> ProvingKey<T, C> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+
+    /// The ROM and memory metadata of a proving key must survive the conversion from a plain key and a bincode
+    /// round trip, since the MPC parties receive the key in that form.
+    fn rom_metadata_round_trip<T: NoirUltraHonkProver<G1Projective>>() {
+        let mut plain = PlainProvingKey::<G1Projective> {
+            circuit_size: 16,
+            public_inputs: vec![Fr::from(17u64), Fr::from(23u64)],
+            num_public_inputs: 2,
+            pub_inputs_offset: 4,
+            polynomials: crate::polynomials::polynomial::Polynomials::new(16),
+            memory_read_records: vec![12],
+            memory_write_records: vec![13],
+            rom_logup_records: vec![5, 6, 8, 9, 10],
+            final_active_wire_idx: 14,
+            ..Default::default()
+        };
+        plain.active_region_data.add_range(4, 14);
+        // The ROM array ids live in q_c of the table rows.
+        plain.polynomials.precomputed.q_c_mut()[5] = Fr::from(31u64);
+        plain.polynomials.precomputed.q_c_mut()[8] = Fr::from(37u64);
+        let shares = vec![T::ArithmeticShare::default(); 6 * 16];
+        let mut shared = ProvingKey::<T, G1Projective>::from_plain_key_and_shares(&plain, shares)
+            .expect("convert plain key to shared key");
+        assert_eq!(shared.rom_logup_records, plain.rom_logup_records);
+        // Also fill the neighbouring variable-length field to detect a layout change.
+        shared
+            .memory_records_shared
+            .insert(13, T::ArithmeticShare::default());
+
+        let mut bytes = Vec::new();
+        bincode::serialize_into(&mut bytes, &shared).unwrap();
+        let loaded: ProvingKey<T, G1Projective> =
+            bincode::deserialize_from(bytes.as_slice()).unwrap();
+        assert_eq!(loaded.rom_logup_records, plain.rom_logup_records);
+        assert_eq!(loaded.memory_read_records, plain.memory_read_records);
+        assert_eq!(loaded.memory_write_records, plain.memory_write_records);
+        assert_eq!(
+            loaded
+                .memory_records_shared
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![13]
+        );
+        assert_eq!(loaded.final_active_wire_idx, plain.final_active_wire_idx);
+        assert_eq!(loaded.active_region_data, plain.active_region_data);
+        assert_eq!(loaded.public_inputs, plain.public_inputs);
+        assert_eq!(loaded.polynomials.precomputed.q_c()[5], Fr::from(31u64));
+        assert_eq!(loaded.polynomials.precomputed.q_c()[8], Fr::from(37u64));
+        assert_eq!(bincode::serialize(&loaded).unwrap(), bytes);
+    }
+
+    #[test]
+    fn rep3_rom_metadata_survives_conversion_and_serialization() {
+        rom_metadata_round_trip::<Rep3UltraHonkDriver>();
+    }
+
+    #[test]
+    fn shamir_rom_metadata_survives_conversion_and_serialization() {
+        rom_metadata_round_trip::<ShamirUltraHonkDriver>();
+    }
+}
