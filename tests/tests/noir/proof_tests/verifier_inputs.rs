@@ -13,11 +13,11 @@ use co_noir::UltraHonk;
 use co_noir_common::crs::parse::CrsParser;
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_proof::{HonkProofError, TranscriptFieldType};
-use co_noir_common::keys::verification_key::VerifyingKey;
+use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
 use co_noir_common::transcript::{Poseidon2Sponge, TranscriptHasher};
 use co_noir_common::types::Bn254G1;
 use co_noir_common::types::ZeroKnowledge;
-use noir_types::{HonkProof, U256};
+use noir_types::{HonkProof, SerializeF, U256};
 use num_bigint::BigUint;
 use sha3::Keccak256;
 use std::fs::File;
@@ -131,4 +131,53 @@ fn off_curve_proof_commitment_is_an_error() {
         )),
         HonkProofError::PointNotOnCurve
     ));
+}
+
+#[test]
+fn trailing_proof_data_is_rejected() {
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        let (proof, public_inputs, vk) = prove::<Poseidon2Sponge>(has_zk);
+        let mut frs = proof.inner();
+        frs.push(ark_bn254::Fr::from(0u64));
+        assert!(matches!(
+            proof_error(verify::<Poseidon2Sponge>(
+                HonkProof::new(frs),
+                &public_inputs,
+                &vk,
+                has_zk
+            )),
+            HonkProofError::InvalidProofLength
+        ));
+    }
+}
+
+/// The outer proofs of a recursive circuit, one over a valid and one over an invalid inner proof.
+/// Both outer proofs are valid for the outer circuit; only the pairing point accumulator they
+/// carry in their public inputs tells them apart (see the fixture's README).
+mod pairing_point_accumulator {
+    use super::*;
+
+    const DIR: &str = "../test_vectors/noir/recursion_malicious_accumulator/kat";
+
+    fn verify_fixture(name: &str) -> eyre::Result<bool> {
+        let read = |file: String| std::fs::read(format!("{DIR}/{file}")).unwrap();
+        let vk = VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&read("vk".to_string()))?;
+        let vk = VerifyingKey::from_barretenberg_and_crs(
+            vk,
+            CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2)?,
+        );
+        let proof = HonkProof::<ark_bn254::Fr>::from_buffer(&read(format!("{name}_proof")))?;
+        let public_inputs = SerializeF::from_buffer(&read(format!("{name}_public_inputs")), false)?;
+        verify::<Poseidon2Sponge>(proof, &public_inputs, &vk, ZeroKnowledge::No)
+    }
+
+    #[test]
+    fn valid_inner_proof_is_accepted() {
+        assert!(verify_fixture("honest").unwrap());
+    }
+
+    #[test]
+    fn invalid_inner_proof_is_rejected() {
+        assert!(!verify_fixture("malicious").unwrap());
+    }
 }
