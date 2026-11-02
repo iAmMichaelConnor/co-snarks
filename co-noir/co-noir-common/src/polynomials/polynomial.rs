@@ -102,6 +102,62 @@ impl<F: Clone> Index<usize> for ShiftedPoly<'_, F> {
     }
 }
 
+/// Below this log size the sparse Gemini masking polynomial does not have the rank the
+/// hiding argument needs (2d < N fails), so a dense random mask is used instead
+/// (barretenberg `SPARSE_MASKING_MIN_LOG_N`).
+pub const SPARSE_MASKING_MIN_LOG_N: usize = 4;
+
+/// The tail-halving support {E-1, E-2, N/2, N/2-1, N/4, N/4-1, ..., 2, 1} of a polynomial of
+/// size N = 2^d, de-duplicated and tail-filled to min(2d, N) distinct entries, where
+/// E = `extent` rounded up to an even number. Same as barretenberg's `tail_halving_support`
+/// (`commitment_schemes/shplonk/sparse_masking_poly.hpp`).
+pub fn tail_halving_support(d: usize, extent: usize) -> Vec<usize> {
+    let n = 1usize << d;
+    assert!(extent > 0 && extent <= n);
+    let e = n.min(extent.next_multiple_of(2));
+    let target = n.min(2 * d);
+
+    let mut support = Vec::with_capacity(target);
+    let add = |support: &mut Vec<usize>, i: usize| {
+        if i < n && !support.contains(&i) {
+            support.push(i);
+        }
+    };
+    // The only collision is the top-pair entry E-2 landing on the level-1 anchor N/2; the
+    // tail-fill below then restores the 2d distinct points.
+    if e >= 2 {
+        add(&mut support, e - 1);
+        add(&mut support, e - 2);
+    }
+    for level in 1..d {
+        let base = n >> level;
+        add(&mut support, base);
+        add(&mut support, base - 1);
+    }
+    for i in (0..e).rev() {
+        if support.len() >= target {
+            break;
+        }
+        add(&mut support, i);
+    }
+    support
+}
+
+/// The coefficients of the Gemini masking polynomial of a circuit of `dyadic_size` that get a
+/// random value; all other coefficients are zero. As barretenberg's `build_gemini_masking_poly`:
+/// 2d coefficients on the tail-halving support, or all coefficients for log sizes below
+/// [`SPARSE_MASKING_MIN_LOG_N`]. The extent is the full domain, since the polynomials here are
+/// stored at full size. The support only depends on the public circuit size.
+pub fn gemini_masking_support(dyadic_size: usize) -> Vec<usize> {
+    assert!(dyadic_size.is_power_of_two());
+    let d = dyadic_size.ilog2() as usize;
+    if d < SPARSE_MASKING_MIN_LOG_N {
+        (0..dyadic_size).collect()
+    } else {
+        tail_halving_support(d, dyadic_size)
+    }
+}
+
 impl<F: Clone> AsRef<[F]> for Polynomial<F> {
     fn as_ref(&self) -> &[F] {
         &self.coefficients
@@ -525,5 +581,85 @@ impl<F: PrimeField> RowDisablingPolynomial<F> {
         }
 
         F::one() - evaluation_at_multivariate_challenge
+    }
+}
+
+#[cfg(test)]
+mod gemini_masking_support_tests {
+    use super::{gemini_masking_support, tail_halving_support};
+    use crate::honk_proof::TranscriptFieldType as Fr;
+    use ark_ff::{Field, One, Zero};
+
+    #[test]
+    fn support_matches_barretenberg() {
+        assert_eq!(gemini_masking_support(16), [15, 14, 8, 7, 4, 3, 2, 1]);
+        assert_eq!(
+            gemini_masking_support(1 << 10),
+            [
+                1023, 1022, 512, 511, 256, 255, 128, 127, 64, 63, 32, 31, 16, 15, 8, 7, 4, 3, 2, 1
+            ]
+        );
+        for n in [1, 2, 4, 8] {
+            assert_eq!(gemini_masking_support(n), (0..n).collect::<Vec<_>>());
+        }
+        // An odd extent is rounded up; E - 2 colliding with N/2 is tail-filled.
+        assert_eq!(tail_halving_support(4, 9), [9, 8, 7, 4, 3, 2, 1, 6]);
+        assert_eq!(tail_halving_support(4, 10), [9, 8, 7, 4, 3, 2, 1, 6]);
+        assert_eq!(tail_halving_support(4, 3), [3, 2, 8, 7, 4, 1, 0]);
+    }
+
+    /// For each Gemini fold t, the masking polynomial's contribution to the two opened
+    /// evaluations is linear in its support coefficients: X^s maps to
+    /// L_(s mod 2^t)(u_<t) * (tau^(s >> t), (-r^(2^t))^(s >> t)). These 2d linear forms must be
+    /// independent on the 2d support coefficients for the mask to hide them.
+    #[test]
+    fn sparse_support_has_full_rank_at_sample_challenges() {
+        for d in 4..=10 {
+            let support = gemini_masking_support(1 << d);
+            assert_eq!(support.len(), 2 * d);
+            for seed in [101u64, 211u64] {
+                let tau = Fr::from(seed);
+                let r = Fr::from(seed + 2);
+                let u: Vec<_> = (0..d).map(|i| Fr::from(seed + 6 + 2 * i as u64)).collect();
+                let mut matrix = Vec::new();
+                for t in 0..d {
+                    for point in [tau, -r.pow([1u64 << t])] {
+                        matrix.push(
+                            support
+                                .iter()
+                                .map(|s| {
+                                    let mut lagrange = Fr::one();
+                                    for (k, challenge) in u.iter().enumerate().take(t) {
+                                        lagrange *= if (s >> k) & 1 == 1 {
+                                            *challenge
+                                        } else {
+                                            Fr::one() - challenge
+                                        };
+                                    }
+                                    lagrange * point.pow([(s >> t) as u64])
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                for col in 0..2 * d {
+                    let pivot = (col..2 * d)
+                        .find(|row| !matrix[*row][col].is_zero())
+                        .expect("the masking map lost rank");
+                    matrix.swap(col, pivot);
+                    let inverse = matrix[col][col].inverse().unwrap();
+                    for value in &mut matrix[col] {
+                        *value *= inverse;
+                    }
+                    let pivot_row = matrix[col].clone();
+                    for row in matrix.iter_mut().skip(col + 1) {
+                        let factor = row[col];
+                        for (value, pivot) in row.iter_mut().zip(&pivot_row) {
+                            *value -= factor * pivot;
+                        }
+                    }
+                }
+            }
+        }
     }
 }

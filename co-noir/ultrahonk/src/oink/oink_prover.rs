@@ -19,14 +19,14 @@
 
 use super::types::ProverMemory;
 use crate::{NUM_ALPHAS, Utils};
-use ark_ff::{One, Zero};
+use ark_ff::{One, UniformRand, Zero};
 use co_noir_common::{
     constants::{NUM_ZERO_ROWS, PERMUTATION_ARGUMENT_VALUE_SEPARATOR},
     crs::ProverCrs,
     honk_curve::HonkCurve,
     honk_proof::{HonkProofError, HonkProofResult, TranscriptFieldType},
     keys::{plain_proving_key::PlainProvingKey, verification_key::VerifyingKeyBarretenberg},
-    polynomials::polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, Polynomial},
+    polynomials::polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, Polynomial, gemini_masking_support},
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
 };
@@ -92,9 +92,26 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             return Ok(());
         }
 
+        // As barretenberg, the mask is sparse: random values on a public support of 2 * log(n)
+        // coefficients (see `gemini_masking_support`), so the commitment is a small MSM.
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = Polynomial::<C::ScalarField>::random(polynomial_size, &mut self.rng);
-        let masking_commitment = Utils::commit(masking_poly.as_ref(), &proving_key.crs)?;
+        if polynomial_size > proving_key.crs.monomials.len() {
+            return Err(HonkProofError::CrsTooSmall);
+        }
+        let support = gemini_masking_support(polynomial_size);
+        let values: Vec<C::ScalarField> = support
+            .iter()
+            .map(|_| C::ScalarField::rand(&mut self.rng))
+            .collect();
+        let points: Vec<_> = support
+            .iter()
+            .map(|&i| proving_key.crs.monomials[i])
+            .collect();
+        let masking_commitment = Utils::msm::<C>(&values, &points)?;
+        let mut masking_poly = Polynomial::<C::ScalarField>::new_zero(polynomial_size);
+        for (&i, value) in support.iter().zip(values) {
+            masking_poly[i] = value;
+        }
         transcript.send_point_to_verifier::<C>(
             "Gemini:masking_poly_comm".to_string(),
             masking_commitment.into(),

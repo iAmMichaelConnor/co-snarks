@@ -8,6 +8,7 @@ use crate::{
 };
 use co_noir_common::constants::MAX_PARTIAL_RELATION_LENGTH;
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
+use co_noir_common::polynomials::polynomial::gemini_masking_support;
 use co_noir_common::{
     constants::PAIRING_POINT_ACCUMULATOR_SIZE,
     crs::ProverCrs,
@@ -193,7 +194,7 @@ where
     let num_zk_randomness = if has_zk == ZeroKnowledge::No {
         0
     } else {
-        n // compute_batched_polys
+        gemini_masking_support(n).len() // commit_to_masking_poly
         + 1 // ZKData::new
         + n.ilog2() as usize * C::LIBRA_UNIVARIATES_LENGTH // generate_libra_univariates
         + 2 // compute_concatenated_libra_polynomial
