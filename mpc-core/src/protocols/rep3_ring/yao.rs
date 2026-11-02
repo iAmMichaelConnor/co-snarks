@@ -14,7 +14,7 @@ use crate::protocols::{
     },
     rep3_ring::conversion,
 };
-use crate::uint::{FieldUint, U512};
+use crate::uint::{FieldUint, U512, UintBackend};
 use itertools::izip;
 use mpc_net::Network;
 use num_traits::{One, Zero};
@@ -972,6 +972,13 @@ fn public_divisor_to_ring<T: IntRing2k>(divisor: &U512) -> RingElement<T> {
 }
 
 /// Divides the quotient by a public divisor and then returns the quotient as field elements in limbs_per_field many limbs in one field F and the remainder in another field K. The field elements are composed using wires_c.
+///
+/// The remainder is the value of its low `K::MODULUS_BIT_SIZE` bits reduced mod K, i.e., the
+/// full remainder whenever it is smaller than `2^K::MODULUS_BIT_SIZE` (always the case for a
+/// divisor of at most that size, e.g. `K::MODULUS`).
+///
+/// Returns an error, without communicating, if `limb_size` is zero or not smaller than
+/// `F::MODULUS_BIT_SIZE`, or if the divisor is zero or does not fit into the ring.
 #[expect(clippy::type_complexity)]
 pub fn ring_div_by_public_to_fr_limbs_and_fq_many<
     T: IntRing2k,
@@ -989,6 +996,16 @@ pub fn ring_div_by_public_to_fr_limbs_and_fq_many<
 where
     Standard: Distribution<T>,
 {
+    // Each quotient limb is composed into F and must therefore be smaller than its modulus.
+    eyre::ensure!(
+        limb_size > 0 && limb_size < F::MODULUS_BIT_SIZE as usize,
+        "limb size must be positive and smaller than the modulus bit size of F"
+    );
+    eyre::ensure!(!divisor.is_zero(), "divisor must not be zero");
+    eyre::ensure!(
+        divisor.bit_len() <= T::K,
+        "divisor does not fit into the ring"
+    );
     let num_inputs = input.len();
     let divisor_as_bits = GCUtils::ring_to_bits::<T>(public_divisor_to_ring(divisor));
 
