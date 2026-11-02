@@ -254,7 +254,7 @@ impl<C: HonkCurve<TranscriptFieldType>> VerifyingKeyBarretenberg<C> {
             return Err(HonkProofError::InvalidKeyLength);
         }
 
-        let words = U256::from_buffer(buf);
+        let words = U256::from_buffer(buf).map_err(|_| HonkProofError::InvalidKeyLength)?;
         let read_u64 =
             |word: &U256| u64::try_from(word.0).map_err(|_| HonkProofError::CorruptedKey);
         let log_circuit_size = read_u64(&words[0])?;
