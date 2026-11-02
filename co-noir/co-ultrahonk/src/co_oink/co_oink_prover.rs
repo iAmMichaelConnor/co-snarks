@@ -311,20 +311,26 @@ impl<
             let write_term = self.compute_table_term(proving_key, i);
             self.memory.lookup_inverses[i] = T::mul_with_public(write_term, read_term);
         }
+
+        // Invert the denominators before multiplying by the secret activity bit
+        // q_lookup + (1 - q_lookup) * read_tag. The inversion opens each denominator
+        // multiplied by a random value and therefore reveals which rows are zero. If
+        // the activity bit were applied first, those zeros would reveal, for every
+        // table row (q_lookup = 0), whether the private read tag is set, i.e. which
+        // table entries the witness used. The denominators contain gamma and are
+        // nonzero except for challenge collisions, and for a boolean activity bit s
+        // the result s * inv(d) equals inv(d * s), with zeroes kept as zero.
+        CoUtils::batch_invert_leaking_zeros::<T, C, N>(
+            self.memory.lookup_inverses.as_mut(),
+            self.net,
+            self.state,
+        )?;
         self.memory.lookup_inverses = Polynomial::new(T::mul_many(
             self.memory.lookup_inverses.as_ref(),
             &q_lookup_mul_read_tag,
             self.net,
             self.state,
         )?);
-
-        // Compute inverse polynomial I in place by inverting the product at each row
-        // Note: zeroes are ignored as they are not used anyway
-        CoUtils::batch_invert_leaking_zeros::<T, C, N>(
-            self.memory.lookup_inverses.as_mut(),
-            self.net,
-            self.state,
-        )?;
         Ok(())
     }
 
@@ -793,5 +799,179 @@ impl<
         self.generate_alphas_round(transcript);
 
         Ok(self.memory)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ff::Field;
+    use ark_serialize::CanonicalDeserialize;
+    use bytes::Bytes;
+    use co_noir_common::{
+        keys::proving_key::ProvingKey,
+        mpc::{plain::PlainUltraHonkDriver, rep3::Rep3UltraHonkDriver},
+        polynomials::entities::Polynomials,
+        transcript::Poseidon2Sponge,
+    };
+    use mpc_core::protocols::rep3::{Rep3State, conversion::A2BType, share_field_element};
+    use mpc_net::{ConnectionStats, local::LocalNetwork};
+    use std::sync::Mutex;
+
+    /// Records every message a party sends and receives.
+    struct RecordingNetwork {
+        inner: LocalNetwork,
+        events: Mutex<Vec<(bool, Bytes)>>,
+    }
+
+    impl Network for RecordingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+            self.events.lock().unwrap().push((true, data.clone()));
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+            let data = self.inner.recv(from)?;
+            self.events.lock().unwrap().push((false, data.clone()));
+            Ok(data)
+        }
+
+        fn get_connection_stats(&self) -> ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    /// One party's view of the opened values: in an opening, a party sends the same share
+    /// to both other parties and then receives one share from each of them, so the
+    /// opened value is the sum of its own share and the two received ones.
+    fn opened_values(events: &[(bool, Bytes)]) -> Vec<Vec<Fr>> {
+        events
+            .windows(4)
+            .filter(|w| w[0].0 && w[1].0 && !w[2].0 && !w[3].0 && w[0].1 == w[1].1)
+            .map(|w| {
+                let mut opened = Vec::<Fr>::deserialize_uncompressed(w[0].1.as_ref()).unwrap();
+                for frame in &w[2..] {
+                    let received = Vec::<Fr>::deserialize_uncompressed(frame.1.as_ref()).unwrap();
+                    assert_eq!(received.len(), opened.len());
+                    for (value, share) in opened.iter_mut().zip(received) {
+                        *value += share;
+                    }
+                }
+                opened
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lookup_inverse_openings_do_not_reveal_read_tags() {
+        const N: usize = 8;
+        // All rows are table rows (q_lookup = 0); a set read tag marks a table entry
+        // that the private witness used.
+        let tags = [0u64, 1, 0, 1, 1, 0, 0, 1].map(Fr::from);
+        let mut rng = rand::thread_rng();
+        let shared_tags = tags.map(|tag| share_field_element(tag, &mut rng));
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .enumerate()
+            .map(|(id, inner)| {
+                std::thread::spawn(move || {
+                    let net = RecordingNetwork {
+                        inner,
+                        events: Mutex::new(Vec::new()),
+                    };
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let mut pk = ProvingKey::<Rep3UltraHonkDriver, G1Projective> {
+                        circuit_size: N as u32,
+                        polynomials: Polynomials::new(N),
+                        ..Default::default()
+                    };
+                    for (tag, shares) in pk
+                        .polynomials
+                        .witness
+                        .lookup_read_tags_mut()
+                        .iter_mut()
+                        .zip(shared_tags)
+                    {
+                        *tag = shares[id];
+                    }
+                    let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(
+                        &net,
+                        &mut state,
+                        ZeroKnowledge::No,
+                    );
+                    // With all wires and tables zero, both the lookup and the table
+                    // term equal gamma, so every denominator is 49.
+                    oink.memory.challenges.gamma = Fr::from(7u64);
+                    net.events.lock().unwrap().clear();
+                    oink.compute_logderivative_inverses(&pk).unwrap();
+                    (
+                        oink.memory.lookup_inverses.coefficients,
+                        net.events.into_inner().unwrap(),
+                    )
+                })
+            })
+            .collect();
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        let inv_49 = Fr::from(49u64).inverse().unwrap();
+        for (row, tag) in tags.iter().enumerate() {
+            let inverse: Fr = results.iter().map(|(values, _)| values[row].a).sum();
+            assert_eq!(inverse, *tag * inv_49, "wrong lookup inverse at row {row}");
+        }
+
+        // Everything a single party sees opened during the computation must be
+        // independent of the read tags.
+        let opened = opened_values(&results[0].1);
+        assert!(!opened.is_empty(), "expected a masked inversion opening");
+        for values in opened {
+            let revealed: Vec<bool> = values.iter().map(|v| !v.is_zero()).collect();
+            assert!(
+                values.iter().all(|v| !v.is_zero()),
+                "an opening reveals the private read tags: {revealed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_inverses_are_zero_on_inactive_rows() {
+        // Rows START..START + 8 enumerate q_lookup, read_tag and a zero or nonzero
+        // denominator: the inverse must be 1/d on active rows with d != 0 and zero
+        // everywhere else.
+        const N: usize = 16;
+        const START: usize = 4;
+        let mut pk = ProvingKey::<PlainUltraHonkDriver, G1Projective> {
+            circuit_size: N as u32,
+            polynomials: Polynomials::new(N),
+            ..Default::default()
+        };
+        let gamma = Fr::from(7u64);
+        for case in 0..8 {
+            let row = START + case;
+            pk.polynomials.precomputed.q_lookup_mut()[row] = Fr::from((case & 1) as u64);
+            pk.polynomials.witness.lookup_read_tags_mut()[row] = Fr::from(((case >> 1) & 1) as u64);
+            if case & 4 != 0 {
+                // A zero table term.
+                pk.polynomials.precomputed.table_1_mut()[row] = -gamma;
+            }
+        }
+        let mut state = Default::default();
+        let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(&(), &mut state, ZeroKnowledge::No);
+        oink.memory.challenges.gamma = gamma;
+        oink.compute_logderivative_inverses(&pk).unwrap();
+        for row in 0..N {
+            let active = (START..START + 8).contains(&row) && (row - START) & 3 != 0;
+            let nonzero_denominator = !(START..START + 8).contains(&row) || (row - START) & 4 == 0;
+            let expected = if active && nonzero_denominator {
+                (gamma * gamma).inverse().unwrap()
+            } else {
+                Fr::zero()
+            };
+            assert_eq!(oink.memory.lookup_inverses[row], expected, "row {row}");
+        }
     }
 }
