@@ -16,6 +16,7 @@ use co_noir_common::{
     },
 };
 use num_bigint::BigUint;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 pub fn create_prover_instance<P: CurveGroup>(
@@ -309,57 +310,68 @@ fn compute_honk_style_permutation_lagrange_polynomials_from_mapping<P: CurveGrou
     // hypercube do not intersect for i != j.
     assert!(permutation_polynomials[0].len() < PERMUTATION_ARGUMENT_VALUE_SEPARATOR as usize);
 
-    let domain_size = active_region_data.size();
-    // TACEO TODO Barrettenberg uses multithreading here
-
-    for (wire_idx, current_permutation_poly) in permutation_polynomials.iter_mut().enumerate() {
-        // The disabled-in-Sumcheck header rows before the first circuit block are outside any
-        // copy cycle, so the mapping there is still the untouched self-referencing identity from
-        // `PermutationMapping::new`; write that identity value explicitly to match bb.
-        for poly_idx in NUM_ZERO_ROWS..first_active_row {
-            current_permutation_poly[poly_idx] = P::ScalarField::from(
-                poly_idx as u32 + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * wire_idx as u32,
-            );
-        }
-        for i in 0..domain_size {
-            let poly_idx = active_region_data.get_idx(i);
-            let idx = poly_idx as isize;
-            let current_row_idx = permutation_mappings[wire_idx][idx as usize].row_index;
-            let current_col_idx = permutation_mappings[wire_idx][idx as usize].column_index;
-            let current_is_tag = permutation_mappings[wire_idx][idx as usize].is_tag;
-            let current_is_public_input =
-                permutation_mappings[wire_idx][idx as usize].is_public_input;
-            if current_is_public_input {
-                // We intentionally want to break the cycles of the public input variables as an optimization.
-                // During the witness generation, both the left and right wire polynomials (w_l and w_r
-                // respectively) at row idx i contain the i-th public input. Let n = SEPARATOR. The initial
-                // CyclicPermutation created for these variables copy-constrained to the ith public input therefore
-                // always starts with (i) -> (n+i), followed by the indices of the variables in the "real" gates
-                // (i.e., the gates not merely present to set-up inputs).
-                //
-                // We change this and make i point to -(i+1). This choice "unbalances" the grand product argument,
-                // so that the final result of the grand product is _not_ 1. These indices are chosen so they can
-                // easily be computed by the verifier (just knowing the public inputs), and this algorithm
-                // constitutes a specification of the "permutation argument with public inputs" optimization due to
-                // Gabizon and Williamson. The verifier can expect the final product to be equal to the "public
-                // input delta" that is computed in <honk/library/grand_product_delta.hpp>.
-                current_permutation_poly[poly_idx] = -P::ScalarField::from(
-                    current_row_idx + 1 + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * current_col_idx,
-                );
-            } else if current_is_tag {
-                // Set evaluations to (arbitrary) values disjoint from non-tag values
+    // The wires are independent, and each row's value depends only on that row's mapping entry, so the
+    // wires and the rows of each active range are filled in parallel. The active ranges cover exactly the
+    // rows `active_region_data.get_idx(i)` for `i < active_region_data.size()`.
+    permutation_polynomials
+        .par_iter_mut()
+        .zip(permutation_mappings.par_iter())
+        .enumerate()
+        .for_each(|(wire_idx, (current_permutation_poly, mapping))| {
+            // The disabled-in-Sumcheck header rows before the first circuit block are outside any
+            // copy cycle, so the mapping there is still the untouched self-referencing identity from
+            // `PermutationMapping::new`; write that identity value explicitly to match bb.
+            for poly_idx in NUM_ZERO_ROWS..first_active_row {
                 current_permutation_poly[poly_idx] = P::ScalarField::from(
-                    PERMUTATION_ARGUMENT_VALUE_SEPARATOR * NUM_WIRES as u32 + current_row_idx,
-                );
-            } else {
-                // For the regular permutation we simply point to the next location by setting the
-                // evaluation to its idx
-                current_permutation_poly[poly_idx] = P::ScalarField::from(
-                    current_row_idx + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * current_col_idx,
+                    poly_idx as u32 + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * wire_idx as u32,
                 );
             }
-        }
-    }
+            for &(start, end) in active_region_data.get_ranges() {
+                current_permutation_poly.coefficients[start..end]
+                    .par_iter_mut()
+                    .zip(mapping[start..end].par_iter())
+                    .with_min_len(1 << 12)
+                    .for_each(|(eval, entry)| {
+                        let current_row_idx = entry.row_index;
+                        let current_col_idx = entry.column_index;
+                        let current_is_tag = entry.is_tag;
+                        let current_is_public_input = entry.is_public_input;
+                        if current_is_public_input {
+                            // We intentionally want to break the cycles of the public input variables as an optimization.
+                            // During the witness generation, both the left and right wire polynomials (w_l and w_r
+                            // respectively) at row idx i contain the i-th public input. Let n = SEPARATOR. The initial
+                            // CyclicPermutation created for these variables copy-constrained to the ith public input therefore
+                            // always starts with (i) -> (n+i), followed by the indices of the variables in the "real" gates
+                            // (i.e., the gates not merely present to set-up inputs).
+                            //
+                            // We change this and make i point to -(i+1). This choice "unbalances" the grand product argument,
+                            // so that the final result of the grand product is _not_ 1. These indices are chosen so they can
+                            // easily be computed by the verifier (just knowing the public inputs), and this algorithm
+                            // constitutes a specification of the "permutation argument with public inputs" optimization due to
+                            // Gabizon and Williamson. The verifier can expect the final product to be equal to the "public
+                            // input delta" that is computed in <honk/library/grand_product_delta.hpp>.
+                            *eval = -P::ScalarField::from(
+                                current_row_idx
+                                    + 1
+                                    + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * current_col_idx,
+                            );
+                        } else if current_is_tag {
+                            // Set evaluations to (arbitrary) values disjoint from non-tag values
+                            *eval = P::ScalarField::from(
+                                PERMUTATION_ARGUMENT_VALUE_SEPARATOR * NUM_WIRES as u32
+                                    + current_row_idx,
+                            );
+                        } else {
+                            // For the regular permutation we simply point to the next location by setting the
+                            // evaluation to its idx
+                            *eval = P::ScalarField::from(
+                                current_row_idx
+                                    + PERMUTATION_ARGUMENT_VALUE_SEPARATOR * current_col_idx,
+                            );
+                        }
+                    });
+            }
+        });
 }
 
 pub fn construct_lookup_table_polynomials<

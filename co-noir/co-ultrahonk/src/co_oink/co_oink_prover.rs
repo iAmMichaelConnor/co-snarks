@@ -17,7 +17,7 @@
 */
 // clang-format on
 
-use super::types::ProverMemory;
+use super::types::{Challenges, ProverMemory};
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
@@ -31,15 +31,16 @@ use co_noir_common::{
     },
     mpc::NoirUltraHonkProver,
     polynomials::{
+        entities::Polynomials,
         polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, NUM_MASKED_ROWS, Polynomial},
         shared_polynomial::SharedPolynomial,
     },
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
 };
-use itertools::izip;
-use mpc_core::MpcState as _;
+use mpc_core::MpcState;
 use mpc_net::Network;
+use rayon::prelude::*;
 use std::marker::PhantomData;
 use ultrahonk::NUM_ALPHAS;
 
@@ -196,35 +197,32 @@ impl<
     }
 
     fn compute_lookup_term(
-        &mut self,
-        proving_key: &ProvingKey<T, C>,
+        challenges: &Challenges<C::ScalarField>,
+        id: <T::State as MpcState>::PartyID,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
         i: usize,
     ) -> T::ArithmeticShare {
-        tracing::trace!("compute lookup term");
+        let gamma = challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
 
-        let gamma = self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
+        let w_1 = polynomials.witness.w_l()[i];
+        let w_2 = polynomials.witness.w_r()[i];
+        let w_3 = polynomials.witness.w_o()[i];
 
-        let w_1 = proving_key.polynomials.witness.w_l()[i];
-        let w_2 = proving_key.polynomials.witness.w_r()[i];
-        let w_3 = proving_key.polynomials.witness.w_o()[i];
+        let w_1_shift = polynomials.witness.w_l().shifted()[i];
+        let w_2_shift = polynomials.witness.w_r().shifted()[i];
+        let w_3_shift = polynomials.witness.w_o().shifted()[i];
 
-        let w_1_shift = proving_key.polynomials.witness.w_l().shifted()[i];
-        let w_2_shift = proving_key.polynomials.witness.w_r().shifted()[i];
-        let w_3_shift = proving_key.polynomials.witness.w_o().shifted()[i];
-
-        let table_index = proving_key.polynomials.precomputed.q_o()[i];
-        let negative_column_1_step_size = proving_key.polynomials.precomputed.q_r()[i];
-        let negative_column_2_step_size = proving_key.polynomials.precomputed.q_m()[i];
-        let negative_column_3_step_size = proving_key.polynomials.precomputed.q_c()[i];
+        let table_index = polynomials.precomputed.q_o()[i];
+        let negative_column_1_step_size = polynomials.precomputed.q_r()[i];
+        let negative_column_2_step_size = polynomials.precomputed.q_m()[i];
+        let negative_column_3_step_size = polynomials.precomputed.q_c()[i];
 
         // The wire values for lookup gates are accumulators structured in such a way that the differences w_i -
         // step_size*w_i_shift result in values present in column i of a corresponding table. See the documentation in
         // method get_lookup_accumulators() in  for a detailed explanation.
-        let id = self.state.id();
-
         let mul = T::mul_with_public(negative_column_1_step_size, w_1_shift);
         let add = T::add_with_public(gamma, mul, id);
         let derived_table_entry_1 = T::add(w_1, add);
@@ -247,17 +245,19 @@ impl<
     }
 
     // Compute table_1 + gamma + table_2 * beta + table_3 * beta^2 + table_4 * beta^3
-    fn compute_table_term(&self, proving_key: &ProvingKey<T, C>, i: usize) -> C::ScalarField {
-        tracing::trace!("compute table term");
-
-        let gamma = &self.memory.challenges.gamma;
-        let beta = self.memory.challenges.beta;
-        let beta_sqr = self.memory.challenges.beta_sqr;
-        let beta_cube = self.memory.challenges.beta_cube;
-        let table_1 = &proving_key.polynomials.precomputed.table_1()[i];
-        let table_2 = &proving_key.polynomials.precomputed.table_2()[i];
-        let table_3 = &proving_key.polynomials.precomputed.table_3()[i];
-        let table_4 = &proving_key.polynomials.precomputed.table_4()[i];
+    fn compute_table_term(
+        challenges: &Challenges<C::ScalarField>,
+        polynomials: &Polynomials<T::ArithmeticShare, C::ScalarField>,
+        i: usize,
+    ) -> C::ScalarField {
+        let gamma = &challenges.gamma;
+        let beta = challenges.beta;
+        let beta_sqr = challenges.beta_sqr;
+        let beta_cube = challenges.beta_cube;
+        let table_1 = &polynomials.precomputed.table_1()[i];
+        let table_2 = &polynomials.precomputed.table_2()[i];
+        let table_3 = &polynomials.precomputed.table_3()[i];
+        let table_4 = &polynomials.precomputed.table_4()[i];
 
         *table_1 + gamma + *table_2 * beta + *table_3 * beta_sqr + *table_4 * beta_cube
     }
@@ -277,40 +277,44 @@ impl<
             proving_key.circuit_size as usize
         );
 
-        self.memory
-            .lookup_inverses
-            .resize(proving_key.circuit_size as usize, Default::default());
-
         // const READ_TERMS: usize = 1;
         // const WRITE_TERMS: usize = 1;
         // // 1 + polynomial degree of this relation
         // const LENGTH: usize = 5; // both subrelations are degree 4
 
-        let mut q_lookup_mul_read_tag = Vec::with_capacity(proving_key.circuit_size as usize);
-        for (i, (q_lookup, lookup_read_tag)) in izip!(
-            proving_key.polynomials.precomputed.q_lookup().iter(),
-            proving_key.polynomials.witness.lookup_read_tags().iter(),
-        )
-        .enumerate()
-        {
-            // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
-            // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
-            //     continue;
-            // }
-            debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
-            let mul =
-                T::mul_with_public(C::ScalarField::one() - q_lookup, lookup_read_tag.to_owned());
-            q_lookup_mul_read_tag.push(T::add_with_public(
-                q_lookup.to_owned(),
-                mul,
-                self.state.id(),
-            ));
+        // Every row is a local computation, so the rows run on rayon.
+        let id = self.state.id();
+        let challenges = &self.memory.challenges;
+        let polynomials = &proving_key.polynomials;
+        let q_lookup: &[C::ScalarField] = polynomials.precomputed.q_lookup().as_ref();
+        let lookup_read_tags: &[T::ArithmeticShare] =
+            polynomials.witness.lookup_read_tags().as_ref();
+        let (lookup_inverses, q_lookup_mul_read_tag): (Vec<_>, Vec<_>) = q_lookup
+            .par_iter()
+            .zip(lookup_read_tags.par_iter())
+            .enumerate()
+            .map(|(i, (q_lookup, lookup_read_tag))| {
+                // The following check cannot easily be done since lookup_read_tag is shared. We prepare q_lookup_mul_read_tag instead and multiply it later to self.memory.lookup_inverses.
+                // if !(q_lookup.is_one() || lookup_read_tag.is_one()) {
+                //     continue;
+                // }
+                debug_assert!(q_lookup.is_one() || q_lookup.is_zero());
+                let mul = T::mul_with_public(
+                    C::ScalarField::one() - q_lookup,
+                    lookup_read_tag.to_owned(),
+                );
+                let q_lookup_mul_read_tag = T::add_with_public(q_lookup.to_owned(), mul, id);
 
-            // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
-            let read_term = self.compute_lookup_term(proving_key, i);
-            let write_term = self.compute_table_term(proving_key, i);
-            self.memory.lookup_inverses[i] = T::mul_with_public(write_term, read_term);
-        }
+                // READ_TERMS and WRITE_TERMS are 1, so we skip the loop
+                let read_term = Self::compute_lookup_term(challenges, id, polynomials, i);
+                let write_term = Self::compute_table_term(challenges, polynomials, i);
+                (
+                    T::mul_with_public(write_term, read_term),
+                    q_lookup_mul_read_tag,
+                )
+            })
+            .unzip();
+        self.memory.lookup_inverses = Polynomial::new(lookup_inverses);
 
         // Invert the denominators before multiplying by the secret activity bit
         // q_lookup + (1 - q_lookup) * read_tag. The inversion opens each denominator
@@ -402,21 +406,21 @@ impl<
         let has_active_ranges = active_region_data.size() > 0;
 
         // We drop the last element since it is not needed for the grand product
-        let mut mul1 = Vec::with_capacity(output_len);
-        let mut mul2 = Vec::with_capacity(output_len);
-
-        for i in 0..output_len {
-            let idx = if has_active_ranges {
-                active_region_data.get_idx(i)
-            } else {
-                i
-            };
-            let id = state.id();
-            let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
-            let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
-            mul1.push(m1);
-            mul2.push(m2);
-        }
+        // Every row is a local computation, so the rows run on rayon.
+        let id = state.id();
+        let (mul1, mul2): (Vec<_>, Vec<_>) = (0..output_len)
+            .into_par_iter()
+            .map(|i| {
+                let idx = if has_active_ranges {
+                    active_region_data.get_idx(i)
+                } else {
+                    i
+                };
+                let m1 = T::add_with_public(pub1[idx] * beta + gamma, shared1[idx], id);
+                let m2 = T::add_with_public(pub2[idx] * beta + gamma, shared2[idx], id);
+                (m1, m2)
+            })
+            .unzip();
 
         Ok(T::mul_many(&mul1, &mul2, net, state)?)
     }

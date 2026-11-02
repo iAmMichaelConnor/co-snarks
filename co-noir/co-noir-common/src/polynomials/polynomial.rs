@@ -1,6 +1,9 @@
 use crate::{
     constants::NUM_ZERO_ROWS,
-    polynomials::entities::{PrecomputedEntities, ProverWitnessEntities},
+    polynomials::{
+        PAR_MIN_LEN,
+        entities::{PrecomputedEntities, ProverWitnessEntities},
+    },
     utils::Utils,
 };
 use ark_ff::PrimeField;
@@ -8,6 +11,7 @@ use ark_poly::{DenseUVPolynomial, Polynomial as _, univariate::DensePolynomial};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use num_traits::Zero;
 use rand::{CryptoRng, Rng};
+use rayon::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{AddAssign, Index, IndexMut, MulAssign, SubAssign};
 
@@ -248,10 +252,11 @@ impl<F: PrimeField> Polynomial<F> {
     }
 
     pub fn add_scaled_slice(&mut self, src: &[F], scalar: &F) {
-        // Barrettenberg uses multithreading here
-        for (des, src) in self.coefficients.iter_mut().zip(src.iter()) {
-            *des += *scalar * src;
-        }
+        self.coefficients
+            .par_iter_mut()
+            .zip(src.par_iter())
+            .with_min_len(PAR_MIN_LEN)
+            .for_each(|(des, src)| *des += *scalar * src);
     }
 
     pub fn add_scaled(&mut self, src: &Polynomial<F>, scalar: &F) {
@@ -437,9 +442,11 @@ impl<F: PrimeField> AddAssign<&[F]> for Polynomial<F> {
             panic!("Polynomial too large, this should not have happened");
             // self.coefficients.resize(rhs.len(), F::zero());
         }
-        for (l, r) in self.coefficients.iter_mut().zip(rhs.iter()) {
-            *l += *r;
-        }
+        self.coefficients
+            .par_iter_mut()
+            .zip(rhs.par_iter())
+            .with_min_len(PAR_MIN_LEN)
+            .for_each(|(l, r)| *l += *r);
     }
 }
 
@@ -449,17 +456,20 @@ impl<F: PrimeField> SubAssign<&[F]> for Polynomial<F> {
             panic!("Polynomial too large, this should not have happened");
             // self.coefficients.resize(rhs.len(), F::zero());
         }
-        for (l, r) in self.coefficients.iter_mut().zip(rhs.iter()) {
-            *l -= *r;
-        }
+        self.coefficients
+            .par_iter_mut()
+            .zip(rhs.par_iter())
+            .with_min_len(PAR_MIN_LEN)
+            .for_each(|(l, r)| *l -= *r);
     }
 }
 
 impl<F: PrimeField> MulAssign<F> for Polynomial<F> {
     fn mul_assign(&mut self, rhs: F) {
-        for l in self.coefficients.iter_mut() {
-            *l *= rhs;
-        }
+        self.coefficients
+            .par_iter_mut()
+            .with_min_len(PAR_MIN_LEN)
+            .for_each(|l| *l *= rhs);
     }
 }
 

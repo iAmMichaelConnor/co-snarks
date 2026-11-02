@@ -20,6 +20,7 @@ use co_noir_common::{
 use itertools::izip;
 use mpc_core::MpcState as _;
 use mpc_net::Network;
+use rayon::prelude::*;
 use ultrahonk::{NUM_SMALL_IPA_EVALUATIONS, NUM_SMALL_IPA_OPENING_CLAIMS, Utils};
 
 impl<
@@ -239,7 +240,6 @@ impl<
         a_0: SharedPolynomial<T, P>,
     ) -> Vec<SharedPolynomial<T, P>> {
         tracing::trace!("Compute fold polynomials");
-        // Note: bb uses multithreading here
         let mut fold_polynomials: Vec<SharedPolynomial<T, P>> = Vec::with_capacity(log_n + 1);
         let virtual_log_n = multilinear_challenge.len();
 
@@ -255,16 +255,22 @@ impl<
             // A_l_fold = Aₗ₊₁(X) = (1-uₗ)⋅even(Aₗ)(X) + uₗ⋅odd(Aₗ)(X)
             let mut a_l_fold = SharedPolynomial::<T, P>::new_zero(n_l);
 
-            for j in 0..n_l {
-                // fold(Aₗ)[j] = (1-uₗ)⋅even(Aₗ)[j] + uₗ⋅odd(Aₗ)[j]
-                //            = (1-uₗ)⋅Aₗ[2j]      + uₗ⋅Aₗ[2j+1]
-                //            = Aₗ₊₁[j]
-                let a_l_neg = T::neg(a_l[j << 1]);
-                a_l_fold[j] = T::add(
-                    a_l[j << 1],
-                    T::mul_with_public(*u_l, T::add(a_l[(j << 1) + 1], a_l_neg)),
-                );
-            }
+            // Each output coefficient only reads the inputs at 2j and 2j + 1, so the fold runs on rayon.
+            a_l_fold
+                .coefficients
+                .par_iter_mut()
+                .enumerate()
+                .with_min_len(1 << 12)
+                .for_each(|(j, a_l_fold_j)| {
+                    // fold(Aₗ)[j] = (1-uₗ)⋅even(Aₗ)[j] + uₗ⋅odd(Aₗ)[j]
+                    //            = (1-uₗ)⋅Aₗ[2j]      + uₗ⋅Aₗ[2j+1]
+                    //            = Aₗ₊₁[j]
+                    let a_l_neg = T::neg(a_l[j << 1]);
+                    *a_l_fold_j = T::add(
+                        a_l[j << 1],
+                        T::mul_with_public(*u_l, T::add(a_l[(j << 1) + 1], a_l_neg)),
+                    );
+                });
 
             // Set Aₗ₊₁ = Aₗ for the next iteration
             fold_polynomials.push(a_l_fold.clone());
@@ -317,9 +323,7 @@ impl<
 
         // Compute G/r
         let r_inv = r_challenge.inverse().unwrap();
-        batched_g.coefficients.iter_mut().for_each(|x| {
-            *x = T::mul_with_public(r_inv, *x);
-        });
+        batched_g.mul_assign(r_inv);
 
         a_0_pos.add_assign_slice(batched_g.as_ref()); // A₀₊ = F + G/r
         a_0_neg.sub_assign_slice(batched_g.as_ref()); // A₀₋ = F - G/r
@@ -366,51 +370,34 @@ impl<
         fold_polynomials: Vec<SharedPolynomial<T, P>>,
         r_challenge: P::ScalarField,
     ) -> Vec<ShpleminiOpeningClaim<T, P>> {
-        let mut claims = Vec::with_capacity(log_n + 1);
-
-        // Compute evaluation of partially evaluated batch polynomial (positive) A₀₊(r)
-        let evaluation = T::eval_poly(a_0_pos.as_ref(), r_challenge);
-        claims.push(ShpleminiOpeningClaim {
-            polynomial: a_0_pos,
-            opening_pair: OpeningPair {
-                challenge: r_challenge,
-                evaluation,
-            },
-            gemini_fold: false,
-        });
-        // Compute evaluation of partially evaluated batch polynomial (negative) A₀₋(-r)
-        let evaluation = T::eval_poly(a_0_neg.as_ref(), -r_challenge);
-        claims.push(ShpleminiOpeningClaim {
-            polynomial: a_0_neg,
-            opening_pair: OpeningPair {
-                challenge: -r_challenge,
-                evaluation,
-            },
-            gemini_fold: false,
-        });
-
         // Compute univariate opening queries rₗ = r^{2ˡ} for l = 0, 1, ..., m-1
         let r_squares = Self::powers_of_evaluation_challenge(r_challenge, log_n);
 
+        // The opening pairs are A₀₊(r), A₀₋(-r) and {−r^{2ˡ}, Aₗ(−r^{2ˡ})}, l = 1, ..., m-1. The evaluations are
+        // independent local computations, so they run in parallel.
+        let mut polynomials = Vec::with_capacity(log_n + 1);
+        polynomials.push((a_0_pos, r_challenge, false));
+        polynomials.push((a_0_neg, -r_challenge, false));
         // Each fold polynomial Aₗ has to be opened at −r^{2ˡ} and r^{2ˡ}. To avoid storing two copies of Aₗ for l = 1,...,
         // m-1, we use a flag that is processed by ShplonkProver.
-        let gemini_fold = true;
-
-        // Compute the remaining m opening pairs {−r^{2ˡ}, Aₗ(−r^{2ˡ})}, l = 1, ..., m-1.
-
         for (r_square, fold_poly) in r_squares.into_iter().skip(1).zip(fold_polynomials) {
-            let evaluation = T::eval_poly(fold_poly.as_ref(), -r_square);
-            claims.push(ShpleminiOpeningClaim {
-                polynomial: fold_poly,
-                opening_pair: OpeningPair {
-                    challenge: -r_square,
-                    evaluation,
-                },
-                gemini_fold,
-            });
+            polynomials.push((fold_poly, -r_square, true));
         }
 
-        claims
+        polynomials
+            .into_par_iter()
+            .map(|(polynomial, challenge, gemini_fold)| {
+                let evaluation = T::eval_poly(polynomial.as_ref(), challenge);
+                ShpleminiOpeningClaim {
+                    polynomial,
+                    opening_pair: OpeningPair {
+                        challenge,
+                        evaluation,
+                    },
+                    gemini_fold,
+                }
+            })
+            .collect()
     }
 
     /**
@@ -424,19 +411,16 @@ impl<
         opening_claims: &[ShpleminiOpeningClaim<T, P>],
     ) -> Vec<T::ArithmeticShare> {
         tracing::trace!("Compute gemini fold pos evaluations");
-        let mut gemini_fold_pos_evaluations = Vec::with_capacity(opening_claims.len());
-
-        for claim in opening_claims {
-            if claim.gemini_fold {
+        opening_claims
+            .par_iter()
+            .filter(|claim| claim.gemini_fold)
+            .map(|claim| {
                 // -r^{2^i} is stored in the claim
                 let evaluation_point = -claim.opening_pair.challenge;
                 // Compute Fold_i(r^{2^i})
-                let evaluation = T::eval_poly(claim.polynomial.as_ref(), evaluation_point);
-                gemini_fold_pos_evaluations.push(evaluation);
-            }
-        }
-
-        gemini_fold_pos_evaluations
+                T::eval_poly(claim.polynomial.as_ref(), evaluation_point)
+            })
+            .collect()
     }
 
     /**
@@ -675,29 +659,40 @@ impl<
 
         // Q(X) = ∑ⱼ νʲ ⋅ ( fⱼ(X) − vⱼ) / ( X − xⱼ )
         let mut q = SharedPolynomial::<T, P>::new_zero(max_poly_size);
-        let mut current_nu = P::ScalarField::one();
+        // The claim quotients are independent local computations, so they are computed in parallel and then
+        // added to Q in claim order with the same powers of ν.
+        let mut quotient_inputs = Vec::with_capacity(2 * opening_claims.len());
         let mut fold_idx = 0;
         for claim in opening_claims {
             // Gemini Fold Polynomials have to be opened at -r^{2^j} and r^{2^j}.
             if claim.gemini_fold {
-                let mut tmp = claim.polynomial.clone();
-                let sub = T::sub(tmp[0], gemini_fold_pos_evaluations[fold_idx]);
-                tmp[0] = sub;
-                tmp.factor_roots(&-claim.opening_pair.challenge);
-                // Add the claim quotient to the batched quotient polynomial
-                q.add_scaled(&tmp, &current_nu);
-                current_nu *= nu_challenge;
+                quotient_inputs.push((
+                    &claim.polynomial,
+                    gemini_fold_pos_evaluations[fold_idx],
+                    -claim.opening_pair.challenge,
+                ));
                 fold_idx += 1;
             }
-            // Compute individual claim quotient tmp = ( fⱼ(X) − vⱼ) / ( X − xⱼ )
-            let mut tmp = claim.polynomial.clone();
-            let claim_neg = T::neg(claim.opening_pair.evaluation);
-            tmp[0] = T::add(tmp[0], claim_neg);
-            tmp.factor_roots(&claim.opening_pair.challenge);
-
+            quotient_inputs.push((
+                &claim.polynomial,
+                claim.opening_pair.evaluation,
+                claim.opening_pair.challenge,
+            ));
+        }
+        let quotients: Vec<_> = quotient_inputs
+            .into_par_iter()
+            .map(|(polynomial, evaluation, challenge)| {
+                // Compute individual claim quotient tmp = ( fⱼ(X) − vⱼ) / ( X − xⱼ )
+                let mut tmp = polynomial.clone();
+                tmp[0] = T::sub(tmp[0], evaluation);
+                tmp.factor_roots(&challenge);
+                tmp
+            })
+            .collect();
+        let mut current_nu = P::ScalarField::one();
+        for tmp in quotients {
             // Add the claim quotient to the batched quotient polynomial
             q.add_scaled(&tmp, &current_nu);
-
             current_nu *= nu_challenge;
         }
 

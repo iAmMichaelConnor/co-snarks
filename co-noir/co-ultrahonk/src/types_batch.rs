@@ -7,6 +7,7 @@ use co_noir_common::{
         AllEntities, PrecomputedEntities, ShiftedWitnessEntities, WitnessEntities,
     },
 };
+use rayon::prelude::*;
 use ultrahonk::prelude::Univariate;
 
 pub(crate) type WitnessEntitiesBatch<T> = WitnessEntities<Vec<T>>;
@@ -81,6 +82,44 @@ where
             scaling_factors: vec![],
         }
     }
+
+    /// Concatenates per-chunk data in chunk order, which gives the data a single pass over the same edges
+    /// in the same order builds.
+    fn concat(parts: Vec<Self>) -> Self {
+        let mut parts = parts.into_iter();
+        let Some(mut out) = parts.next() else {
+            return Self::new();
+        };
+        for mut part in parts {
+            out.can_skip &= part.can_skip;
+            for (des, src) in out
+                .all_entities
+                .witness
+                .iter_mut()
+                .zip(part.all_entities.witness.iter_mut())
+            {
+                des.append(src);
+            }
+            for (des, src) in out
+                .all_entities
+                .precomputed
+                .iter_mut()
+                .zip(part.all_entities.precomputed.iter_mut())
+            {
+                des.append(src);
+            }
+            for (des, src) in out
+                .all_entities
+                .shifted_witness
+                .iter_mut()
+                .zip(part.all_entities.shifted_witness.iter_mut())
+            {
+                des.append(src);
+            }
+            out.scaling_factors.append(&mut part.scaling_factors);
+        }
+        out
+    }
 }
 
 impl<T, P> AllEntitiesBatchRelations<T, P>
@@ -99,6 +138,58 @@ where
             nnf: SumCheckDataForRelation::new(),
             poseidon_ext: SumCheckDataForRelation::new(),
             poseidon_int: SumCheckDataForRelation::new(),
+        }
+    }
+
+    /// Concatenates per-chunk batches in chunk order, which gives the batch a single pass over the same edges
+    /// in the same order builds. The relations are concatenated in parallel.
+    pub fn concat(parts: Vec<Self>) -> Self {
+        let mut ultra_arith = Vec::with_capacity(parts.len());
+        let mut ultra_perm = Vec::with_capacity(parts.len());
+        let mut delta_range = Vec::with_capacity(parts.len());
+        let mut elliptic = Vec::with_capacity(parts.len());
+        let mut memory = Vec::with_capacity(parts.len());
+        let mut nnf = Vec::with_capacity(parts.len());
+        let mut log_lookup = Vec::with_capacity(parts.len());
+        let mut poseidon_ext = Vec::with_capacity(parts.len());
+        let mut poseidon_int = Vec::with_capacity(parts.len());
+        for part in parts {
+            ultra_arith.push(part.ultra_arith);
+            ultra_perm.push(part.ultra_perm);
+            delta_range.push(part.delta_range);
+            elliptic.push(part.elliptic);
+            memory.push(part.memory);
+            nnf.push(part.nnf);
+            log_lookup.push(part.log_lookup);
+            poseidon_ext.push(part.poseidon_ext);
+            poseidon_int.push(part.poseidon_int);
+        }
+        let mut merged = vec![
+            ultra_arith,
+            ultra_perm,
+            delta_range,
+            elliptic,
+            memory,
+            nnf,
+            log_lookup,
+            poseidon_ext,
+            poseidon_int,
+        ]
+        .into_par_iter()
+        .map(SumCheckDataForRelation::concat)
+        .collect::<Vec<_>>()
+        .into_iter();
+        let mut next = || merged.next().expect("one batch per relation");
+        Self {
+            ultra_arith: next(),
+            ultra_perm: next(),
+            delta_range: next(),
+            elliptic: next(),
+            memory: next(),
+            nnf: next(),
+            log_lookup: next(),
+            poseidon_ext: next(),
+            poseidon_int: next(),
         }
     }
 

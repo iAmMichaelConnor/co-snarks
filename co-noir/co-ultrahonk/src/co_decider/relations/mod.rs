@@ -138,6 +138,85 @@ pub(crate) struct AllRelationAccHalfShared<T: NoirUltraHonkProver<P>, P: CurveGr
 }
 
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> AllRelationAccHalfShared<T, P> {
+    /// Adds another accumulator into this one, element by element.
+    ///
+    /// Accumulating disjoint sets of edges into separate accumulators and merging them gives the same
+    /// evaluations as one accumulation over all edges. All fields are destructured, so a new subrelation does
+    /// not compile until it is merged here.
+    pub(crate) fn merge_from(&mut self, other: Self) {
+        let Self {
+            r_arith,
+            r_perm,
+            r_lookup,
+            r_delta,
+            r_elliptic,
+            r_memory,
+            r_nnf,
+            r_pos_ext,
+            r_pos_int,
+        } = other;
+
+        let UltraArithmeticRelationAccHalfShared { r0, r1 } = r_arith;
+        for (a, b) in self.r_arith.r0.evaluations.iter_mut().zip(r0.evaluations) {
+            *a += b;
+        }
+        self.r_arith.r1.add_assign(&r1);
+
+        let UltraPermutationRelationAcc { r0, r1, r2 } = r_perm;
+        self.r_perm.r0.add_assign(&r0);
+        self.r_perm.r1.add_assign(&r1);
+        self.r_perm.r2.add_assign(&r2);
+
+        let LogDerivLookupRelationAcc { r0, r1, r2 } = r_lookup;
+        self.r_lookup.r0.add_assign(&r0);
+        self.r_lookup.r1.add_assign(&r1);
+        self.r_lookup.r2.add_assign(&r2);
+
+        let DeltaRangeConstraintRelationAcc { r0, r1, r2, r3 } = r_delta;
+        self.r_delta.r0.add_assign(&r0);
+        self.r_delta.r1.add_assign(&r1);
+        self.r_delta.r2.add_assign(&r2);
+        self.r_delta.r3.add_assign(&r3);
+
+        let EllipticRelationAcc { r0, r1 } = r_elliptic;
+        self.r_elliptic.r0.add_assign(&r0);
+        self.r_elliptic.r1.add_assign(&r1);
+
+        let MemoryRelationAcc {
+            r0,
+            r1,
+            r2,
+            r3,
+            r4,
+            r5,
+            r6,
+            r7,
+        } = r_memory;
+        self.r_memory.r0.add_assign(&r0);
+        self.r_memory.r1.add_assign(&r1);
+        self.r_memory.r2.add_assign(&r2);
+        self.r_memory.r3.add_assign(&r3);
+        self.r_memory.r4.add_assign(&r4);
+        self.r_memory.r5.add_assign(&r5);
+        self.r_memory.r6.add_assign(&r6);
+        self.r_memory.r7.add_assign(&r7);
+
+        let NonNativeFieldRelationAcc { r0 } = r_nnf;
+        self.r_nnf.r0.add_assign(&r0);
+
+        let Poseidon2ExternalRelationAcc { r0, r1, r2, r3 } = r_pos_ext;
+        self.r_pos_ext.r0.add_assign(&r0);
+        self.r_pos_ext.r1.add_assign(&r1);
+        self.r_pos_ext.r2.add_assign(&r2);
+        self.r_pos_ext.r3.add_assign(&r3);
+
+        let Poseidon2InternalRelationAcc { r0, r1, r2, r3 } = r_pos_int;
+        self.r_pos_int.r0.add_assign(&r0);
+        self.r_pos_int.r1.add_assign(&r1);
+        self.r_pos_int.r2.add_assign(&r2);
+        self.r_pos_int.r3.add_assign(&r3);
+    }
+
     pub(crate) fn reshare<N: Network>(
         self,
         net: &N,

@@ -252,6 +252,24 @@ fn rom_shared_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
 }
 
+/// The sumcheck rounds of the plain driver accumulate the relations per chunk of edges and add the chunk
+/// accumulators up; the chunking follows the number of rayon threads. The ROM circuit exercises all
+/// memory subrelations, so the proof must equal the barretenberg proof for every thread count.
+#[test]
+fn rom_shared_proof_test_thread_count_invariance() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_pos";
+    for num_threads in [1, 3, 16] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+                proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
+            });
+    }
+}
+
 #[test]
 fn rom_shared_proof_test_keccak256() {
     const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_kec";
