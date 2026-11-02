@@ -83,7 +83,18 @@ where
     }
 
     fn run_inner(&mut self, id: &BrilligFunctionId) -> eyre::Result<CoBrilligResult<T, F>> {
-        let opcodes = self.unconstrained_functions[id.as_usize()].bytecode.clone();
+        let opcodes = self
+            .unconstrained_functions
+            .get(id.as_usize())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "unconstrained function id {} out of range ({} functions)",
+                    id.as_usize(),
+                    self.unconstrained_functions.len()
+                )
+            })?
+            .bytecode
+            .clone();
 
         loop {
             let opcode = &opcodes[self.ip];
@@ -184,8 +195,8 @@ where
 
     /// Creates a new instance of the coBrillig-VM from the provided
     /// driver and a vec of unconstrained functions. This instance of
-    /// the VM can only run those unconstrained functions and panics
-    /// if a caller tries to call an index larger then provided
+    /// the VM can only run those unconstrained functions and returns
+    /// an error if a caller tries to call an index larger than provided
     /// by this array.
     pub fn init(
         driver: T,
@@ -426,7 +437,7 @@ where
         };
         let persistent_shared_state = std::mem::take(&mut self.persistent_shared_state);
         Ok(CoBrilligResult::Success(BrilligSuccess {
-            unconstrained_witnesses: self.take_result(offset, size),
+            unconstrained_witnesses: self.take_result(offset, size)?,
             generated_pss: persistent_shared_state,
         }))
     }
@@ -501,9 +512,81 @@ where
         Ok((truthy_universe, falsy_universe))
     }
 
-    fn take_result(&mut self, offset: usize, size: usize) -> Vec<T::BrilligType> {
+    fn take_result(&mut self, offset: usize, size: usize) -> eyre::Result<Vec<T::BrilligType>> {
         // take memory - this also resets it for next run
         let memory = std::mem::take(&mut self.memory).into_inner();
-        memory[offset..offset + size].to_vec()
+        // offset and size are read from VM memory, so check them before slicing
+        offset
+            .checked_add(size)
+            .and_then(|end| memory.get(offset..end))
+            .map(<[_]>::to_vec)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "return data out of bounds: offset {offset}, size {size}, memory size {}",
+                    memory.len()
+                )
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mpc::{PlainBrilligDriver, PlainBrilligType};
+    use ark_bn254::Fr;
+    use brillig::IntegerBitSize;
+
+    type Vm = CoBrilligVM<PlainBrilligDriver<Fr>, Fr>;
+
+    /// A function that stops with `size` return values starting at memory address `offset`.
+    fn stop_with_return_data(offset: u32, size: u32) -> BrilligBytecode<GenericFieldElement<Fr>> {
+        let constant = |address, value: u32| BrilligOpcode::Const {
+            destination: MemoryAddress::direct(address),
+            bit_size: BitSize::Integer(IntegerBitSize::U32),
+            value: GenericFieldElement::from(u128::from(value)),
+        };
+        BrilligBytecode {
+            function_name: "stop".to_owned(),
+            bytecode: vec![
+                constant(0, size),
+                constant(1, offset),
+                constant(2, 7),
+                BrilligOpcode::Stop {
+                    return_data: HeapVector {
+                        pointer: MemoryAddress::direct(1),
+                        size: MemoryAddress::direct(0),
+                    },
+                },
+            ],
+        }
+    }
+
+    fn run(
+        functions: Vec<BrilligBytecode<GenericFieldElement<Fr>>>,
+        id: u32,
+    ) -> eyre::Result<Vec<PlainBrilligType<Fr>>> {
+        let mut vm = Vm::init(PlainBrilligDriver::default(), functions);
+        match vm.run(&BrilligFunctionId::new(id), vec![])? {
+            CoBrilligResult::Success(success) => Ok(success.unconstrained_witnesses),
+            _ => eyre::bail!("unexpected result"),
+        }
+    }
+
+    #[test]
+    fn unknown_function_id_is_an_error() {
+        assert!(run(vec![], 0).is_err());
+        assert!(run(vec![stop_with_return_data(2, 1)], 1).is_err());
+    }
+
+    #[test]
+    fn return_data_out_of_bounds_is_an_error() {
+        assert!(run(vec![stop_with_return_data(2, 5)], 0).is_err());
+        assert!(run(vec![stop_with_return_data(1_000_000, 1)], 0).is_err());
+    }
+
+    #[test]
+    fn return_data_in_bounds() {
+        let result = run(vec![stop_with_return_data(2, 1)], 0).unwrap();
+        assert_eq!(result, vec![PlainBrilligType::Int(7, IntegerBitSize::U32)]);
     }
 }
