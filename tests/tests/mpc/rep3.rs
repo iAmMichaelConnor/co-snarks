@@ -999,6 +999,59 @@ mod field_share {
         rep3_b2a_noncanonical_impl(conversion::b2y2a_mod_p);
     }
 
+    /// Conversions draw bit-composition masks unevenly across the parties. The common
+    /// randomness from `generate_shared` (used for the joint Yao input of the value both
+    /// garblers know) must stay equal on all parties afterwards, also in forks.
+    #[test]
+    fn rep3_common_randomness_after_conversions() {
+        for a2b_type in [A2BType::Direct, A2BType::Yao] {
+            let mut rng = thread_rng();
+            let x = ark_bn254::Fr::rand(&mut rng);
+            let x_shares = rep3::share_field_element(x, &mut rng);
+            let nets = LocalNetwork::new_3_parties();
+            let (tx1, rx1) = mpsc::channel();
+            let (tx2, rx2) = mpsc::channel();
+            let (tx3, rx3) = mpsc::channel();
+            for ((net, tx), x) in nets.into_iter().zip([tx1, tx2, tx3]).zip(x_shares) {
+                std::thread::spawn(move || {
+                    let mut state = Rep3State::new(&net, a2b_type).unwrap();
+                    let mut results = Vec::new();
+                    let mut common = Vec::new();
+                    for fork in [false, true] {
+                        let mut forked;
+                        let state = if fork {
+                            forked = state.fork(0).unwrap();
+                            &mut forked
+                        } else {
+                            &mut state
+                        };
+                        let bits = conversion::a2b(x, &net, state).unwrap();
+                        let x = conversion::b2a(&bits, &net, state).unwrap();
+                        common.push(state.rngs.generate_shared::<[u8; 32]>(state.id));
+                        let delta = state.rngs.generate_random_garbler_delta(state.id);
+                        let joint = yao::joint_input_arithmetic(x, delta, &net, state).unwrap();
+                        let mut sum = rep3::Rep3PrimeFieldShare::zero_share();
+                        for bundle in joint {
+                            let y = conversion::y2a::<ark_bn254::Fr, _>(bundle, delta, &net, state)
+                                .unwrap();
+                            sum = arithmetic::add(sum, y);
+                        }
+                        results.push(sum);
+                    }
+                    tx.send((common, results)).unwrap();
+                });
+            }
+            let (common1, results1) = rx1.recv().unwrap();
+            let (common2, results2) = rx2.recv().unwrap();
+            let (common3, results3) = rx3.recv().unwrap();
+            assert_eq!(common1, common2, "{a2b_type:?}");
+            assert_eq!(common2, common3, "{a2b_type:?}");
+            for (r1, r2, r3) in izip!(results1, results2, results3) {
+                assert_eq!(rep3::combine_field_element(r1, r2, r3), x, "{a2b_type:?}");
+            }
+        }
+    }
+
     #[test]
     fn rep3_gc() {
         let nets = LocalNetwork::new_3_parties();
