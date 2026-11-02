@@ -312,3 +312,26 @@ fn madd_div_mod_many_rejects_mismatched_lengths() {
     });
     assert_eq!(outputs, [true; 3]);
 }
+
+#[test]
+fn rep3_shared_naf_entries_match_plain() {
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    for width in [0usize, 1, 7, 127, 128, 254] {
+        let bits = if width == 0 { 254 } else { width };
+        let max = if bits == 254 {
+            -Fr::from(1u64)
+        } else {
+            Fr::from((BigUint::one() << bits) - BigUint::one())
+        };
+        for value in [Fr::zero(), Fr::from(1u64), Fr::from(2u64), max] {
+            let expected = plain.compute_naf_entries(&value, width).unwrap();
+            assert_eq!(expected.len(), bits);
+            let [o0, o1, o2] = run_rep3(Input::Shared(value).to_parties(), move |driver, x| {
+                driver.compute_naf_entries(&x, width).unwrap()
+            });
+            assert!(o0.iter().all(|x| matches!(x, Rep3AcvmType::Shared(_))));
+            let entries: Vec<_> = izip!(o0, o1, o2).map(|(a, b, c)| open([a, b, c])).collect();
+            assert_eq!(entries, expected, "width {width}, value {value}");
+        }
+    }
+}
