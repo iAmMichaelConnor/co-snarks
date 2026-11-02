@@ -335,3 +335,118 @@ fn rep3_shared_naf_entries_match_plain() {
         }
     }
 }
+
+/// The limbs (68 bits each, the last one unbounded) of `value`.
+fn bigfield_limbs(value: &BigUint) -> [Fr; 4] {
+    let mask = (BigUint::one() << 68) - BigUint::one();
+    std::array::from_fn(|i| {
+        if i == 3 {
+            Fr::from(value >> 204)
+        } else {
+            Fr::from((value >> (68 * i)) & &mask)
+        }
+    })
+}
+
+/// Runs every non-native limb operation of the driver on the given limbs (taken in pairs) and
+/// returns the outputs.
+fn bigfield_ops<T: NoirWitnessExtensionProtocol<Fr>>(
+    driver: &mut T,
+    x: &[[T::AcvmType; 4]],
+) -> (Vec<T::AcvmType>, Vec<T::OtherAcvmType<Bn254G1>>) {
+    let mut limbs = Vec::new();
+    let mut others = Vec::new();
+    for [a, b] in x.as_chunks::<2>().0 {
+        limbs.extend(driver.add_acvm_type_limbs::<Bn254G1>(a, b).unwrap());
+        limbs.extend(driver.sub_acvm_type_limbs::<Bn254G1>(a, b).unwrap());
+        limbs.extend(driver.sub_acvm_type_limbs::<Bn254G1>(b, a).unwrap());
+        limbs.extend(driver.mul_mod_acvm_type_limbs::<Bn254G1>(a, b).unwrap());
+        limbs.extend(driver.inverse_acvm_type_limbs::<Bn254G1>(a).unwrap());
+        let (quotient, remainder) = driver.div_mod_acvm_limbs::<Bn254G1>(a).unwrap();
+        limbs.extend(quotient);
+        others.push(remainder);
+        let (quotient, remainder) = driver
+            .madd_div_mod_acvm_limbs::<Bn254G1>(a, b, &[a.clone(), b.clone()])
+            .unwrap();
+        limbs.extend(quotient);
+        others.push(remainder);
+        let value = driver
+            .acvm_type_limbs_to_other_acvm_type::<4, 68, Bn254G1>(a)
+            .unwrap();
+        limbs.extend(
+            driver
+                .other_acvm_type_to_acvm_type_limbs::<4, 68, Bn254G1>(&value)
+                .unwrap(),
+        );
+        others.push(value);
+        let wide = [b[0].clone(), b[1].clone()];
+        let value = driver
+            .acvm_type_limbs_to_other_acvm_type::<2, 136, Bn254G1>(&wide)
+            .unwrap();
+        limbs.extend(
+            driver
+                .other_acvm_type_to_acvm_type_limbs::<2, 136, Bn254G1>(&value)
+                .unwrap(),
+        );
+        others.push(value);
+    }
+    let half = x.len() / 2;
+    let (quotient, remainder) = driver
+        .madd_div_mod_many_acvm_limbs::<Bn254G1>(&x[..half], &x[half..2 * half], &x[..2])
+        .unwrap();
+    limbs.extend(quotient);
+    others.push(remainder);
+    (limbs, others)
+}
+
+/// The secret-shared non-native limb arithmetic gives the plain driver's results, for canonical,
+/// unreduced and oversized limbs (products above 2^512), negative differences and zero.
+#[test]
+fn rep3_shared_bigfield_limb_arithmetic_matches_plain() {
+    let p: BigUint = Fq::MODULUS.into();
+    let mut rng = thread_rng();
+    let values: Vec<[Fr; 4]> = vec![
+        bigfield_limbs(&BigUint::ZERO),
+        bigfield_limbs(&(&p * 3u32 + 5u32)),
+        bigfield_limbs(&p),
+        bigfield_limbs(&(&p - 1u32)),
+        [-Fr::from(1u64); 4],
+        bigfield_limbs(&BigUint::one()),
+        bigfield_limbs(&((BigUint::one() << 272) - 1u32)),
+        bigfield_limbs(&Fq::rand(&mut rng).into()),
+        bigfield_limbs(&Fq::rand(&mut rng).into()),
+        [Fr::from(7u64); 4],
+    ];
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    let (expected_limbs, expected_others) = bigfield_ops(&mut plain, &values);
+
+    for mixed in [false, true] {
+        // All limbs shared, or the odd limbs public.
+        let mut per_party: [Vec<[Rep3AcvmType<Fr>; 4]>; 3] = Default::default();
+        for value in &values {
+            let limbs = value.map(|limb| {
+                if mixed && limb.into_bigint().0[0] % 2 == 1 {
+                    Input::Public(limb).to_parties()
+                } else {
+                    Input::Shared(limb).to_parties()
+                }
+            });
+            for (party, party_values) in per_party.iter_mut().enumerate() {
+                party_values.push(limbs.clone().map(|limb| limb[party].clone()));
+            }
+        }
+        let [o0, o1, o2] = run_rep3(per_party, |driver, x| bigfield_ops(driver, &x));
+        if !mixed {
+            assert!(o0.0.iter().all(|x| matches!(x, Rep3AcvmType::Shared(_))));
+            assert!(o0.1.iter().all(|x| matches!(x, Rep3AcvmType::Shared(_))));
+        }
+        let limbs: Vec<_> = izip!(o0.0, o1.0, o2.0)
+            .map(|(a, b, c)| open([a, b, c]))
+            .collect();
+        let others: Vec<_> = izip!(o0.1, o1.1, o2.1)
+            .map(|(a, b, c)| open([a, b, c]))
+            .collect();
+        assert_eq!(limbs, expected_limbs, "mixed: {mixed}");
+        assert_eq!(others, expected_others, "mixed: {mixed}");
+    }
+}
