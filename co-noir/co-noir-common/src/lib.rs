@@ -10,6 +10,7 @@ use crate::{
 };
 use ark_ec::CurveGroup;
 use ark_ff::{One, Zero};
+use ark_serialize::CanonicalSerialize;
 use itertools::izip;
 use mpc_net::Network;
 
@@ -114,6 +115,36 @@ impl CoUtils {
         T::inv_many_in_place_leaking_zeros(poly, net, state)
     }
 
+    /// The largest number of field elements [`CoUtils::mul_many_bounded`] multiplies in one
+    /// [`NoirUltraHonkProver::mul_many`] call: one such call sends one vector of `len` field
+    /// elements per message (REP3 resharing, Shamir degree reduction), which is kept within
+    /// [`mpc_net::DEFAULT_MAX_FRAME_LENGTH`] (an 8-byte length prefix plus the elements).
+    pub fn max_mul_many_len<F: CanonicalSerialize + Zero>() -> usize {
+        (mpc_net::DEFAULT_MAX_FRAME_LENGTH - 8) / F::zero().uncompressed_size()
+    }
+
+    /// [`NoirUltraHonkProver::mul_many`] for batches that are built by combining independent
+    /// multiplications into one round. Batches longer than
+    /// [`CoUtils::max_mul_many_len`] are multiplied in consecutive chunks, so that no message
+    /// exceeds the default frame length of the network.
+    pub fn mul_many_bounded<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        a: &[T::ArithmeticShare],
+        b: &[T::ArithmeticShare],
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<Vec<T::ArithmeticShare>> {
+        debug_assert_eq!(a.len(), b.len());
+        let max_len = Self::max_mul_many_len::<P::ScalarField>();
+        if a.len() <= max_len {
+            return T::mul_many(a, b, net, state);
+        }
+        let mut res = Vec::with_capacity(a.len());
+        for (a, b) in a.chunks(max_len).zip(b.chunks(max_len)) {
+            res.extend(T::mul_many(a, b, net, state)?);
+        }
+        Ok(res)
+    }
+
     // To reduce the number of communication rounds, we implement the array_prod_mul macro according to https://www.usenix.org/system/files/sec22-ozdemir.pdf, p11 first paragraph.
     pub fn array_prod_mul<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
         net: &N,
@@ -129,9 +160,15 @@ impl CoUtils {
         let r_inv = T::inv_many(&r, net, state)?;
         let r_inv0 = vec![r_inv[0]; len];
 
-        let mut unblind = T::mul_many(&r_inv0, &r[1..], net, state)?;
+        // The unblinding factors r_0^-1 * r_i and the blinded inputs r_(i-1) * inp_(i-1) are
+        // independent products, so they share one multiplication round.
+        let mut lhs = r_inv0;
+        lhs.extend_from_slice(&r[..len]);
+        let mut rhs = r[1..].to_vec();
+        rhs.extend_from_slice(inp);
+        let mut unblind = Self::mul_many_bounded::<T, P, N>(&lhs, &rhs, net, state)?;
+        let mul = unblind.split_off(len);
 
-        let mul = T::mul_many(&r[..len], inp, net, state)?;
         let mut open = T::mul_open_many(&mul, &r_inv[1..], net, state)?;
 
         for i in 1..open.len() {
@@ -175,11 +212,17 @@ impl CoUtils {
             r_invs_mul.extend(r_inv_[1..].to_vec());
         }
 
-        let mut unblind = T::mul_many(&r_inv0s, &r_chunks, net, state)?;
-
         let input = inp.iter().flatten().cloned().collect::<Vec<_>>();
 
-        let mul = T::mul_many(&mul_r, &input, net, state)?;
+        // The unblinding factors and the blinded inputs are independent products, so they
+        // share one multiplication round.
+        let mut lhs = r_inv0s;
+        lhs.extend_from_slice(&mul_r);
+        let mut rhs = r_chunks;
+        rhs.extend_from_slice(&input);
+        let mut unblind = Self::mul_many_bounded::<T, P, N>(&lhs, &rhs, net, state)?;
+        let mul = unblind.split_off(depth * width);
+
         let mut open = T::mul_open_many(&mul, &r_invs_mul, net, state)?;
 
         for open_ in open.chunks_mut(width) {
@@ -280,5 +323,191 @@ mod tests {
             out
         };
         assert_eq!(is_result, should_result);
+    }
+}
+
+#[cfg(test)]
+mod round_tests {
+    use crate::{CoUtils, mpc::NoirUltraHonkProver, mpc::rep3::Rep3UltraHonkDriver};
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ff::{One, UniformRand};
+    use bytes::Bytes;
+    use mpc_core::protocols::rep3::{self, Rep3State, conversion::A2BType};
+    use mpc_net::{ConnectionStats, Network, local::LocalNetwork};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Driver = Rep3UltraHonkDriver;
+    type Share = <Driver as NoirUltraHonkProver<G1Projective>>::ArithmeticShare;
+
+    /// Counts the messages a party sends and records the largest one.
+    struct CountingNetwork {
+        inner: LocalNetwork,
+        sent: AtomicUsize,
+        max_frame: AtomicUsize,
+    }
+
+    impl CountingNetwork {
+        fn sent(&self) -> usize {
+            self.sent.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            self.max_frame.fetch_max(data.len(), Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    /// Runs `array_prod_mul` and `array_prod_inner_mul_many` in three parties and returns the
+    /// reconstructed results, together with the messages party 0 sent for each of them and
+    /// for one `mul_many`, `inv_many` and `mul_open_many` of the same length.
+    fn run(inp: &[Fr]) -> (Vec<Fr>, Vec<Fr>, [usize; 5]) {
+        let mut rng = rand::thread_rng();
+        let [s0, s1, s2] = rep3::share_field_elements(inp, &mut rng);
+        let results: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip([s0, s1, s2])
+            .map(|(inner, shares)| {
+                std::thread::spawn(move || {
+                    let net = CountingNetwork {
+                        inner,
+                        sent: AtomicUsize::new(0),
+                        max_frame: AtomicUsize::new(0),
+                    };
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let mut sent = [0; 5];
+
+                    let before = net.sent();
+                    let prod = CoUtils::array_prod_mul::<Driver, G1Projective, _>(
+                        &net, &mut state, &shares,
+                    )
+                    .unwrap();
+                    sent[0] = net.sent() - before;
+
+                    let before = net.sent();
+                    let inner_prod = CoUtils::array_prod_inner_mul_many::<Driver, G1Projective, _>(
+                        &net,
+                        &mut state,
+                        &[shares.clone(), shares.clone()],
+                    )
+                    .unwrap();
+                    sent[1] = net.sent() - before;
+
+                    let before = net.sent();
+                    <Driver as NoirUltraHonkProver<G1Projective>>::mul_many(
+                        &shares, &shares, &net, &mut state,
+                    )
+                    .unwrap();
+                    sent[2] = net.sent() - before;
+
+                    let before = net.sent();
+                    <Driver as NoirUltraHonkProver<G1Projective>>::inv_many(
+                        &shares, &net, &mut state,
+                    )
+                    .unwrap();
+                    sent[3] = net.sent() - before;
+
+                    let before = net.sent();
+                    <Driver as NoirUltraHonkProver<G1Projective>>::mul_open_many(
+                        &shares, &shares, &net, &mut state,
+                    )
+                    .unwrap();
+                    sent[4] = net.sent() - before;
+
+                    (prod, inner_prod, sent)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        let combine =
+            |f: &dyn Fn(usize) -> Vec<Share>| rep3::combine_field_elements(&f(0), &f(1), &f(2));
+        let prod = combine(&|i| results[i].0.clone());
+        let inner = combine(&|i| results[i].1.concat());
+        (prod, inner, results[0].2)
+    }
+
+    #[test]
+    fn array_prod_mul_uses_one_multiplication_round() {
+        let mut rng = rand::thread_rng();
+        let inp: Vec<Fr> = (0..17).map(|_| Fr::rand(&mut rng)).collect();
+        let (prod, inner, sent) = run(&inp);
+
+        let mut acc = Fr::one();
+        let expected: Vec<Fr> = inp
+            .iter()
+            .map(|x| {
+                acc *= x;
+                acc
+            })
+            .collect();
+        assert_eq!(prod, expected);
+        assert_eq!(inner, [expected.clone(), expected].concat());
+
+        // One multiplication round for the unblinding factors and the blinded inputs together,
+        // one inversion of the masks and one opening.
+        let [array_prod, inner_prod, mul, inv, open] = sent;
+        assert!(mul > 0);
+        assert_eq!(array_prod, mul + inv + open);
+        assert_eq!(inner_prod, mul + inv + open);
+    }
+
+    #[test]
+    fn mul_many_bounded_keeps_messages_within_the_default_frame() {
+        let max_len = CoUtils::max_mul_many_len::<Fr>();
+        let len = max_len + 3;
+        let a: Vec<Fr> = (0..len as u64).map(Fr::from).collect();
+        let b: Vec<Fr> = (0..len as u64).map(|i| Fr::from(i + 7)).collect();
+        let mut rng = rand::thread_rng();
+        let a_shares = rep3::share_field_elements(&a, &mut rng);
+        let b_shares = rep3::share_field_elements(&b, &mut rng);
+        let results: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(a_shares.into_iter().zip(b_shares))
+            .map(|(inner, (a, b))| {
+                std::thread::spawn(move || {
+                    let net = CountingNetwork {
+                        inner,
+                        sent: AtomicUsize::new(0),
+                        max_frame: AtomicUsize::new(0),
+                    };
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let before = net.sent();
+                    let c = CoUtils::mul_many_bounded::<Driver, G1Projective, _>(
+                        &a, &b, &net, &mut state,
+                    )
+                    .unwrap();
+                    (c, net.sent() - before, net.max_frame.load(Ordering::SeqCst))
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        let c = rep3::combine_field_elements(&results[0].0, &results[1].0, &results[2].0);
+        assert!(
+            c.iter()
+                .zip(a.iter().zip(&b))
+                .all(|(c, (a, b))| *c == *a * b)
+        );
+        for (_, sent, max_frame) in &results {
+            assert_eq!(*sent, 2);
+            assert!(*max_frame <= mpc_net::DEFAULT_MAX_FRAME_LENGTH);
+        }
     }
 }
