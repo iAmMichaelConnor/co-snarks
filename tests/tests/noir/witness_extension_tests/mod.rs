@@ -5,6 +5,7 @@ use itertools::izip;
 
 mod plain_solver;
 mod rep3;
+mod rep3_driver;
 mod shamir;
 
 macro_rules! add_plain_acvm_test {
