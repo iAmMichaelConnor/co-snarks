@@ -8,14 +8,15 @@ use crate::{
 use ark_ff::Field;
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
 
-use co_noir_common::constants::PERMUTATION_ARGUMENT_VALUE_SEPARATOR;
+use co_noir_common::constants::{
+    PAIRING_POINT_ACCUMULATOR_SIZE, PERMUTATION_ARGUMENT_VALUE_SEPARATOR,
+};
 use co_noir_common::types::RelationParameters;
 use co_noir_common::types::ZeroKnowledge;
 use co_noir_common::{
     honk_curve::HonkCurve,
     honk_proof::{HonkProofResult, TranscriptFieldType},
 };
-use num_bigint::BigUint;
 
 pub(crate) struct OinkRecursiveVerifier;
 
@@ -44,36 +45,18 @@ impl OinkRecursiveVerifier {
 
         transcript.add_element_frs_to_hash_buffer("vk_hash".to_string(), &[vk_hash]);
 
-        let num_public_inputs = verification_key
-            .vk_and_hash
-            .vk
-            .num_public_inputs
-            .get_value(builder, driver);
-
-        let num_public_inputs: BigUint = T::get_public(&num_public_inputs).expect(
-            "Failed to get the number of public inputs as a public value during recursive verification key verification",
-        ).into();
-
-        let num_public_inputs_usize = *num_public_inputs
-            .to_u64_digits()
-            .first()
-            .expect("Should fit into 64 bits") as usize;
-        let mut public_inputs = Vec::with_capacity(num_public_inputs_usize);
-
-        for i in 0..num_public_inputs_usize {
-            let pi = transcript.receive_fr_from_prover(format!("public_input_{i}"))?;
-            public_inputs.push(pi);
-        }
-
-        verification_key
-            .vk_and_hash
-            .vk
-            .num_public_inputs
-            .assert_equal(
-                &FieldCT::from(C::ScalarField::from(num_public_inputs_usize as u64)),
-                builder,
-                driver,
-            );
+        // As in barretenberg, the number of public inputs follows from the size of the proof (the
+        // inner public inputs of the recursion constraint and the pairing point accumulator), and
+        // the key's value is constrained to it. The key's value may be secret-shared.
+        let num_public_inputs =
+            verification_key.public_inputs.len() + PAIRING_POINT_ACCUMULATOR_SIZE as usize;
+        let public_inputs = Self::receive_public_inputs(
+            &verification_key.vk_and_hash.vk.num_public_inputs,
+            num_public_inputs,
+            transcript,
+            builder,
+            driver,
+        )?;
 
         let mut commitments = WitnessCommitments::<C::ScalarField, T>::default();
 
@@ -163,6 +146,30 @@ impl OinkRecursiveVerifier {
         Ok(())
     }
 
+    /// Receives `num_public_inputs` public inputs from the transcript and constrains the key's
+    /// number of public inputs `key_value` to be equal to it.
+    fn receive_public_inputs<
+        C: HonkCurve<TranscriptFieldType>,
+        T: NoirWitnessExtensionProtocol<C::ScalarField>,
+        H: TranscriptHasherCT<C>,
+    >(
+        key_value: &FieldCT<C::ScalarField>,
+        num_public_inputs: usize,
+        transcript: &mut TranscriptCT<C, H>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> HonkProofResult<Vec<FieldCT<C::ScalarField>>> {
+        let public_inputs = (0..num_public_inputs)
+            .map(|i| transcript.receive_fr_from_prover(format!("public_input_{i}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        key_value.assert_equal(
+            &FieldCT::from(C::ScalarField::from(num_public_inputs as u64)),
+            builder,
+            driver,
+        );
+        Ok(public_inputs)
+    }
+
     /**
      * @brief Compute the correction term for the permutation argument.
      *
@@ -241,5 +248,63 @@ impl OinkRecursiveVerifier {
         }
 
         Ok(numerator.divide(&denominator, builder, driver)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript_ct::{Bn254G1, Poseidon2SpongeCT};
+    use crate::types::field_ct::tests::{Gadget, rep3_witness_verifies};
+    use ark_bn254::Fr;
+    use ark_ff::Zero;
+
+    /// Uses the input witness, the key's number of public inputs, then receives 8 public inputs
+    /// and binds the key's number to 8.
+    #[derive(Clone, Copy)]
+    struct ReceivePublicInputs;
+
+    impl Gadget for ReceivePublicInputs {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            let key_value = FieldCT::from_witness(inputs[0].clone(), builder);
+            // An earlier use of the value, as in the key hash.
+            key_value.multiply(&key_value, builder, driver).unwrap();
+            let mut transcript =
+                TranscriptCT::<Bn254G1, Poseidon2SpongeCT<Bn254G1>>::new_verifier(vec![
+                    FieldCT::from(Fr::zero());
+                    8
+                ]);
+            let public_inputs = OinkRecursiveVerifier::receive_public_inputs(
+                &key_value,
+                8,
+                &mut transcript,
+                builder,
+                driver,
+            )
+            .unwrap();
+            assert_eq!(public_inputs.len(), 8);
+        }
+    }
+
+    /// A secret-shared number of public inputs in the inner key is constrained, not opened. (The
+    /// builder resolves the equality with a constant by giving the shared witness the constant's
+    /// value, so a wrong value shows up in the gate that used it before.)
+    #[test]
+    fn shared_key_public_input_count_is_constrained() {
+        assert!(rep3_witness_verifies(
+            &[Fr::from(8u64)],
+            ReceivePublicInputs
+        ));
+        for wrong in [0u64, 7, 9, u64::MAX] {
+            assert!(!rep3_witness_verifies(
+                &[Fr::from(wrong)],
+                ReceivePublicInputs
+            ));
+        }
     }
 }
