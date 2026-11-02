@@ -18,11 +18,11 @@ use co_noir_common::constants::{
     DECIDER_PROOF_LENGTH, NUM_ALL_ENTITIES, NUM_SMALL_IPA_EVALUATIONS, NUM_ZERO_ROWS,
     OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS, OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
     PUBLIC_INPUTS_SIZE, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
-    ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
+    ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK, ULTRA_VERIFICATION_KEY_LENGTH,
 };
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
-use co_noir_common::honk_proof::HonkProofResult;
+use co_noir_common::honk_proof::{HonkProofError, HonkProofResult};
 use co_noir_common::keys::verification_key::VerifyingKeyBarretenberg;
 use co_noir_common::mpc::plain::PlainUltraHonkDriver;
 use co_noir_common::polynomials::entities::{PrecomputedEntities, WITNESS_ENTITIES_SIZE};
@@ -60,6 +60,9 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         builder: &mut GenericUltraCircuitBuilder<C, T>,
         driver: &mut T,
     ) -> HonkProofResult<Self> {
+        if elements.len() != ULTRA_VERIFICATION_KEY_LENGTH {
+            return Err(HonkProofError::InvalidKeyLength);
+        }
         let log_circuit_size = elements[0].clone();
         let num_public_inputs = elements[1].clone();
         let pub_inputs_offset = elements[2].clone();
@@ -122,6 +125,22 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
         } else {
             ZeroKnowledge::Yes
         };
+
+        // Validate the ACIR input sizes before using any of the inputs, as barretenberg does. The
+        // ACIR proof excludes the inner public inputs but contains the pairing point object.
+        if input.key.len() != ULTRA_VERIFICATION_KEY_LENGTH {
+            return Err(HonkProofError::InvalidKeyLength.into());
+        }
+        let expected_proof_size = PUBLIC_INPUTS_SIZE
+            + match has_zk {
+                ZeroKnowledge::Yes => ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
+                ZeroKnowledge::No => ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
+            };
+        eyre::ensure!(
+            input.proof.len() == expected_proof_size,
+            "create_honk_recursion_constraints: ACIR proof size mismatch: expected {expected_proof_size}, got {}",
+            input.proof.len()
+        );
 
         // Currently no IPA support
 
@@ -588,5 +607,113 @@ fn populate_field_elements_for_mock_commitments<
 
     for _ in 0..num_commitments {
         fields.extend_from_slice(&mock_commitment_frs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript_ct::Bn254G1;
+    use crate::types::types::WitnessOrConstant;
+    use ark_bn254::Fr;
+
+    type Builder = GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>;
+    type Key = RecursiveVerificationKey<Bn254G1, PlainAcvmSolver<Fr>>;
+
+    fn valid_key_fields() -> Vec<FieldCT<Fr>> {
+        Builder::create_mock_honk_vk(16, 0)
+            .to_field_elements()
+            .into_iter()
+            .map(FieldCT::from)
+            .collect()
+    }
+
+    #[test]
+    fn recursive_vk_accepts_exact_field_count() {
+        let fields = valid_key_fields();
+        assert_eq!(fields.len(), ULTRA_VERIFICATION_KEY_LENGTH);
+        let mut builder = Builder::new_minimal(0);
+        let mut driver = PlainAcvmSolver::default();
+        assert!(Key::new(&fields, &mut builder, &mut driver).is_ok());
+    }
+
+    #[test]
+    fn recursive_vk_rejects_wrong_field_counts() {
+        let fields = valid_key_fields();
+        for length in [
+            0,
+            2,
+            3,
+            fields.len() - 1,
+            fields.len() + 1,
+            fields.len() + 4,
+        ] {
+            let mut malformed = fields.clone();
+            malformed.resize(length, FieldCT::from(Fr::zero()));
+            let result = std::panic::catch_unwind(|| {
+                let mut builder = Builder::new_minimal(0);
+                let mut driver = PlainAcvmSolver::default();
+                Key::new(&malformed, &mut builder, &mut driver).map(|_| ())
+            });
+            assert!(
+                matches!(result, Ok(Err(HonkProofError::InvalidKeyLength))),
+                "key with {length} fields"
+            );
+        }
+    }
+
+    fn recursion_constraint(
+        builder: &mut Builder,
+        key_len: usize,
+        proof_len: usize,
+        proof_type: ProofType,
+    ) -> RecursionConstraint<Fr> {
+        let mut witnesses =
+            |n: usize| -> Vec<u32> { (0..n).map(|_| builder.add_variable(Fr::zero())).collect() };
+        let key = witnesses(key_len);
+        let proof = witnesses(proof_len);
+        let public_inputs = witnesses(1);
+        let key_hash = witnesses(1)[0];
+        RecursionConstraint {
+            key,
+            proof,
+            public_inputs,
+            key_hash,
+            proof_type: proof_type as u32,
+            predicate: WitnessOrConstant::from_constant(Fr::one()),
+        }
+    }
+
+    #[test]
+    fn recursion_constraint_rejects_wrong_input_lengths() {
+        for (proof_type, proof_len) in [
+            (ProofType::Honk, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS),
+            (ProofType::HonkZk, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK),
+        ] {
+            let proof_len = proof_len + PUBLIC_INPUTS_SIZE;
+            for (key_len, proof_len) in [
+                (ULTRA_VERIFICATION_KEY_LENGTH - 1, proof_len),
+                (ULTRA_VERIFICATION_KEY_LENGTH + 1, proof_len),
+                (ULTRA_VERIFICATION_KEY_LENGTH, proof_len - 1),
+                (ULTRA_VERIFICATION_KEY_LENGTH, proof_len + 1),
+            ] {
+                let result = std::panic::catch_unwind(|| {
+                    let mut builder = Builder::new_minimal(0);
+                    let mut driver = PlainAcvmSolver::default();
+                    let input = recursion_constraint(&mut builder, key_len, proof_len, proof_type);
+                    builder
+                        .create_honk_recursion_constraints(
+                            &input,
+                            &ProverCrs::default(),
+                            &mut driver,
+                        )
+                        .map(|_| ())
+                });
+                assert!(
+                    matches!(result, Ok(Err(_))),
+                    "{proof_type:?}: key length {key_len}, proof length {proof_len}"
+                );
+            }
+        }
     }
 }
