@@ -4,8 +4,8 @@ version = 4
 
 [[package]]
 name = "acir"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir_field",
  "base64",
@@ -25,8 +25,8 @@ dependencies = [
 
 [[package]]
 name = "acir_field"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.6.0",
@@ -40,8 +40,8 @@ dependencies = [
 
 [[package]]
 name = "acvm"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -56,14 +56,15 @@ dependencies = [
 
 [[package]]
 name = "acvm_blackbox_solver"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir",
  "aes 0.9.3",
  "blake2 0.11.0",
  "blake3",
  "cbc",
+ "ecdsa",
  "k256",
  "keccak 0.2.2",
  "log",
@@ -944,8 +945,8 @@ dependencies = [
 
 [[package]]
 name = "brillig"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir_field",
  "itertools 0.15.0",
@@ -955,8 +956,8 @@ dependencies = [
 
 [[package]]
 name = "brillig_vm"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir",
  "acvm_blackbox_solver",
@@ -2376,8 +2377,8 @@ dependencies = [
 
 [[package]]
 name = "fm"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "codespan-reporting 0.13.1",
  "iter-extended",
@@ -2795,8 +2796,8 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "iter-extended"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 
 [[package]]
 name = "itertools"
@@ -3267,8 +3268,8 @@ dependencies = [
 
 [[package]]
 name = "msgpack_tagged"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "msgpack_tagged_derive",
  "rmp",
@@ -3279,8 +3280,8 @@ dependencies = [
 
 [[package]]
 name = "msgpack_tagged_derive"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3325,8 +3326,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_abi"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -3342,8 +3343,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_artifacts"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acir",
  "acvm",
@@ -3362,8 +3363,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_errors"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "codespan-reporting 0.13.1",
  "fm",
@@ -3375,8 +3376,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_printable_type"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "acvm",
  "iter-extended",
@@ -3387,8 +3388,8 @@ dependencies = [
 
 [[package]]
 name = "noirc_span"
-version = "1.0.0-rc.3"
-source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0-rc.3#5a7ee9bf5ed8973076df7bb0d2b723024db09ae7"
+version = "1.0.0"
+source = "git+https://github.com/noir-lang/noir/?tag=v1.0.0#275d3ab1a5c916c6ea73e8d6b943f685f574500c"
 dependencies = [
  "codespan 0.13.1",
  "serde",

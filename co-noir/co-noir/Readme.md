@@ -1,6 +1,6 @@
 # UltraHonk
 
-This crate implements Aztec's UltraHonk prover and verifier in Rust. The integration targets Barretenberg **v6.0.0** (commit `0219f11d8133970df3974fe5ae65e006bf8c193a`) and its Noir submodule **v1.0.0-rc.3** (commit `5a7ee9bf5ed8973076df7bb0d2b723024db09ae7`). Tool pins live in [`versions.env`](../../../versions.env).
+This crate implements Aztec's UltraHonk prover and verifier in Rust. The integration targets Barretenberg **v6.0.0** (commit `0219f11d8133970df3974fe5ae65e006bf8c193a`) and Noir **v1.0.0** (commit `275d3ab1a5c916c6ea73e8d6b943f685f574500c`). Tool pins live in [`versions.env`](../../../versions.env).
 
 Build the independent Barretenberg oracle from the exact source checkout:
 
@@ -33,7 +33,7 @@ First, one needs to create the circuit file from a Noir source code. Your Noir p
 - `Nargo.toml`: Similar to Cargo.toml, just for Noir projects.
 - `Prover.toml`: The inputs for the main function in `src/main.nr` used in proof generation.
 
-To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0-rc.3.
+To create the circuit file used in Co-Noir, one needs to install Nargo following the instructions in [https://noir-lang.org/docs/getting_started/noir_installation/](https://noir-lang.org/docs/getting_started/noir_installation/). Our prover is compatible with Nargo version v1.0.0.
 Then you can just execute the following command:
 
 ```bash

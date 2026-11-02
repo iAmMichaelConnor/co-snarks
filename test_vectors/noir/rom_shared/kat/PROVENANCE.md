@@ -20,3 +20,12 @@ Both commands completed with exit status zero. SHA-256 checksums:
 - `rom_shared_proof_with_pos`: `ae06c7c5792c163290594e9afe1a0360f5b0b6ea6b0ef98606d36ae6c9d7a46d`
 - `rom_shared_vk_with_kec`: `3e3f7515d2a7195cca5569709fe9648eba95225b906d227fc11b07b6c9dead17`
 - `rom_shared_vk_with_pos`: `f91185c37f1764ddaf563cd091b7cc0c3d12b01f52543d6f94c659c93ab1f51d`
+
+## Noir v1.0.0 recompile (2026-11-02)
+
+`rom_shared.json` was recompiled with Noir v1.0.0 (commit `275d3ab1a5c916c6ea73e8d6b943f685f574500c`).
+Its ACIR bytecode, ABI and the witness are byte-identical to the rc.3 build; only
+`noir_version`, `file_map`, `debug_symbols` and the artifact hash changed. Official bb v6.0.0
+regenerates both proof/VK pairs above byte-identically from the recompiled artifact.
+
+- `rom_shared.json` (v1.0.0): `4548f28b810d2046193cccd69f2218843b90d68d5e154dde21c717b1dbdcbbec`

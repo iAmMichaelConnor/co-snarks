@@ -1,3 +1,7 @@
 Aztec v6.0.0-rc.6, commit 0df91ba1799012435c62c6108a0926b357fef88c
 Noir v1.0.0-rc.3, commit 5a7ee9bf5ed8973076df7bb0d2b723024db09ae7
 Generated with source-built bb prove --verifier_target {noir-recursive-no-zk,evm-no-zk} --write_vk --verify.
+2026-11-02: program JSON recompiled with Noir v1.0.0, commit 275d3ab1a5c916c6ea73e8d6b943f685f574500c.
+ACIR bytecode, ABI and witness are byte-identical to the rc.3 build; only noir_version,
+file_map, debug_symbols and the artifact hash changed.
+Official bb v6.0.0 regenerates both proof/VK pairs byte-identically from the recompiled artifact.

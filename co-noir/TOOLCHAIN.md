@@ -7,11 +7,17 @@ The exact pairing is recorded in the repository-root `versions.env`:
 | Tool | Version | Source commit |
 | --- | --- | --- |
 | Aztec / Barretenberg | v6.0.0 | `0219f11d8133970df3974fe5ae65e006bf8c193a` |
-| Noir / Nargo | v1.0.0-rc.3 | `5a7ee9bf5ed8973076df7bb0d2b723024db09ae7` |
+| Noir / Nargo | v1.0.0 | `275d3ab1a5c916c6ea73e8d6b943f685f574500c` |
 
-The final Aztec release retains the same Noir submodule as v6.0.0-rc.6.
-The Rust Noir dependencies therefore remain on rc.3 even though TACEO's v5
-branch uses rc.5. Compile application artifacts with the paired Nargo.
+Aztec v6.0.0 itself pins the Noir submodule at v1.0.0-rc.3
+(`5a7ee9bf5ed8973076df7bb0d2b723024db09ae7`). This workspace uses the final
+Noir v1.0.0 release instead, for both the Rust Noir dependencies and Nargo.
+Between rc.3 and v1.0.0 the ACIR and Brillig formats are unchanged; the
+releases fix the compiler frontend and SSA passes, and the ACVM's ECDSA
+solver now reduces `R.x` modulo the curve order. Recompiling every tracked
+test vector with v1.0.0 leaves its ACIR bytecode, ABI and witness byte-identical,
+so official bb v6.0.0 proves and verifies v1.0.0 artifacts unchanged.
+Compile application artifacts with Nargo v1.0.0.
 Compatibility here covers UltraHonk; it does not add Chonk, AVM or rollup proving.
 
 ## Independent Barretenberg oracle
@@ -34,7 +40,7 @@ The build helper exports both `barretenberg/cpp` and the final release's
 `ipc-runtime` dependency, constants generator and Noir constants input. The
 final-release build also needs a Node version that can execute TypeScript
 (such as Node 24) and `clang-format-20`. Its provenance record identifies the full source
-commit and paired Noir commit. Source builds can report a placeholder version;
+commit and the Noir commit from `versions.env`. Source builds can report a placeholder version;
 use the provenance record to identify them. The final BB CLI also accepts named
 verifier targets: `noir-recursive[-no-zk]` for Poseidon2 and `evm[-no-zk]` for
 Keccak. The older explicit scheme/hash options remain available.
