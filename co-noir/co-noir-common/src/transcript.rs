@@ -279,11 +279,13 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<H::DataType>> {
-        if self.num_frs_read + n > self.proof_data.len() {
-            return Err(HonkProofError::ProofTooSmall);
-        }
-        let elements = self.proof_data[self.num_frs_read..self.num_frs_read + n].to_owned();
-        self.num_frs_read += n;
+        let end = self
+            .num_frs_read
+            .checked_add(n)
+            .filter(|end| *end <= self.proof_data.len())
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        let elements = self.proof_data[self.num_frs_read..end].to_owned();
+        self.num_frs_read = end;
 
         self.add_element_frs_to_hash_buffer(label, &elements);
         Ok(elements)
@@ -333,7 +335,10 @@ where
         label: String,
         n: usize,
     ) -> HonkProofResult<Vec<P::ScalarField>> {
-        let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS * n)?;
+        let num_elements = H::NUM_SCALARFIELD_ELEMENTS
+            .checked_mul(n)
+            .ok_or(HonkProofError::ProofTooSmall)?;
+        let elements = self.receive_n_from_prover(label, num_elements)?;
 
         // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
         #[allow(clippy::chunks_exact_to_as_chunks)]
@@ -623,6 +628,20 @@ mod tests {
                 keccak_verifier(vec![w])
                     .receive_fr_array_from_prover::<G1Projective, 1>("x".to_string()),
                 Err(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+        }
+    }
+
+    #[test]
+    fn oversized_reads_are_errors() {
+        for n in [2, usize::MAX] {
+            let mut transcript = poseidon_verifier(vec![Fr::zero()]);
+            transcript
+                .receive_fr_from_prover::<G1Projective>("first".to_string())
+                .unwrap();
+            assert!(matches!(
+                transcript.receive_fr_vec_from_prover::<G1Projective>("rest".to_string(), n),
+                Err(HonkProofError::ProofTooSmall)
             ));
         }
     }
