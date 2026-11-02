@@ -1089,3 +1089,193 @@ mod recursion_input_visibility_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod conditional_recursion_tests {
+    use super::*;
+    use crate::prelude::constraint_system_from_reader;
+    use crate::transcript_ct::Bn254G1;
+    use crate::types::types::WitnessOrConstant;
+    use ark_bn254::{Bn254, Fr};
+    use co_noir_common::{crs::parse::CrsParser, keys::verification_key::VerifyingKey};
+    use co_ultrahonk::prelude::UltraHonk;
+
+    type Builder = GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>;
+
+    fn crs_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../co-noir-common/src/crs")
+    }
+
+    /// Finalizes the circuit, proves it with ZK and returns whether the proof verifies, and the
+    /// verification key.
+    fn prove_and_verify(mut builder: Builder, driver: &mut PlainAcvmSolver<Fr>) -> (bool, Vec<u8>) {
+        builder.finalize_circuit(driver).unwrap();
+        let (prover_crs, verifier_crs) = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+            crs_dir().join("bn254_g1.dat"),
+            crs_dir().join("bn254_g2.dat"),
+            builder.compute_dyadic_size(),
+            ZeroKnowledge::Yes,
+        )
+        .unwrap()
+        .split();
+        let (pk, vk): (_, VerifyingKey<Bn254>) = builder
+            .create_keys::<Bn254>(prover_crs.into(), verifier_crs, driver)
+            .unwrap();
+        let vk_bytes = vk.inner_vk.to_buffer();
+        let (proof, public_inputs) =
+            UltraHonk::<_, Poseidon2Sponge>::prove(pk, ZeroKnowledge::Yes, &vk.inner_vk).unwrap();
+        let verified =
+            UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::Yes)
+                .unwrap();
+        (verified, vk_bytes)
+    }
+
+    /// Runs the in-circuit verifier on the given, possibly invalid, inputs. Write-vk mode only
+    /// suppresses the host-side checks of witness values in the verifier, so that an invalid
+    /// proof gives an unsatisfiable circuit instead of a panic; the inputs are not replaced.
+    fn verify_directly(
+        builder: &mut Builder,
+        driver: &mut PlainAcvmSolver<Fr>,
+        input: &RecursionConstraint<Fr>,
+        has_zk: ZeroKnowledge,
+    ) -> PairingPoints<Bn254G1, PlainAcvmSolver<Fr>> {
+        builder.is_write_vk_mode = true;
+        let proof_indices =
+            create_indices_for_reconstructed_proof(&input.proof, &input.public_inputs);
+        let inputs: Vec<_> = input.key.iter().chain(&proof_indices).copied().collect();
+        let values_before: Vec<_> = inputs
+            .iter()
+            .map(|i| builder.get_variable(*i as usize))
+            .collect();
+        let vk_fields: Vec<_> = input
+            .key
+            .iter()
+            .map(|i| FieldCT::from_witness_index(*i))
+            .collect();
+        let proof_fields: Vec<_> = proof_indices
+            .iter()
+            .map(|i| FieldCT::from_witness_index(*i))
+            .collect();
+        let key = RecursiveDeciderVerificationKey {
+            vk_and_hash: VKAndHash {
+                vk: RecursiveVerificationKey::new(&vk_fields, builder, driver).unwrap(),
+                hash: FieldCT::from_witness_index(input.key_hash),
+            },
+            _is_complete: false,
+            public_inputs: proof_fields[..input.public_inputs.len()].to_vec(),
+            relation_parameters: Default::default(),
+            target_sum: FieldCT::default(),
+            witness_commitments: Default::default(),
+            gemini_masking_commitment: None,
+            alphas: array::from_fn(|_| FieldCT::default()),
+            gate_challenges: Vec::new(),
+        };
+        let points = UltraRecursiveVerifier::verify_proof::<
+            Bn254G1,
+            Poseidon2SpongeCT<Bn254G1>,
+            PlainAcvmSolver<Fr>,
+        >(proof_fields, key, builder, driver, has_zk)
+        .unwrap();
+        let values_after: Vec<_> = inputs
+            .iter()
+            .map(|i| builder.get_variable(*i as usize))
+            .collect();
+        assert_eq!(values_before, values_after);
+        builder.is_write_vk_mode = false;
+        points
+    }
+
+    /// A recursion constraint with a witness predicate accepts an invalid inner proof only if the
+    /// predicate is false, and the predicate and the validity of the inner proof do not change
+    /// the circuit.
+    fn invalid_inner_proof_is_rejected_only_when_enabled(name: &str, has_zk: ZeroKnowledge) {
+        let vectors =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test_vectors/noir");
+        let kat = vectors.join(name).join("kat");
+        let constraint_system = constraint_system_from_reader(
+            std::fs::File::open(kat.join(format!("{name}.json"))).unwrap(),
+        )
+        .unwrap();
+        let witness = noir_types::witness_from_reader(
+            std::fs::File::open(kat.join(format!("{name}.gz"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(constraint_system.honk_recursion_constraints.len(), 1);
+        let source = &constraint_system.honk_recursion_constraints[0];
+        let recursion_crs = CrsParser::<Bn254G1>::get_crs_g1(
+            crs_dir().join("bn254_g1.dat"),
+            constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>(),
+            ZeroKnowledge::Yes,
+        )
+        .unwrap();
+        // The first scalar after Oink (for ZK, after the Libra commitment): changing it keeps
+        // all points on the curve but makes the inner proof invalid.
+        let scalar_index = PUBLIC_INPUTS_SIZE
+            + match has_zk {
+                ZeroKnowledge::Yes => OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK + 4,
+                ZeroKnowledge::No => OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
+            };
+        let mut keys: [Option<Vec<u8>>; 2] = [None, None];
+        // (predicate, invalid inner proof, verifier called directly, outer proof verifies)
+        for (enabled, invalid, direct, expected) in [
+            (true, false, false, true),
+            (false, true, false, true),
+            (true, false, true, true),
+            (true, true, true, false),
+        ] {
+            let mut builder = Builder::new_minimal(0);
+            builder.is_write_vk_mode = false;
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let mut add = |index: &u32| builder.add_variable(witness[*index as usize]);
+            let key = source.key.iter().map(&mut add).collect();
+            let public_inputs = source.public_inputs.iter().map(&mut add).collect();
+            let key_hash = add(&source.key_hash);
+            let mut proof: Vec<_> = source.proof.iter().map(|i| witness[*i as usize]).collect();
+            if invalid {
+                proof[scalar_index] += Fr::one();
+            }
+            let proof = proof.into_iter().map(|v| builder.add_variable(v)).collect();
+            let predicate = WitnessOrConstant::from_index(builder.add_variable(Fr::from(enabled)));
+            let input = RecursionConstraint {
+                key,
+                proof,
+                public_inputs,
+                key_hash,
+                predicate,
+                proof_type: source.proof_type,
+            };
+            let mut points = if direct {
+                verify_directly(&mut builder, &mut driver, &input, has_zk)
+            } else {
+                builder
+                    .create_honk_recursion_constraints(&input, &recursion_crs, &mut driver)
+                    .unwrap()
+            };
+            points.set_public(&mut builder, &mut driver).unwrap();
+            let (verified, key) = prove_and_verify(builder, &mut driver);
+            assert_eq!(
+                verified, expected,
+                "{name}: enabled {enabled}, invalid {invalid}, direct {direct}"
+            );
+            match &keys[usize::from(direct)] {
+                Some(reference) => assert_eq!(&key, reference, "{name}: the key changed"),
+                None => keys[usize::from(direct)] = Some(key),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Test is too slow for the pipeline"]
+    fn conditional_invalid_inner_proof_is_rejected_only_when_enabled() {
+        invalid_inner_proof_is_rejected_only_when_enabled("recursion_private", ZeroKnowledge::No);
+    }
+
+    #[test]
+    #[ignore = "Test is too slow for the pipeline"]
+    fn conditional_invalid_zk_inner_proof_is_rejected_only_when_enabled() {
+        invalid_inner_proof_is_rejected_only_when_enabled(
+            "recursion_private_zk",
+            ZeroKnowledge::Yes,
+        );
+    }
+}
