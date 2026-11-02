@@ -252,3 +252,34 @@ fn invalid_key_metadata_is_an_error() {
         assert!(matches!(result, Ok(Err(_))), "{log_circuit_size}");
     }
 }
+
+/// `co-noir` writes JSON proofs and public inputs as decimal strings; reading them back must give
+/// the same, valid proof. Keccak proofs contain 256-bit words.
+#[test]
+fn json_proofs_round_trip() {
+    use noir_types::HonkProofType;
+
+    let (proof, public_inputs, vk) = prove::<Poseidon2Sponge>(ZeroKnowledge::No);
+    let json = HonkProofType::FieldElements(proof, public_inputs);
+    let Ok(HonkProofType::FieldElements(proof, public_inputs)) =
+        HonkProofType::proof_and_public_inputs_from_string_field(
+            json.proof_to_strings(),
+            json.public_inputs_to_strings(),
+        )
+    else {
+        panic!("expected field elements");
+    };
+    assert!(verify::<Poseidon2Sponge>(proof, &public_inputs, &vk, ZeroKnowledge::No).unwrap());
+
+    let (proof, public_inputs, vk) = prove::<Keccak256>(ZeroKnowledge::No);
+    let json = HonkProofType::U256Values(proof, public_inputs);
+    let Ok(HonkProofType::U256Values(proof, public_inputs)) =
+        HonkProofType::proof_and_public_inputs_from_string_u256(
+            json.proof_to_strings(),
+            json.public_inputs_to_strings(),
+        )
+    else {
+        panic!("expected U256 values");
+    };
+    assert!(verify::<Keccak256>(proof, &public_inputs, &vk, ZeroKnowledge::No).unwrap());
+}
