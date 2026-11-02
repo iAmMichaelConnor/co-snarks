@@ -81,12 +81,12 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         prover.compute_challenge_polynomial(multivariate_challenge);
         prover.compute_grand_sum_polynomial(net, state)?;
 
-        let libra_grand_sum_commitment_shared = CoUtils::commit::<T, P>(
+        let libra_grand_sum_commitment = CoUtils::commit_and_open::<T, P, N>(
             prover.grand_sum_polynomial.coefficients.as_ref(),
-            commitment_key,
-        );
-        let libra_grand_sum_commitment =
-            T::open_point(libra_grand_sum_commitment_shared, net, state)?;
+            &commitment_key.monomials,
+            net,
+            state,
+        )?;
         transcript.send_point_to_verifier::<P>(
             "Libra:grand_sum_commitment".to_string(),
             libra_grand_sum_commitment.into(),
@@ -95,12 +95,12 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         prover.compute_grand_sum_identity_polynomial(claimed_ipa_eval, state.id());
         prover.compute_batched_quotient();
 
-        let libra_quotient_commitment_shared = CoUtils::commit::<T, P>(
+        let libra_quotient_commitment = CoUtils::commit_and_open::<T, P, N>(
             prover.grand_sum_identity_quotient.coefficients.as_ref(),
-            commitment_key,
-        );
-        let libra_quotient_commitment =
-            T::open_point(libra_quotient_commitment_shared, net, state)?;
+            &commitment_key.monomials,
+            net,
+            state,
+        )?;
         transcript.send_point_to_verifier::<P>(
             "Libra:quotient_commitment".to_string(),
             libra_quotient_commitment.into(),

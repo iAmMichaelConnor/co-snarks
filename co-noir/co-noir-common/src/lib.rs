@@ -70,12 +70,11 @@ pub fn compute_co_opening_proof<
     quotient[0] = T::sub(quotient[0], pair.evaluation);
     // Computes the coefficients for the quotient polynomial q(X) = (p(X) - v) / (X - r) through an FFT
     quotient.factor_roots(&pair.challenge);
-    let quotient_commitment = CoUtils::commit::<T, P>(&quotient.coefficients, crs);
     // AZTEC TODO(#479): for now we compute the KZG commitment directly to unify the KZG and IPA interfaces but in the
     // future we might need to adjust this to use the incoming alternative to work queue (i.e. variation of
     // pthreads) or even the work queue itself
-
-    let quotient_commitment = T::open_point(quotient_commitment, net, state)?;
+    let quotient_commitment =
+        CoUtils::commit_and_open::<T, P, N>(&quotient.coefficients, &crs.monomials, net, state)?;
     transcript.send_point_to_verifier::<P>("KZG:W".to_string(), quotient_commitment.into());
 
     Ok(())
@@ -97,6 +96,28 @@ impl CoUtils {
     ) -> T::PointShare {
         let len = poly.len();
         T::msm_public_points(&crs[..len], poly)
+    }
+
+    /// Commits to a shared polynomial and opens the commitment right away, see
+    /// [`NoirUltraHonkProver::commit_and_open`].
+    pub fn commit_and_open<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        poly: &[T::ArithmeticShare],
+        crs: &[P::Affine],
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<P> {
+        T::commit_and_open(&crs[..poly.len()], poly, net, state)
+    }
+
+    /// Commits to shared polynomials and opens the commitments right away in one round, see
+    /// [`NoirUltraHonkProver::commit_and_open_many`].
+    pub fn commit_and_open_many<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
+        polys: &[&[T::ArithmeticShare]],
+        crs: &[P::Affine],
+        net: &N,
+        state: &mut T::State,
+    ) -> eyre::Result<Vec<P>> {
+        T::commit_and_open_many(crs, polys, net, state)
     }
 
     pub fn batch_invert<T: NoirUltraHonkProver<P>, P: CurveGroup, N: Network>(
@@ -327,7 +348,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod round_tests {
+pub(crate) mod round_tests {
     use crate::{CoUtils, mpc::NoirUltraHonkProver, mpc::rep3::Rep3UltraHonkDriver};
     use ark_bn254::{Fr, G1Projective};
     use ark_ff::{One, UniformRand};
@@ -340,14 +361,22 @@ mod round_tests {
     type Share = <Driver as NoirUltraHonkProver<G1Projective>>::ArithmeticShare;
 
     /// Counts the messages a party sends and records the largest one.
-    struct CountingNetwork {
+    pub(crate) struct CountingNetwork {
         inner: LocalNetwork,
         sent: AtomicUsize,
         max_frame: AtomicUsize,
     }
 
     impl CountingNetwork {
-        fn sent(&self) -> usize {
+        pub(crate) fn new(inner: LocalNetwork) -> Self {
+            Self {
+                inner,
+                sent: AtomicUsize::new(0),
+                max_frame: AtomicUsize::new(0),
+            }
+        }
+
+        pub(crate) fn sent(&self) -> usize {
             self.sent.load(Ordering::SeqCst)
         }
     }
@@ -383,11 +412,7 @@ mod round_tests {
             .zip([s0, s1, s2])
             .map(|(inner, shares)| {
                 std::thread::spawn(move || {
-                    let net = CountingNetwork {
-                        inner,
-                        sent: AtomicUsize::new(0),
-                        max_frame: AtomicUsize::new(0),
-                    };
+                    let net = CountingNetwork::new(inner);
                     let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
                     let mut sent = [0; 5];
 
@@ -481,11 +506,7 @@ mod round_tests {
             .zip(a_shares.into_iter().zip(b_shares))
             .map(|(inner, (a, b))| {
                 std::thread::spawn(move || {
-                    let net = CountingNetwork {
-                        inner,
-                        sent: AtomicUsize::new(0),
-                        max_frame: AtomicUsize::new(0),
-                    };
+                    let net = CountingNetwork::new(inner);
                     let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
                     let before = net.sent();
                     let c = CoUtils::mul_many_bounded::<Driver, G1Projective, _>(

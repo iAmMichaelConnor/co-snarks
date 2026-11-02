@@ -154,6 +154,15 @@ pub fn open_half_point<C: CurveGroup, N: Network>(a: C, net: &N) -> eyre::Result
     Ok(a + b + c)
 }
 
+/// Open many points given as additive summands (one per party), in one round
+pub fn open_half_point_many<C: CurveGroup, N: Network>(a: &[C], net: &N) -> eyre::Result<Vec<C>> {
+    let (b, c) = net.broadcast_many(a)?;
+    if b.len() != a.len() || c.len() != a.len() {
+        eyre::bail!("Invalid number of points received");
+    }
+    Ok(izip!(a, b, c).map(|(a, b, c)| *a + b + c).collect_vec())
+}
+
 /// Open two shared points (potentially on different curves) in a single communication round
 pub fn open_two_half_points<C1: CurveGroup, C2: CurveGroup, N: Network>(
     a: C1,
