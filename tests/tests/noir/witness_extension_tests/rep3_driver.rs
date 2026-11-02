@@ -1,7 +1,8 @@
 //! Driver-level tests that run single `Rep3AcvmSolver` operations on three parties and compare
 //! the reconstructed results with the plain driver.
 
-use ark_bn254::Fr;
+use ark_bn254::{Fq, Fr};
+use ark_ff::{Field, PrimeField, UniformRand, Zero};
 use co_acvm::{mpc::NoirWitnessExtensionProtocol, PlainAcvmSolver, Rep3AcvmSolver, Rep3AcvmType};
 use itertools::izip;
 use mpc_core::protocols::rep3::{
@@ -16,14 +17,14 @@ type Rep3Driver<'a> = Rep3AcvmSolver<'a, Fr, LocalNetwork>;
 
 /// An operand of a driver test: either public to all parties or secret-shared.
 #[derive(Clone, Copy, Debug)]
-enum Input {
-    Public(Fr),
-    Shared(Fr),
+enum Input<F> {
+    Public(F),
+    Shared(F),
 }
 
-impl Input {
+impl<F: PrimeField> Input<F> {
     /// Splits the input into one `Rep3AcvmType` per party.
-    fn to_parties(self) -> [Rep3AcvmType<Fr>; 3] {
+    fn to_parties(self) -> [Rep3AcvmType<F>; 3] {
         match self {
             Input::Public(x) => [x.into(), x.into(), x.into()],
             Input::Shared(x) => share_field_element(x, &mut thread_rng()).map(Rep3AcvmType::from),
@@ -32,14 +33,14 @@ impl Input {
 }
 
 /// Opens the three parties' outputs. Public outputs must agree.
-fn open(values: [Rep3AcvmType<Fr>; 3]) -> Fr {
+fn open<F: PrimeField>(values: [Rep3AcvmType<F>; 3]) -> F {
     match values {
         [Rep3AcvmType::Public(a), Rep3AcvmType::Public(b), Rep3AcvmType::Public(c)] => {
             assert!(a == b && b == c, "public outputs differ between parties");
             a
         }
         [Rep3AcvmType::Shared(a), Rep3AcvmType::Shared(b), Rep3AcvmType::Shared(c)] => {
-            combine_field_element::<Fr>(a, b, c)
+            combine_field_element(a, b, c)
         }
         _ => panic!("parties disagree on whether the output is shared"),
     }
@@ -72,7 +73,7 @@ where
 }
 
 /// All four public/shared combinations of the operands `a` and `b`.
-fn binary_cases(a: Fr, b: Fr) -> [(Input, Input); 4] {
+fn binary_cases(a: Fr, b: Fr) -> [(Input<Fr>, Input<Fr>); 4] {
     [
         (Input::Public(a), Input::Public(b)),
         (Input::Public(a), Input::Shared(b)),
@@ -179,4 +180,90 @@ fn rep3_and_plain_slice_return_lo_then_hi() {
     let [p0, p1, p2] = &outputs;
     assert_eq!(open_slices([&p0.0, &p1.0, &p2.0]), expected);
     assert_eq!(open_slices([&p0.1, &p1.1, &p2.1]), expected);
+}
+
+type Bn254G1 = ark_bn254::G1Projective;
+
+type NonNativeOp = fn(&mut Rep3Driver<'_>, Vec<Rep3AcvmType<Fq>>) -> eyre::Result<Rep3AcvmType<Fq>>;
+
+/// Runs `op` on non-native (BN254 base field) operands, each shared or public, and opens the
+/// result.
+fn rep3_other(inputs: &[Input<Fq>], op: NonNativeOp) -> eyre::Result<Fq> {
+    let mut per_party: [Vec<_>; 3] = Default::default();
+    for input in inputs {
+        for (party, value) in per_party.iter_mut().zip(input.to_parties()) {
+            party.push(value);
+        }
+    }
+    let [o0, o1, o2] = run_rep3(per_party, op);
+    Ok(open([o0?, o1?, o2?]))
+}
+
+#[test]
+fn rep3_non_native_inversion_of_secret_zero_returns_zero() {
+    let mut rng = thread_rng();
+    let x = Fq::rand(&mut rng);
+    let n = Fq::rand(&mut rng);
+    let inverse = |driver: &mut Rep3Driver<'_>, mut x: Vec<_>| {
+        driver.inverse_other_acvm_type::<Bn254G1>(x.remove(0))
+    };
+    let divide = |driver: &mut Rep3Driver<'_>, mut x: Vec<_>| {
+        let lhs = x.remove(0);
+        driver.div_unchecked_other_acvm_types::<Bn254G1>(lhs, x.remove(0))
+    };
+
+    assert_eq!(
+        rep3_other(&[Input::Shared(x)], inverse).unwrap(),
+        x.inverse().unwrap()
+    );
+    assert_eq!(
+        rep3_other(&[Input::Public(x)], inverse).unwrap(),
+        x.inverse().unwrap()
+    );
+    // A secret zero gives zero; an error would reveal that the secret is zero.
+    assert_eq!(
+        rep3_other(&[Input::Shared(Fq::zero())], inverse).unwrap(),
+        Fq::zero()
+    );
+    // A public zero is an error, as in the plain driver.
+    assert!(rep3_other(&[Input::Public(Fq::zero())], inverse).is_err());
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    assert!(plain
+        .inverse_other_acvm_type::<Bn254G1>(Fq::zero())
+        .is_err());
+
+    for numerator in [Input::Public(n), Input::Shared(n)] {
+        let quotient = rep3_other(&[numerator, Input::Shared(x)], divide).unwrap();
+        assert_eq!(quotient, n / x);
+        let quotient = rep3_other(&[numerator, Input::Shared(Fq::zero())], divide).unwrap();
+        assert_eq!(quotient, Fq::zero());
+    }
+    assert!(rep3_other(&[Input::Shared(n), Input::Public(Fq::zero())], divide).is_err());
+    assert!(plain
+        .div_unchecked_other_acvm_types::<Bn254G1>(n, Fq::zero())
+        .is_err());
+}
+
+#[test]
+fn rep3_inverse_of_public_zero_limbs_matches_plain() {
+    let mut plain = PlainAcvmSolver::<Fr>::new();
+    let x = Fq::rand(&mut thread_rng());
+    for value in [Fq::zero(), x] {
+        let limbs = plain
+            .other_acvm_type_to_acvm_type_limbs::<4, 68, Bn254G1>(&value)
+            .unwrap();
+        let expected = plain.inverse_acvm_type_limbs::<Bn254G1>(&limbs).unwrap();
+        let outputs = run_rep3([limbs; 3], |driver, limbs| {
+            driver
+                .inverse_acvm_type_limbs::<Bn254G1>(&limbs.map(Rep3AcvmType::from))
+                .unwrap()
+        });
+        for (i, expected) in expected.into_iter().enumerate() {
+            let [o0, o1, o2] = &outputs;
+            assert_eq!(
+                open([o0[i].clone(), o1[i].clone(), o2[i].clone()]),
+                expected
+            );
+        }
+    }
 }

@@ -1212,7 +1212,15 @@ impl<F: PrimeField> BigField<F> {
         let mut diff = self.sub(other, builder, driver)?;
         let diff_native = diff.get_value_fq(builder, driver)?;
 
-        let inverse_native = driver.inverse_other_acvm_type(diff_native)?;
+        // The inverse witness is 0 if the values are equal (as in barretenberg). Replace a zero
+        // difference by 1 before inverting, so that equal values neither fail the inversion nor
+        // (in MPC) reveal that they are equal.
+        let denominator = driver.cmux_other_acvm_type(
+            is_equal_raw_acvm_other.clone(),
+            T::OtherAcvmType::<P>::from(P::BaseField::one()),
+            diff_native,
+        )?;
+        let inverse_native = driver.inverse_other_acvm_type(denominator)?;
         let inverse_native = driver.cmux_other_acvm_type(
             is_equal_raw_acvm_other,
             T::OtherAcvmType::<P>::default(),
@@ -3915,5 +3923,36 @@ mod tests {
             expected,
             c_bf.get_value_fq(&mut builder, &mut driver).unwrap()
         );
+    }
+
+    #[test]
+    fn test_equals_bigfield() {
+        let mut rng = thread_rng();
+        let mut builder =
+            GenericUltraCircuitBuilder::<Bn254G1, PlainAcvmSolver<Fr>>::new_minimal(0);
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+
+        let a = Fq::rand(&mut rng);
+        let b = Fq::rand(&mut rng);
+        let mut a_wit =
+            BigField::from_witness_other_acvm_type(&a, &mut driver, &mut builder).unwrap();
+        let mut a_wit2 =
+            BigField::from_witness_other_acvm_type(&a, &mut driver, &mut builder).unwrap();
+        let mut b_wit =
+            BigField::from_witness_other_acvm_type(&b, &mut driver, &mut builder).unwrap();
+        let mut a_const = BigField::from_constant(&a.into_bigint().into());
+
+        for (lhs, rhs, expected) in [
+            (&mut a_wit.clone(), &mut a_wit2, true),
+            (&mut a_wit.clone(), &mut a_const, true),
+            (&mut a_wit, &mut b_wit, false),
+        ] {
+            let is_equal = lhs.equals(rhs, &mut builder, &mut driver).unwrap();
+            assert_eq!(is_equal.get_value(&mut driver), Fr::from(expected));
+        }
+        assert!(crate::types::field_ct::tests::prove_and_verify(
+            builder,
+            &mut driver
+        ));
     }
 }
