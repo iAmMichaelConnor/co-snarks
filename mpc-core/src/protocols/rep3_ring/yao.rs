@@ -231,6 +231,50 @@ pub fn input_ring_id2<T: IntRing2k, N: Network>(
     input_ring_id2_many(x, delta, 1, net, state)
 }
 
+impl<T: IntRing2k> rep3::yao::JointInputArithmetic for Rep3RingShare<T> {
+    fn bit_len() -> usize {
+        T::K
+    }
+
+    fn added_bits(&self) -> Vec<u16> {
+        GCUtils::ring_to_bits_as_u16(self.a + self.b)
+    }
+
+    fn first_bits(&self) -> Vec<u16> {
+        GCUtils::ring_to_bits_as_u16(self.a)
+    }
+}
+
+/// [`joint_input_arithmetic_added_many`] (or its field version) followed by
+/// [`input_ring_id2_many`], in one round (see
+/// [`rep3::yao::joint_input_arithmetic_added_and_id2_bits_many`]).
+pub(crate) fn joint_input_arithmetic_added_and_ring_id2_many<
+    S: rep3::yao::JointInputArithmetic,
+    T: IntRing2k,
+    N: Network,
+>(
+    inputs: &[S],
+    x: Option<Vec<RingElement<T>>>,
+    delta: Option<WireMod2>,
+    n_inputs: usize,
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<([BinaryBundle<WireMod2>; 2], BinaryBundle<WireMod2>)> {
+    let bits = x.map(|x| {
+        x.into_iter()
+            .flat_map(GCUtils::ring_to_bits_as_u16)
+            .collect()
+    });
+    rep3::yao::joint_input_arithmetic_added_and_id2_bits_many(
+        inputs,
+        bits,
+        n_inputs * T::K,
+        delta,
+        net,
+        state,
+    )
+}
+
 /// Transforms an binary shared input x = (x_1, x_2, x_3) into two yao shares x_1^Y, (x_2 xor x_3)^Y. The used delta is an input to the function to allow for the same delta to be used for multiple conversions.
 pub fn joint_input_binary_xored<T: IntRing2k, N: Network>(
     x: &Rep3RingShare<T>,
@@ -387,8 +431,6 @@ where
     let num_inputs = inputs.len();
     let delta = state.rngs.generate_random_garbler_delta(state.id);
 
-    let [x01, x2] = joint_input_arithmetic_added_many(inputs, delta, net, state)?;
-
     let mut res = vec![Rep3PrimeFieldShare::zero_share(); num_inputs];
 
     match state.id {
@@ -398,8 +440,10 @@ where
                 res.b = (k3.0 + k3.1 + k3.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = rep3::yao::input_field_id2_many::<F, _>(None, None, num_inputs, net, state)?;
+            let ([x01, x2], x23) =
+                rep3::yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>(
+                    inputs, None, delta, num_inputs, net, state,
+                )?;
 
             let mut evaluator = Rep3Evaluator::new(net);
             evaluator.receive_circuit()?;
@@ -419,8 +463,10 @@ where
                 res.a = (k2.0 + k2.1 + k2.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = rep3::yao::input_field_id2_many::<F, _>(None, None, num_inputs, net, state)?;
+            let ([x01, x2], x23) =
+                rep3::yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>(
+                    inputs, None, delta, num_inputs, net, state,
+                )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
@@ -447,8 +493,14 @@ where
                 res.b = k2_comp.neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = rep3::yao::input_field_id2_many(Some(x23), delta, num_inputs, net, state)?;
+            let ([x01, x2], x23) = rep3::yao::joint_input_arithmetic_added_and_field_id2_many(
+                inputs,
+                Some(x23),
+                delta,
+                num_inputs,
+                net,
+                state,
+            )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
@@ -477,8 +529,6 @@ where
     let num_inputs = inputs.len();
     let delta = state.rngs.generate_random_garbler_delta(state.id);
 
-    let [x01, x2] = rep3::yao::joint_input_arithmetic_added_many(inputs, delta, net, state)?;
-
     let mut res = vec![Rep3RingShare::zero_share(); num_inputs];
 
     match state.id {
@@ -491,8 +541,9 @@ where
                 res.b = (k3.0 + k3.1 + k3.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many::<T, _>(None, None, num_inputs, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many::<_, T, _>(
+                inputs, None, delta, num_inputs, net, state,
+            )?;
 
             let mut evaluator = Rep3Evaluator::new(net);
             evaluator.receive_circuit()?;
@@ -515,8 +566,9 @@ where
                 res.a = (k2.0 + k2.1 + k2.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many::<T, _>(None, None, num_inputs, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many::<_, T, _>(
+                inputs, None, delta, num_inputs, net, state,
+            )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
@@ -549,8 +601,14 @@ where
                 res.b = k2_comp.neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many(Some(x23), delta, num_inputs, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many(
+                inputs,
+                Some(x23),
+                delta,
+                num_inputs,
+                net,
+                state,
+            )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
@@ -577,8 +635,6 @@ macro_rules! decompose_circuit_compose_blueprint {
             .rngs
             .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
-
         let mut res = vec![Rep3RingShare::zero_share(); $output_size];
 
         match $state.id {
@@ -588,8 +644,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.b = (k3.0 + k3.1 + k3.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_ring_id2_many::<$t, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_ring_id2_many::<_, $t, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut evaluator = rep3::yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
@@ -608,8 +663,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.a = (k2.0 + k2.1 + k2.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_ring_id2_many::<$t, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_ring_id2_many::<_, $t, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                     rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -635,8 +689,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.b = k2_comp.neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_ring_id2_many(Some(x23), delta, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_ring_id2_many($inputs, Some(x23), delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                    rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -663,8 +716,6 @@ macro_rules! decompose_circuit_compose_to_fields_blueprint {
             .rngs
             .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
-
         let mut res = vec![Rep3PrimeFieldShare::zero_share(); $output_size];
 
         match $state.id {
@@ -674,8 +725,7 @@ macro_rules! decompose_circuit_compose_to_fields_blueprint {
                     res.b = (k3.0 + k3.1 + k3.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut evaluator = rep3::yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
@@ -694,8 +744,7 @@ macro_rules! decompose_circuit_compose_to_fields_blueprint {
                     res.a = (k2.0 + k2.1 + k2.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                     rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -721,8 +770,7 @@ macro_rules! decompose_circuit_compose_to_fields_blueprint {
                     res.b = k2_comp.neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_field_id2_many(Some(x23), delta, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_field_id2_many($inputs, Some(x23), delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                    rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -749,8 +797,6 @@ macro_rules! decompose_circuit_compose_to_two_fields_blueprint {
             .rngs
             .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
-
         let mut res = vec![Rep3PrimeFieldShare::<F>::zero_share(); $output_size * $num_inputs];
         let mut res_other= vec![Rep3PrimeFieldShare::<K>::zero_share(); $output_size_other * $num_inputs];
 
@@ -766,8 +812,7 @@ macro_rules! decompose_circuit_compose_to_two_fields_blueprint {
                 }
 
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_two_field_id2_many::<F, K, _>(None, None, None, $output_size, $output_size_other, $num_inputs, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_two_field_id2_many::<_, F, K, _>($inputs, None, None, delta, $output_size, $output_size_other, $num_inputs, $net, $state)?;
 
 
                 let mut evaluator = rep3::yao::evaluator::Rep3Evaluator::new($net);
@@ -797,8 +842,7 @@ macro_rules! decompose_circuit_compose_to_two_fields_blueprint {
                     res.a = (k2.0 + k2.1 + k2.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_two_field_id2_many::<F, K, _>(None, None, None, $output_size, $output_size_other, $num_inputs, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_two_field_id2_many::<_, F, K, _>($inputs, None, None, delta, $output_size, $output_size_other, $num_inputs, $net, $state)?;
 
                 let mut garbler =
                     rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -841,8 +885,7 @@ macro_rules! decompose_circuit_compose_to_two_fields_blueprint {
                 }
 
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = crate::protocols::rep3::yao::input_two_field_id2_many(Some(x23), Some(x23_other), delta, $output_size, $output_size_other, $num_inputs, $net, $state)?;
+                let ([x01, x2], x23) = crate::protocols::rep3::yao::joint_input_arithmetic_added_and_two_field_id2_many($inputs, Some(x23), Some(x23_other), delta, $output_size, $output_size_other, $num_inputs, $net, $state)?;
 
                 let mut garbler =
                    rep3::yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -1213,8 +1256,6 @@ where
     let total_output_elements = num_decomps_per_field * num_inputs;
     let delta = state.rngs.generate_random_garbler_delta(state.id);
 
-    let [x01, x2] = rep3::yao::joint_input_arithmetic_added_many(inputs, delta, net, state)?;
-
     let mut res = vec![Rep3RingShare::zero_share(); total_output_elements];
 
     match state.id {
@@ -1227,8 +1268,14 @@ where
                 res.b = (k3.0 + k3.1 + k3.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many::<T, _>(None, None, total_output_elements, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many::<_, T, _>(
+                inputs,
+                None,
+                delta,
+                total_output_elements,
+                net,
+                state,
+            )?;
 
             let mut evaluator = Rep3Evaluator::new(net);
             evaluator.receive_circuit()?;
@@ -1258,8 +1305,14 @@ where
                 res.a = (k2.0 + k2.1 + k2.2).neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many::<T, _>(None, None, total_output_elements, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many::<_, T, _>(
+                inputs,
+                None,
+                delta,
+                total_output_elements,
+                net,
+                state,
+            )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
@@ -1299,8 +1352,14 @@ where
                 res.b = k2_comp.neg();
             }
 
-            // TODO this can be parallelized with joint_input_arithmetic_added_many
-            let x23 = input_ring_id2_many(Some(x23), delta, total_output_elements, net, state)?;
+            let ([x01, x2], x23) = joint_input_arithmetic_added_and_ring_id2_many(
+                inputs,
+                Some(x23),
+                delta,
+                total_output_elements,
+                net,
+                state,
+            )?;
 
             let mut garbler =
                 Rep3Garbler::new_with_delta(net, state, delta.expect("Delta not provided"));
