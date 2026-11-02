@@ -531,6 +531,46 @@ impl GarbledCircuits {
         Ok(qs)
     }
 
+    /// Binary division by a public value, returning the quotient and the remainder.
+    ///
+    /// The same restoring division as [`Self::bin_div_by_public`], but the accumulator is capped
+    /// at d + 1 bits, where d is the bit length of the divisor: the remainder r is smaller than
+    /// the divisor, so 2r plus the next dividend bit is smaller than 2^(d + 1). The bit that is
+    /// dropped when the accumulator is full is therefore zero. The circuit depends only on the
+    /// public divisor. The quotient has the length of the dividend; the remainder has
+    /// min(d + 1, dividend length) bits.
+    #[expect(clippy::type_complexity)]
+    fn bin_div_rem_by_public<G: FancyBinary + FancyBinaryConstant>(
+        g: &mut G,
+        dividend: &[G::Item],
+        divisor: &[bool],
+    ) -> Result<(Vec<G::Item>, Vec<G::Item>), GcError> {
+        let divisor_bits = divisor
+            .iter()
+            .rposition(|bit| *bit)
+            .map(|index| index + 1)
+            .ok_or_else(|| eyre::eyre!("The public divisor must not be zero"))?;
+        let width = divisor_bits + 1;
+        let mut bounded_divisor = divisor[..divisor_bits].to_vec();
+        bounded_divisor.push(false);
+
+        let mut acc: Vec<G::Item> = Vec::with_capacity(width);
+        let mut qs: Vec<G::Item> = Vec::with_capacity(dividend.len());
+        for x in dividend.iter().rev() {
+            if acc.len() == width {
+                acc.pop();
+            }
+            acc.insert(0, x.clone());
+
+            let (res, cout) = Self::bin_subtraction_partial_by_constant(g, &acc, &bounded_divisor)?;
+
+            acc = Self::bin_multiplex(g, &cout, &acc, &res)?;
+            qs.push(cout);
+        }
+        qs.reverse(); // Switch back to little-endian
+        Ok((qs, acc))
+    }
+
     // From swanky:
     /// Binary division of a public by a shared value
     fn bin_div_by_shared<G: FancyBinary + FancyBinaryConstant>(
@@ -1930,9 +1970,9 @@ impl GarbledCircuits {
             wires_c.len(),
             F::MODULUS_BIT_SIZE as usize * limbs_per_field + K::MODULUS_BIT_SIZE as usize
         );
-        let quotient = Self::bin_div_by_public(g, &dividend, divisor)?;
-        let km = Self::bin_mul_with_public(g, &quotient, divisor)?;
-        let remainder = &Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
+        let (quotient, mut remainder) = Self::bin_div_rem_by_public(g, &dividend, divisor)?;
+        remainder.resize(dividend.len(), g.const_zero()?);
+        let remainder = &remainder;
 
         // The low K::MODULUS_BIT_SIZE bits of the remainder can hold a value in
         // [K::MODULUS, 2^K::MODULUS_BIT_SIZE) (e.g., for a divisor larger than K::MODULUS),
@@ -2030,9 +2070,9 @@ impl GarbledCircuits {
             wires_c.len(),
             F::MODULUS_BIT_SIZE as usize * 2 * num_limbs_per_field
         );
-        let quotient = Self::bin_div_by_public(g, &dividend, divisor)?;
-        let km = Self::bin_mul_with_public(g, &quotient, divisor)?;
-        let remainder = &Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
+        let (quotient, mut remainder) = Self::bin_div_rem_by_public(g, &dividend, divisor)?;
+        remainder.resize(dividend.len(), g.const_zero()?);
+        let remainder = &remainder;
 
         let mut results = Vec::with_capacity(F::MODULUS_BIT_SIZE as usize * 2);
         let mut rands = wires_c.chunks(F::MODULUS_BIT_SIZE as usize);
@@ -4449,6 +4489,10 @@ impl GarbledCircuits {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+#[path = "division_tests.rs"]
+mod division_tests;
 
 #[cfg(test)]
 mod test {
