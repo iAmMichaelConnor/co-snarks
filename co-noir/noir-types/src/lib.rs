@@ -583,8 +583,13 @@ pub fn witness_from_reader(reader: impl io::Read) -> io::Result<Vec<ark_bn254::F
     Ok(witness)
 }
 
-pub fn program_artifact_from_reader(reader: impl io::Read) -> io::Result<ProgramArtifact> {
-    Ok(serde_json::from_reader::<_, ProgramArtifact>(reader)?)
+pub fn program_artifact_from_reader(mut reader: impl io::Read) -> io::Result<ProgramArtifact> {
+    // `serde_json::from_reader` pulls the input one byte at a time, so an unbuffered reader such
+    // as a `File` costs one read syscall per byte. Read the whole artifact first and parse the
+    // slice instead; the result is the same.
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(serde_json::from_slice::<ProgramArtifact>(&bytes)?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -777,5 +782,17 @@ mod tests {
             assert!(HonkProofType::proof_and_public_inputs_from_buffer_field(&bytes, &[]).is_err());
             assert!(HonkProofType::proof_and_public_inputs_from_buffer_field(&[], &bytes).is_err());
         }
+    }
+
+    #[test]
+    fn program_artifact_from_reader_matches_streaming_parse() {
+        let json: &[u8] =
+            include_bytes!("../../co-noir/examples/test_vectors/poseidon/poseidon.json");
+        let buffered = super::program_artifact_from_reader(json).unwrap();
+        let streamed: super::ProgramArtifact = serde_json::from_reader(json).unwrap();
+        assert_eq!(
+            serde_json::to_value(&buffered).unwrap(),
+            serde_json::to_value(&streamed).unwrap()
+        );
     }
 }
