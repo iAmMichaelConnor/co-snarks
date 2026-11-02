@@ -33,3 +33,4 @@ add_plain_acvm_test!("pedersen_commitment");
 add_plain_acvm_test!("blake2s");
 add_plain_acvm_test!("blake3");
 add_plain_acvm_test!("embedded_curve_add");
+add_plain_acvm_test!("embedded_curve_predicate");
