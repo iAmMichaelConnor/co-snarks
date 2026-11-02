@@ -386,10 +386,12 @@ impl<
         num / denom
     }
 
+    /// Appends the two factors (`pub1 * beta + gamma + shared1` and `pub2 * beta + gamma +
+    /// shared2`) of the first `output_len` active rows of a grand-product numerator or
+    /// denominator term to `lhs` and `rhs`.
     #[expect(clippy::too_many_arguments)]
-    fn batched_grand_product_num_denom(
-        net: &N,
-        state: &mut T::State,
+    fn grand_product_num_denom_factors(
+        id: <T::State as MpcState>::PartyID,
         shared1: &Polynomial<T::ArithmeticShare>,
         shared2: &Polynomial<T::ArithmeticShare>,
         pub1: &Polynomial<C::ScalarField>,
@@ -398,7 +400,9 @@ impl<
         gamma: &C::ScalarField,
         output_len: usize,
         active_region_data: &ActiveRegionData,
-    ) -> HonkProofResult<Vec<T::ArithmeticShare>> {
+        lhs: &mut Vec<T::ArithmeticShare>,
+        rhs: &mut Vec<T::ArithmeticShare>,
+    ) {
         debug_assert!(shared1.len() >= output_len);
         debug_assert!(shared2.len() >= output_len);
         debug_assert!(pub1.len() >= output_len);
@@ -407,7 +411,6 @@ impl<
 
         // We drop the last element since it is not needed for the grand product
         // Every row is a local computation, so the rows run on rayon.
-        let id = state.id();
         let (mul1, mul2): (Vec<_>, Vec<_>) = (0..output_len)
             .into_par_iter()
             .map(|i| {
@@ -421,8 +424,8 @@ impl<
                 (m1, m2)
             })
             .unzip();
-
-        Ok(T::mul_many(&mul1, &mul2, net, state)?)
+        lhs.extend(mul1);
+        rhs.extend(mul2);
     }
 
     fn compute_grand_product(&mut self, proving_key: &ProvingKey<T, C>) -> HonkProofResult<()> {
@@ -446,68 +449,91 @@ impl<
         // Step (1)
         // Populate `numerator` and `denominator` with the algebra described by Relation
 
-        // TACEO TODO could batch those 4 as well
-        let denom1 = Self::batched_grand_product_num_denom(
-            self.net,
-            self.state,
-            proving_key.polynomials.witness.w_l(),
-            proving_key.polynomials.witness.w_r(),
-            proving_key.polynomials.precomputed.sigma_1(),
-            proving_key.polynomials.precomputed.sigma_2(),
-            &self.memory.challenges.beta,
-            &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
-        )?;
-        let denom2 = Self::batched_grand_product_num_denom(
-            self.net,
-            self.state,
-            proving_key.polynomials.witness.w_o(),
-            &self.memory.w_4,
-            proving_key.polynomials.precomputed.sigma_3(),
-            proving_key.polynomials.precomputed.sigma_4(),
-            &self.memory.challenges.beta,
-            &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
-        )?;
-        let num1 = Self::batched_grand_product_num_denom(
-            self.net,
-            self.state,
-            proving_key.polynomials.witness.w_l(),
-            proving_key.polynomials.witness.w_r(),
-            proving_key.polynomials.precomputed.id_1(),
-            proving_key.polynomials.precomputed.id_2(),
-            &self.memory.challenges.beta,
-            &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
-        )?;
-        let num2 = Self::batched_grand_product_num_denom(
-            self.net,
-            self.state,
-            proving_key.polynomials.witness.w_o(),
-            &self.memory.w_4,
-            proving_key.polynomials.precomputed.id_3(),
-            proving_key.polynomials.precomputed.id_4(),
-            &self.memory.challenges.beta,
-            &self.memory.challenges.gamma,
-            active_domain_size - 1,
-            &proving_key.active_region_data,
-        )?;
+        // The four factor products (denom1, denom2, num1, num2) are independent, so they are
+        // multiplied in one batch.
+        let output_len = active_domain_size - 1;
+        let id = self.state.id();
+        let witness = &proving_key.polynomials.witness;
+        let precomputed = &proving_key.polynomials.precomputed;
+        let (beta, gamma) = (&self.memory.challenges.beta, &self.memory.challenges.gamma);
+        let mut lhs = Vec::with_capacity(4 * output_len);
+        let mut rhs = Vec::with_capacity(4 * output_len);
+        for (shared1, shared2, pub1, pub2) in [
+            (
+                witness.w_l(),
+                witness.w_r(),
+                precomputed.sigma_1(),
+                precomputed.sigma_2(),
+            ),
+            (
+                witness.w_o(),
+                &self.memory.w_4,
+                precomputed.sigma_3(),
+                precomputed.sigma_4(),
+            ),
+            (
+                witness.w_l(),
+                witness.w_r(),
+                precomputed.id_1(),
+                precomputed.id_2(),
+            ),
+            (
+                witness.w_o(),
+                &self.memory.w_4,
+                precomputed.id_3(),
+                precomputed.id_4(),
+            ),
+        ] {
+            Self::grand_product_num_denom_factors(
+                id,
+                shared1,
+                shared2,
+                pub1,
+                pub2,
+                beta,
+                gamma,
+                output_len,
+                &proving_key.active_region_data,
+                &mut lhs,
+                &mut rhs,
+            );
+        }
+        let mut factors = CoUtils::mul_many_bounded::<T, C, N>(&lhs, &rhs, self.net, self.state)?;
+        let num2 = factors.split_off(3 * output_len);
+        let num1 = factors.split_off(2 * output_len);
+        let denom2 = factors.split_off(output_len);
+        let denom1 = factors;
 
-        // TACEO TODO could batch here as well
-        let numerator = T::mul_many(&num1, &num2, self.net, self.state)?;
-        let denominator = T::mul_many(&denom1, &denom2, self.net, self.state)?;
+        // numerator = num1 * num2 and denominator = denom1 * denom2 share one batch as well.
+        let mut lhs = num1;
+        lhs.extend(denom1);
+        let mut rhs = num2;
+        rhs.extend(denom2);
+        let mut numerator = CoUtils::mul_many_bounded::<T, C, N>(&lhs, &rhs, self.net, self.state)?;
+        let denominator = numerator.split_off(output_len);
 
         // Step (2)
         // Compute the accumulating product of the numerator and denominator terms.
 
-        // TACEO TODO could batch here as well
-        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds
-        let numerator = CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?;
-        let mut denominator =
-            CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &denominator)?;
+        // Do the multiplications of num[i] * num[i-1] and den[i] * den[i-1] in constant rounds.
+        // Both prefix products share the rounds of one batched call, unless the masks of both
+        // (2 * (output_len + 1) values) would exceed a single message in the inversion.
+        let (numerator, mut denominator) =
+            if 2 * (output_len + 1) <= CoUtils::max_mul_many_len::<C::ScalarField>() {
+                let mut products = CoUtils::array_prod_inner_mul_many::<T, C, N>(
+                    self.net,
+                    self.state,
+                    &[numerator, denominator],
+                )?;
+                let denominator = products.pop().expect("two prefix products");
+                let numerator = products.pop().expect("two prefix products");
+                (numerator, denominator)
+            } else {
+                (
+                    CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &numerator)?,
+                    CoUtils::array_prod_mul::<T, C, N>(self.net, self.state, &denominator)?,
+                )
+            };
 
         // invert denominator
         CoUtils::batch_invert::<T, C, N>(&mut denominator, self.net, self.state)?;
@@ -810,7 +836,7 @@ impl<
 mod tests {
     use super::*;
     use ark_bn254::{Fr, G1Projective};
-    use ark_ff::Field;
+    use ark_ff::{Field, UniformRand};
     use ark_serialize::CanonicalDeserialize;
     use bytes::Bytes;
     use co_noir_common::{
@@ -819,7 +845,9 @@ mod tests {
         polynomials::entities::Polynomials,
         transcript::Poseidon2Sponge,
     };
-    use mpc_core::protocols::rep3::{Rep3State, conversion::A2BType, share_field_element};
+    use mpc_core::protocols::rep3::{
+        Rep3State, conversion::A2BType, share_field_element, share_field_elements,
+    };
     use mpc_net::{ConnectionStats, local::LocalNetwork};
     use std::sync::Mutex;
 
@@ -976,6 +1004,128 @@ mod tests {
                 Fr::zero()
             };
             assert_eq!(oink.memory.lookup_inverses[row], expected, "row {row}");
+        }
+    }
+
+    #[test]
+    fn grand_product_batches_independent_multiplications() {
+        const N: usize = 32;
+        const OUTPUT_LEN: usize = N - 2;
+        let mut rng = rand::thread_rng();
+        let wires: [Vec<Fr>; 4] =
+            std::array::from_fn(|_| (0..N).map(|_| Fr::rand(&mut rng)).collect());
+        let sigmas: [Vec<Fr>; 4] =
+            std::array::from_fn(|_| (0..N).map(|_| Fr::rand(&mut rng)).collect());
+        let ids: [Vec<Fr>; 4] =
+            std::array::from_fn(|_| (0..N).map(|_| Fr::rand(&mut rng)).collect());
+        let (beta, gamma) = (Fr::rand(&mut rng), Fr::rand(&mut rng));
+        let shared_wires = wires.clone().map(|w| share_field_elements(&w, &mut rng));
+
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .enumerate()
+            .map(|(id, inner)| {
+                let wires = shared_wires
+                    .clone()
+                    .map(|[s0, s1, s2]| [s0, s1, s2][id].clone());
+                let (sigmas, ids) = (sigmas.clone(), ids.clone());
+                std::thread::spawn(move || {
+                    let net = RecordingNetwork {
+                        inner,
+                        events: Mutex::new(Vec::new()),
+                    };
+                    let sent = |net: &RecordingNetwork| {
+                        net.events
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|(send, _)| *send)
+                            .count()
+                    };
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let mut pk = ProvingKey::<Rep3UltraHonkDriver, G1Projective> {
+                        circuit_size: N as u32,
+                        polynomials: Polynomials::new(N),
+                        final_active_wire_idx: OUTPUT_LEN,
+                        ..Default::default()
+                    };
+                    let [w_l, w_r, w_o, w_4] = wires;
+                    let witness = &mut pk.polynomials.witness;
+                    witness.w_l_mut().coefficients = w_l;
+                    witness.w_r_mut().coefficients = w_r;
+                    witness.w_o_mut().coefficients = w_o;
+                    let precomputed = &mut pk.polynomials.precomputed;
+                    let [s1, s2, s3, s4] = sigmas;
+                    precomputed.sigma_1_mut().coefficients = s1;
+                    precomputed.sigma_2_mut().coefficients = s2;
+                    precomputed.sigma_3_mut().coefficients = s3;
+                    precomputed.sigma_4_mut().coefficients = s4;
+                    let [i1, i2, i3, i4] = ids;
+                    precomputed.id_1_mut().coefficients = i1;
+                    precomputed.id_2_mut().coefficients = i2;
+                    precomputed.id_3_mut().coefficients = i3;
+                    precomputed.id_4_mut().coefficients = i4;
+
+                    // The messages of one multiplication, inversion and opening of the same length.
+                    let x = pk.polynomials.witness.w_l().coefficients[..OUTPUT_LEN].to_vec();
+                    let before = sent(&net);
+                    <Rep3UltraHonkDriver as NoirUltraHonkProver<G1Projective>>::mul_many(
+                        &x, &x, &net, &mut state,
+                    )
+                    .unwrap();
+                    let mul = sent(&net) - before;
+                    let before = sent(&net);
+                    <Rep3UltraHonkDriver as NoirUltraHonkProver<G1Projective>>::inv_many(
+                        &x, &net, &mut state,
+                    )
+                    .unwrap();
+                    let inv = sent(&net) - before;
+                    let before = sent(&net);
+                    <Rep3UltraHonkDriver as NoirUltraHonkProver<G1Projective>>::mul_open_many(
+                        &x, &x, &net, &mut state,
+                    )
+                    .unwrap();
+                    let open = sent(&net) - before;
+
+                    let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(
+                        &net,
+                        &mut state,
+                        ZeroKnowledge::No,
+                    );
+                    oink.memory.w_4 = Polynomial::new(w_4);
+                    oink.memory.challenges.beta = beta;
+                    oink.memory.challenges.gamma = gamma;
+                    let before = sent(&net);
+                    oink.compute_grand_product(&pk).unwrap();
+                    let grand_product = sent(&net) - before;
+                    (
+                        oink.memory.z_perm.coefficients,
+                        [grand_product, mul, inv, open],
+                    )
+                })
+            })
+            .collect();
+        let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        let mut acc = Fr::one();
+        for row in 0..OUTPUT_LEN {
+            let term = |a: &[Vec<Fr>; 4]| {
+                (wires[0][row] + a[0][row] * beta + gamma)
+                    * (wires[1][row] + a[1][row] * beta + gamma)
+                    * (wires[2][row] + a[2][row] * beta + gamma)
+                    * (wires[3][row] + a[3][row] * beta + gamma)
+            };
+            acc *= term(&ids) / term(&sigmas);
+            let z_perm: Fr = results.iter().map(|(z, _)| z[row + 1].a).sum();
+            assert_eq!(z_perm, acc, "wrong grand product at row {}", row + 1);
+        }
+
+        // The factor products, the numerator and denominator products and the multiplication
+        // of both prefix products take one round each, plus the prefix products' inversion and
+        // opening, the inversion of the denominator and the final multiplication.
+        for (_, [grand_product, mul, inv, open]) in &results {
+            assert!(*mul > 0);
+            assert_eq!(*grand_product, 4 * mul + 2 * inv + open);
         }
     }
 }

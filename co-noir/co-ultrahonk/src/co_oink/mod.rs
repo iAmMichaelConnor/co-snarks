@@ -6,7 +6,7 @@ pub mod types;
 pub const CRAND_PAIRS_FACTOR_N: usize = 3;
 // execute_grand_product_computation_round:
 //      compute_grand_product:
-//      4 * batched_grand_product_num_denom: (domain_size - 1)
+//      4 * grand_product_num_denom_factors: (domain_size - 1)
 //      2 * array_prod_mul: (domain_size - 1) * 4 + 2
 //      misc: (domain_size - 1) * 4
 pub const CRAND_PAIRS_FACTOR_DOMAIN_SIZE_MINUS_ONE: usize = 4 + 8 + 4;
