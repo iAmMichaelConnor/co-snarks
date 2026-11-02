@@ -380,6 +380,8 @@ mod tests {
     use super::*;
     use crate::uint::U256;
     use ark_bn254::Fr;
+    use ark_ff::Zero;
+    use itertools::izip;
 
     fn seeds() -> ([u8; crate::SEED_SIZE], [u8; crate::SEED_SIZE]) {
         ([1u8; crate::SEED_SIZE], [2u8; crate::SEED_SIZE])
@@ -404,6 +406,36 @@ mod tests {
         let single_b: U256 = rand_single.random_uint_rng2(64);
         assert_eq!(pair_a, single_a);
         assert_eq!(pair_b, single_b);
+    }
+
+    #[test]
+    fn masking_field_elements_vec_cancel_across_parties() {
+        // Each pairwise stream is shared by two parties, so for every length the three
+        // parties' masks at each index are a sharing of zero.
+        let seeds = [
+            [17; crate::SEED_SIZE],
+            [29; crate::SEED_SIZE],
+            [43; crate::SEED_SIZE],
+        ];
+        let mut parties = [
+            Rep3Rand::new(seeds[0], seeds[2]),
+            Rep3Rand::new(seeds[1], seeds[0]),
+            Rep3Rand::new(seeds[2], seeds[1]),
+        ];
+        for len in [1, 7, 1024, 0, 13] {
+            let masks = parties
+                .each_mut()
+                .map(|rng| rng.masking_field_elements_vec::<Fr>(len));
+            let [m0, m1, m2] = masks;
+            assert!(m0.len() == len && m1.len() == len && m2.len() == len);
+            for (a, b, c) in izip!(m0, m1, m2) {
+                assert!((a + b + c).is_zero());
+            }
+            let [a, b, c] = parties
+                .each_mut()
+                .map(|rng| rng.masking_field_element::<Fr>());
+            assert!((a + b + c).is_zero());
+        }
     }
 
     /// The rngs of the three parties with the key layout of `Rep3State::setup_bitcomp`.

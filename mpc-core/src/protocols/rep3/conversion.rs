@@ -990,8 +990,16 @@ where
     let mut x2_x = Vec::with_capacity(input_len);
     let mut x2_y = Vec::with_capacity(input_len);
 
-    let r_x = vec![state.rngs.rand.masking_field_element::<C::BaseField>(); input_len];
-    let r_y = vec![state.rngs.rand.masking_field_element::<C::BaseField>(); input_len];
+    // Each coordinate needs its own mask: with one mask for the whole batch, the difference
+    // of two resharing messages is the difference of the unmasked coordinates.
+    let r_x = state
+        .rngs
+        .rand
+        .masking_field_elements_vec::<C::BaseField>(input_len);
+    let r_y = state
+        .rngs
+        .rand
+        .masking_field_elements_vec::<C::BaseField>(input_len);
 
     for (x, r_x, r_y) in izip!(x.iter(), r_x.iter(), r_y.iter()) {
         match state.id {
@@ -1369,4 +1377,53 @@ where
     }
 
     Ok(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocols::rep3::share_curve_points;
+    use ark_bn254::{Fr, G1Affine, G1Projective};
+    use ark_ec::PrimeGroup;
+    use mpc_net::local::LocalNetwork;
+
+    /// Party 2 receives party 1's masked coordinates during the resharing. If two points of
+    /// a batch share a mask, knowing one of them (e.g. a public point) reveals the other.
+    #[test]
+    fn point_share_to_fieldshares_masks_each_point() {
+        let public = G1Projective::generator();
+        let secret = public * Fr::from(73u64);
+        let shares = share_curve_points(&[public, secret], &mut rand::thread_rng());
+        let workers: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                std::thread::spawn(move || {
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let (x01_x, x01_y, _, _) =
+                        point_share_to_fieldshares_pre_many(&shares, &net, &mut state).unwrap();
+                    if state.id != PartyID::ID2 {
+                        return None;
+                    }
+                    // Party 2's b shares of x01 are the masked coordinates it received from
+                    // party 1, i.e. those of the sum of the other two components. For the
+                    // public point party 2 knows that sum.
+                    let (known_x, known_y) = (public - shares[0].a).into_affine().xy().unwrap();
+                    let guess_x = x01_x[1].b - x01_x[0].b + known_x;
+                    let guess_y = x01_y[1].b - x01_y[0].b + known_y;
+                    Some((guess_x, guess_y, shares[1].a))
+                })
+            })
+            .collect();
+        let (guess_x, guess_y, own_component) = workers
+            .into_iter()
+            .filter_map(|worker| worker.join().unwrap())
+            .next()
+            .unwrap();
+        let guess = G1Affine::new_unchecked(guess_x, guess_y).into_group() + own_component;
+        assert_ne!(
+            guess, secret,
+            "party 2 recovered the secret point from its messages and one public point"
+        );
+    }
 }
