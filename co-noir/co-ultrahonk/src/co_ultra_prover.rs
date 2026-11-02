@@ -2,6 +2,7 @@ use crate::co_decider::relations::CRAND_PAIRS_FACTOR;
 use crate::co_oink::{
     CRAND_PAIRS_CONST, CRAND_PAIRS_FACTOR_DOMAIN_SIZE_MINUS_ONE, CRAND_PAIRS_FACTOR_N,
 };
+use crate::zk_masking::ZkMasking;
 use crate::{
     CONST_PROOF_SIZE_LOG_N, co_decider::co_decider_prover::CoDecider,
     co_decider::types::ProverMemory, co_oink::co_oink_prover::CoOink,
@@ -61,16 +62,36 @@ impl<
     pub fn prove_inner<N: Network>(
         net: &N,
         state: &mut T::State,
+        proving_key: ProvingKey<T, C>,
+        crs: &ProverCrs<C>,
+        has_zk: ZeroKnowledge,
+        verifying_key: &VerifyingKeyBarretenberg<C>,
+    ) -> HonkProofResult<HonkProof<H::DataType>> {
+        Self::prove_with_masking(
+            net,
+            state,
+            proving_key,
+            crs,
+            has_zk,
+            verifying_key,
+            ZkMasking::Random,
+        )
+    }
+
+    fn prove_with_masking<N: Network>(
+        net: &N,
+        state: &mut T::State,
         mut proving_key: ProvingKey<T, C>,
         crs: &ProverCrs<C>,
         has_zk: ZeroKnowledge,
         verifying_key: &VerifyingKeyBarretenberg<C>,
+        masking: ZkMasking,
     ) -> HonkProofResult<HonkProof<H::DataType>> {
         tracing::trace!("CoUltraHonk prove");
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
 
-        let oink = CoOink::new(net, state, has_zk);
+        let oink = CoOink::new(net, state, has_zk, masking.clone());
         let oink_result = oink.prove(&mut proving_key, &mut transcript, crs, verifying_key)?;
 
         let circuit_size = proving_key.circuit_size;
@@ -85,7 +106,7 @@ impl<
             ProverMemory::from_memory_and_polynomials(oink_result, proving_key.polynomials);
         memory.gate_challenges = Self::generate_gate_challenges(&mut transcript, virtual_log_n);
 
-        let decider = CoDecider::new(net, state, memory, has_zk);
+        let decider = CoDecider::new(net, state, memory, has_zk, masking);
         decider.prove(circuit_size, crs, transcript, virtual_log_n)
     }
 }
@@ -110,6 +131,32 @@ where
         let (proof, public_inputs) =
             proof.separate_proof_and_public_inputs(num_public_inputs as usize);
         Ok((proof, public_inputs))
+    }
+
+    /// Like [`Self::prove`] with ZK, but the masking values are derived from `seed`, so the proof
+    /// is a deterministic function of the witness and `seed`. **The proof is not
+    /// zero-knowledge.** For tests only, e.g. to compare proofs of different MPC protocols.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[expect(clippy::type_complexity)]
+    pub fn prove_with_seeded_zk_masking<N: Network>(
+        net: &N,
+        proving_key: ProvingKey<Rep3UltraHonkDriver, C>,
+        crs: &ProverCrs<C>,
+        verifying_key: &VerifyingKeyBarretenberg<C>,
+        seed: [u8; 32],
+    ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        let mut state = Rep3State::new(net, A2BType::default())?;
+        let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
+        let proof = Self::prove_with_masking(
+            net,
+            &mut state,
+            proving_key,
+            crs,
+            ZeroKnowledge::Yes,
+            verifying_key,
+            ZkMasking::Seeded(seed),
+        )?;
+        Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
     }
 }
 
@@ -160,6 +207,30 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
             crs,
             has_zk,
             verifying_key,
+        )?;
+        Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
+    }
+
+    /// Like [`Self::prove`] with ZK, but the masking values are derived from `seed`, so the proof
+    /// is a deterministic function of the witness and `seed`. **The proof is not
+    /// zero-knowledge.** For tests only, e.g. to compare proofs of different MPC protocols.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[expect(clippy::type_complexity)]
+    pub fn prove_with_seeded_zk_masking(
+        proving_key: ProvingKey<PlainUltraHonkDriver, C>,
+        crs: &ProverCrs<C>,
+        verifying_key: &VerifyingKeyBarretenberg<C>,
+        seed: [u8; 32],
+    ) -> eyre::Result<(HonkProof<H::DataType>, Vec<H::DataType>)> {
+        let num_public_inputs = proving_key.num_public_inputs - PAIRING_POINT_ACCUMULATOR_SIZE;
+        let proof = Self::prove_with_masking(
+            &(),
+            &mut Default::default(),
+            proving_key,
+            crs,
+            ZeroKnowledge::Yes,
+            verifying_key,
+            ZkMasking::Seeded(seed),
         )?;
         Ok(proof.separate_proof_and_public_inputs(num_public_inputs as usize))
     }

@@ -3,6 +3,7 @@ use super::{
     small_subgroup_ipa::SharedSmallSubgroupIPAProver,
     types::ProverMemory,
 };
+use crate::zk_masking::ZkMasking;
 use co_noir_common::{
     crs::ProverCrs,
     honk_curve::HonkCurve,
@@ -27,6 +28,7 @@ pub(crate) struct CoDecider<
     pub(crate) state: &'a mut T::State,
     pub(super) memory: ProverMemory<T, P>,
     pub(crate) has_zk: ZeroKnowledge,
+    masking: ZkMasking,
     phantom_data: PhantomData<(P, H)>,
 }
 
@@ -43,12 +45,14 @@ impl<
         state: &'a mut T::State,
         memory: ProverMemory<T, P>,
         has_zk: ZeroKnowledge,
+        masking: ZkMasking,
     ) -> Self {
         Self {
             net,
             state,
             memory,
             has_zk,
+            masking,
             phantom_data: PhantomData,
         }
     }
@@ -77,6 +81,7 @@ impl<
                     virtual_log_n,
                     transcript,
                     commitment_key,
+                    &self.masking,
                     self.net,
                     self.state,
                 )?;
@@ -134,6 +139,7 @@ impl<
                     .expect("We have ZK"),
                 transcript,
                 crs,
+                &self.masking,
             )?;
             let witness_polynomials = small_subgroup_ipa_prover.into_witness_polynomials();
             let prover_opening_claim = self.shplemini_prove(

@@ -1458,6 +1458,7 @@ dependencies = [
  "noir-types",
  "num-bigint 0.4.8",
  "rand 0.8.8",
+ "rand_chacha 0.3.1",
  "rayon",
  "tracing",
  "ultrahonk",

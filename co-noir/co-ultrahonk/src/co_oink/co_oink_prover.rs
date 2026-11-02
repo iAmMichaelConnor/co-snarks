@@ -18,6 +18,7 @@
 // clang-format on
 
 use super::types::{Challenges, ProverMemory};
+use crate::zk_masking::ZkMasking;
 use ark_ff::{One, Zero};
 use co_noir_common::{
     CoUtils,
@@ -59,6 +60,7 @@ pub(crate) struct CoOink<
     phantom_data: PhantomData<C>,
     phantom_hasher: PhantomData<H>,
     has_zk: ZeroKnowledge,
+    masking: ZkMasking,
 }
 
 impl<
@@ -69,7 +71,12 @@ impl<
     N: Network,
 > CoOink<'a, T, C, H, N>
 {
-    pub(crate) fn new(net: &'a N, state: &'a mut T::State, has_zk: ZeroKnowledge) -> Self {
+    pub(crate) fn new(
+        net: &'a N,
+        state: &'a mut T::State,
+        has_zk: ZeroKnowledge,
+        masking: ZkMasking,
+    ) -> Self {
         Self {
             net,
             state,
@@ -77,11 +84,13 @@ impl<
             phantom_data: PhantomData,
             phantom_hasher: PhantomData,
             has_zk,
+            masking,
         }
     }
 
     fn mask_polynomial(
         &mut self,
+        label: &str,
         polynomial: &mut Polynomial<T::ArithmeticShare>,
     ) -> HonkProofResult<()> {
         tracing::trace!("mask polynomial");
@@ -92,9 +101,14 @@ impl<
             virtual_size >= NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize,
             "Insufficient space for masking"
         );
-        for i in (NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize).rev() {
-            polynomial.coefficients[i] = T::rand(self.net, self.state)?;
-        }
+        let values = self.masking.values::<T, C, N>(
+            &format!("oink/mask/{label}"),
+            NUM_MASKED_ROWS as usize,
+            self.net,
+            self.state,
+        )?;
+        polynomial.coefficients[NUM_ZERO_ROWS..NUM_ZERO_ROWS + NUM_MASKED_ROWS as usize]
+            .clone_from_slice(&values);
 
         Ok(())
     }
@@ -634,9 +648,9 @@ impl<
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.w_l_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_r_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.w_o_mut())?;
+            self.mask_polynomial("w_l", proving_key.polynomials.witness.w_l_mut())?;
+            self.mask_polynomial("w_r", proving_key.polynomials.witness.w_r_mut())?;
+            self.mask_polynomial("w_o", proving_key.polynomials.witness.w_o_mut())?;
         };
 
         let witness = &proving_key.polynomials.witness;
@@ -679,10 +693,12 @@ impl<
             return Err(HonkProofError::CrsTooSmall);
         }
         let support = gemini_masking_support(polynomial_size);
-        let values = support
-            .iter()
-            .map(|_| T::rand(self.net, self.state))
-            .collect::<Result<Vec<_>, _>>()?;
+        let values = self.masking.values::<T, C, N>(
+            "oink/gemini_masking_poly",
+            support.len(),
+            self.net,
+            self.state,
+        )?;
         let points: Vec<_> = support.iter().map(|&i| crs.monomials[i]).collect();
         let masking_poly_commitment = T::commit_and_open(&points, &values, self.net, self.state)?;
         let mut masking_poly = SharedPolynomial::<T, C>::new_zero(polynomial_size);
@@ -720,11 +736,17 @@ impl<
 
         // Mask the polynomial when proving in zero-knowledge
         if self.has_zk == ZeroKnowledge::Yes {
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_counts_mut())?;
-            self.mask_polynomial(proving_key.polynomials.witness.lookup_read_tags_mut())?;
+            self.mask_polynomial(
+                "lookup_read_counts",
+                proving_key.polynomials.witness.lookup_read_counts_mut(),
+            )?;
+            self.mask_polynomial(
+                "lookup_read_tags",
+                proving_key.polynomials.witness.lookup_read_tags_mut(),
+            )?;
             // we do std::mem::take here to avoid borrowing issues with self
             let mut w_4_tmp = std::mem::take(&mut self.memory.w_4);
-            self.mask_polynomial(&mut w_4_tmp)?;
+            self.mask_polynomial("w_4", &mut w_4_tmp)?;
             std::mem::swap(&mut self.memory.w_4, &mut w_4_tmp);
         };
 
@@ -795,10 +817,10 @@ impl<
         if self.has_zk == ZeroKnowledge::Yes {
             // we do std::mem::take here to avoid borrowing issues with self
             let mut lookup_inverses_mut = std::mem::take(&mut self.memory.lookup_inverses);
-            self.mask_polynomial(&mut lookup_inverses_mut)?;
+            self.mask_polynomial("lookup_inverses", &mut lookup_inverses_mut)?;
             std::mem::swap(&mut self.memory.lookup_inverses, &mut lookup_inverses_mut);
             let mut z_perm_mut = std::mem::take(&mut self.memory.z_perm);
-            self.mask_polynomial(&mut z_perm_mut)?;
+            self.mask_polynomial("z_perm", &mut z_perm_mut)?;
             std::mem::swap(&mut self.memory.z_perm, &mut z_perm_mut);
         };
 
@@ -952,6 +974,7 @@ mod tests {
                         &net,
                         &mut state,
                         ZeroKnowledge::No,
+                        Default::default(),
                     );
                     // With all wires and tables zero, both the lookup and the table
                     // term equal gamma, so every denominator is 49.
@@ -1009,7 +1032,12 @@ mod tests {
             }
         }
         let mut state = Default::default();
-        let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(&(), &mut state, ZeroKnowledge::No);
+        let mut oink = CoOink::<_, _, Poseidon2Sponge, _>::new(
+            &(),
+            &mut state,
+            ZeroKnowledge::No,
+            Default::default(),
+        );
         oink.memory.challenges.gamma = gamma;
         oink.compute_logderivative_inverses(&pk).unwrap();
         for row in 0..N {
@@ -1108,6 +1136,7 @@ mod tests {
                         &net,
                         &mut state,
                         ZeroKnowledge::No,
+                        Default::default(),
                     );
                     oink.memory.w_4 = Polynomial::new(w_4);
                     oink.memory.challenges.beta = beta;

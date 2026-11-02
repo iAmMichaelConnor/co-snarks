@@ -42,6 +42,7 @@ fn partially_evaluated_batched_quotient_matches_opening_equations() {
             &mut state,
             empty_memory(),
             has_zk,
+            Default::default(),
         );
         let nu = Fr::rand(&mut rng);
         let z = Fr::rand(&mut rng);
@@ -122,6 +123,7 @@ fn fold_polynomials_match_multilinear_folding() {
             &mut state,
             empty_memory(),
             ZeroKnowledge::No,
+            Default::default(),
         );
         let values: Vec<Fr> = (0..1 << log_n).map(|_| Fr::rand(&mut rng)).collect();
         let challenges: Vec<Fr> = (0..virtual_log_n).map(|_| Fr::rand(&mut rng)).collect();

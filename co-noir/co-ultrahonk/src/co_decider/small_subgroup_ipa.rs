@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use super::co_sumcheck::zk_data::SharedZKSumcheckData;
 use super::univariates::SharedUnivariate;
+use crate::zk_masking::ZkMasking;
 use ark_ec::CurveGroup;
 use ark_ff::One;
 use ark_ff::Zero;
@@ -51,6 +52,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
     // Length of the big sum identity polynomial C. It is equal to the length of the highest degree term X * F(X) * G(X)
     const GRAND_SUM_IDENTITY_LENGTH: usize =
         Self::MASKED_CONCATENATED_WITNESS_LENGTH + Self::SUBGROUP_SIZE;
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new<H: TranscriptHasher<TranscriptFieldType>, N: Network>(
         net: &N,
         state: &mut T::State,
@@ -59,6 +61,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         claimed_ipa_eval: P::ScalarField,
         transcript: &mut Transcript<TranscriptFieldType, H>,
         commitment_key: &ProverCrs<P>,
+        masking: &ZkMasking,
     ) -> HonkProofResult<Self> {
         let mut prover = SharedSmallSubgroupIPAProver {
             interpolation_domain: zk_sumcheck_data.interpolation_domain,
@@ -79,7 +82,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
             phantom_data: PhantomData,
         };
         prover.compute_challenge_polynomial(multivariate_challenge);
-        prover.compute_grand_sum_polynomial(net, state)?;
+        prover.compute_grand_sum_polynomial(masking, net, state)?;
 
         let libra_grand_sum_commitment = CoUtils::commit_and_open::<T, P, N>(
             prover.grand_sum_polynomial.coefficients.as_ref(),
@@ -181,6 +184,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
      */
     fn compute_grand_sum_polynomial<N: Network>(
         &mut self,
+        masking: &ZkMasking,
         net: &N,
         state: &mut T::State,
     ) -> HonkProofResult<()> {
@@ -204,7 +208,17 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>>
         };
 
         //  Generate random masking_term of degree 2, add Z_H(X) * masking_term
-        let masking_term = SharedUnivariate::<T, P, 3>::get_random(net, state)?;
+        let masking_term = SharedUnivariate::<T, P, 3> {
+            evaluations: masking
+                .values::<T, P, N>(
+                    "decider/small_subgroup_ipa/grand_sum_masking",
+                    3,
+                    net,
+                    state,
+                )?
+                .try_into()
+                .expect("We requested 3 values"),
+        };
         self.grand_sum_polynomial
             .add_assign_slice(&self.grand_sum_polynomial_unmasked.coefficients);
 
