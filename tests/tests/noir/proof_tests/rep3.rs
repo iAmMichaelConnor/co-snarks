@@ -18,7 +18,10 @@ use sha3::Keccak256;
 use std::{
     collections::HashSet,
     fs::File,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
@@ -463,6 +466,31 @@ fn zk_recursion_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
 }
 
+/// A [`Network`] that counts the messages a party sends.
+struct CountingNetwork {
+    inner: LocalNetwork,
+    sent: AtomicUsize,
+}
+
+impl Network for CountingNetwork {
+    fn id(&self) -> usize {
+        self.inner.id()
+    }
+
+    fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        self.inner.send(to, data)
+    }
+
+    fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+        self.inner.recv(from)
+    }
+
+    fn get_connection_stats(&self) -> ConnectionStats {
+        self.inner.get_connection_stats()
+    }
+}
+
 /// Builds the REP3 proving key with the given lookup read-count batch size, proves, and returns
 /// the proof together with the messages party 0 sent during key generation.
 fn prove_rep3_with_lookup_batch_size(name: &str, batch_size: Option<usize>) -> (Vec<u8>, usize) {
@@ -473,32 +501,6 @@ fn prove_rep3_with_lookup_batch_size(name: &str, batch_size: Option<usize>) -> (
     };
     use co_noir_common::crs::ProverCrs;
     use mpc_core::protocols::rep3::{conversion::A2BType, id::PartyID};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct CountingNetwork {
-        inner: LocalNetwork,
-        sent: AtomicUsize,
-    }
-
-    impl Network for CountingNetwork {
-        fn id(&self) -> usize {
-            self.inner.id()
-        }
-
-        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
-            self.sent.fetch_add(1, Ordering::SeqCst);
-            self.inner.send(to, data)
-        }
-
-        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
-            self.inner.recv(from)
-        }
-
-        fn get_connection_stats(&self) -> ConnectionStats {
-            self.inner.get_connection_stats()
-        }
-    }
-
     let artifact = co_noir::program_artifact_from_reader(
         File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
     )
@@ -570,15 +572,12 @@ fn prove_rep3_with_lookup_batch_size(name: &str, batch_size: Option<usize>) -> (
     (proof, sent)
 }
 
-/// The non-ZK proof of a circuit with lookups at shared indices is the plain driver's proof for
-/// every lookup read-count batch size, and batching saves messages in key generation.
-#[test]
-fn lookup_read_count_batches_preserve_shared_proof() {
+/// The plain driver's non-ZK proof of a circuit for its known-answer witness.
+fn plain_proof(name: &str) -> Vec<u8> {
     use co_acvm::PlainAcvmSolver;
     use co_builder::prelude::{HonkRecursion, UltraCircuitBuilder};
     use co_noir_common::crs::ProverCrs;
 
-    let name = "blackbox_and";
     let constraint_system = co_noir::constraint_system_from_reader(
         File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
     )
@@ -615,7 +614,15 @@ fn lookup_read_count_batches_preserve_shared_proof() {
         &verifying_key.inner_vk,
     )
     .unwrap();
-    let expected = Poseidon2Sponge::to_buffer(proof.inner_as_ref());
+    Poseidon2Sponge::to_buffer(proof.inner_as_ref())
+}
+
+/// The non-ZK proof of a circuit with lookups at shared indices is the plain driver's proof for
+/// every lookup read-count batch size, and batching saves messages in key generation.
+#[test]
+fn lookup_read_count_batches_preserve_shared_proof() {
+    let name = "blackbox_and";
+    let expected = plain_proof(name);
 
     let mut messages = Vec::new();
     for batch_size in [Some(1), Some(3), Some(7), None, Some(0)] {
@@ -625,4 +632,118 @@ fn lookup_read_count_batches_preserve_shared_proof() {
     }
     // One gate per batch takes the most messages; all gates in one batch the fewest.
     assert!(messages[3] < messages[0], "{messages:?}");
+}
+
+/// With shared inputs, REP3 key generation computes the lookup values of the SHA-256 compression
+/// gadget with one garbled circuit per compression and still gives the plain driver's proof byte
+/// for byte, i.e. every read the gadget makes gets exactly the value of the plain lookup.
+#[test]
+fn sha256_compression_shared_proof_matches_plain() {
+    use co_acvm::mpc::DEFAULT_LOOKUP_READ_COUNT_BATCH;
+
+    let name = "bb_sha256_compression";
+    let (proof, _) = prove_rep3_with_lookup_batch_size(name, Some(DEFAULT_LOOKUP_READ_COUNT_BATCH));
+    assert_eq!(proof, plain_proof(name));
+}
+
+/// The precomputed reads of a SHA-256 compression are returned in the compression gadget's order,
+/// whatever key the read passes, and without communication; a read of another table than the next
+/// precomputed one is an error. Precomputing all 369 reads sends at most as many messages as two
+/// reads with their own garbled circuits.
+#[test]
+fn sha256_precomputed_reads_follow_the_gadget_order() {
+    use ark_ff::Field;
+    use co_acvm::{mpc::NoirWitnessExtensionProtocol, Rep3AcvmSolver, Rep3AcvmType};
+    use mpc_core::protocols::rep3::{
+        combine_field_elements, conversion::A2BType, share_field_elements,
+        yao::circuits::SHA256Table, Rep3PrimeFieldShare,
+    };
+    use rand::Rng;
+
+    let mut rng = rand::thread_rng();
+    let inputs: [u32; 24] = rng.r#gen();
+    let shares = share_field_elements(&inputs.map(Fr::from), &mut rng);
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), shares)
+        .map(|(inner, shares)| {
+            std::thread::spawn(move || {
+                let net = CountingNetwork {
+                    inner,
+                    sent: AtomicUsize::new(0),
+                };
+                let sent = || net.sent.load(Ordering::SeqCst);
+                let mut driver = Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                let shares = shares
+                    .into_iter()
+                    .map(Rep3AcvmType::Shared)
+                    .collect::<Vec<_>>();
+                let majority_input_read = |driver: &mut Rep3AcvmSolver<Fr, _>| {
+                    // The key is not used for a precomputed read.
+                    let zero = Rep3PrimeFieldShare::zero_share();
+                    let (sparse, _, key_slices, _) = driver
+                        .slice_and_get_sparse_table_with_rotation_values(
+                            zero,
+                            zero,
+                            &[1 << 11, 1 << 11, 1 << 10],
+                            &[2, 2, 0],
+                            64,
+                            16,
+                        )
+                        .unwrap();
+                    sparse
+                        .into_iter()
+                        .chain(key_slices)
+                        .map(|x| match x {
+                            Rep3AcvmType::Shared(x) => x,
+                            Rep3AcvmType::Public(_) => panic!("expected shared values"),
+                        })
+                        .collect::<Vec<_>>()
+                };
+
+                let start = sent();
+                driver
+                    .precompute_sha256_compression(
+                        &std::array::from_fn(|i| shares[i].clone()),
+                        &std::array::from_fn(|i| shares[8 + i].clone()),
+                    )
+                    .unwrap();
+                let precomputation = sent() - start;
+                // The first read is the majority sparse form of state[1].
+                let start = sent();
+                let values = majority_input_read(&mut driver);
+                assert_eq!(sent(), start);
+                // The next one is the majority sparse form of state[2], not a normalization.
+                let zero = Rep3PrimeFieldShare::zero_share();
+                let result = driver.slice_and_get_sparse_normalization_values(
+                    zero,
+                    zero,
+                    &[28 * 28; 16],
+                    28,
+                    160,
+                    &SHA256Table::Choose,
+                );
+                assert!(result.is_err());
+                // The remaining reads are dropped; a read runs its own garbled circuit again.
+                let start = sent();
+                majority_input_read(&mut driver);
+                let one_read = sent() - start;
+                assert!(
+                    precomputation <= 2 * one_read,
+                    "{precomputation} messages for all reads, {one_read} for one read"
+                );
+                values
+            })
+        })
+        .collect();
+    let outputs: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let opened = combine_field_elements(&outputs[0], &outputs[1], &outputs[2]);
+
+    let key = u64::from(inputs[1]);
+    let slices = [key & 0x7ff, (key >> 11) & 0x7ff, key >> 22];
+    let sparse = slices.map(|slice| {
+        (0..11)
+            .map(|t| Fr::from((slice >> t) & 1) * Fr::from(16u64).pow([t]))
+            .sum::<Fr>()
+    });
+    assert_eq!(opened[..3], sparse);
+    assert_eq!(opened[3..], slices.map(Fr::from));
 }

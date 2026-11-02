@@ -3461,6 +3461,240 @@ impl GarbledCircuits {
         Ok([x0_xor_x2, x0_and_x2].to_vec())
     }
 
+    /// The SHA-256 round constants.
+    const SHA256_ROUND_CONSTANTS: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    /// The number of output bits of [`Self::sha256_compression_sparse_trace`]: 193 reads of a
+    /// 32-bit key, 64 choose outputs of 32 x (5 + 2) bits, and 64 majority plus 48 message
+    /// schedule outputs of 32 x (4 + 2) bits each.
+    pub const SHA256_SPARSE_TRACE_BITS: usize = 193 * 32 + 64 * 32 * 7 + (64 + 48) * 32 * 6;
+
+    /// Returns 7 * (lo + 2 * hi) as 5 bits (LSB first).
+    fn sha256_mul7_2bit<G: FancyBinary>(
+        g: &mut G,
+        lo: &G::Item,
+        hi: &G::Item,
+    ) -> Result<Vec<G::Item>, GcError> {
+        // 7 * 0 = 00000, 7 * 1 = 00111, 7 * 2 = 01110, 7 * 3 = 10101 (MSB first)
+        let both = g.and(lo, hi)?;
+        let lo_xor_hi = g.xor(lo, hi)?;
+        let lo_or_hi = g.xor(&lo_xor_hi, &both)?;
+        let hi_and_not_lo = g.xor(hi, &both)?;
+        Ok(vec![
+            lo.to_owned(),
+            lo_xor_hi,
+            lo_or_hi,
+            hi_and_not_lo,
+            both,
+        ])
+    }
+
+    /// Returns e + 2 * f + 3 * g (at most 6) as 3 bits (LSB first).
+    fn sha256_e_plus_2f_plus_3g<G: FancyBinary>(
+        g: &mut G,
+        e: &G::Item,
+        f: &G::Item,
+        gg: &G::Item,
+    ) -> Result<Vec<G::Item>, GcError> {
+        // e + 2f + 3g = (e + g) + 2 * (f + g)
+        let (u0, u1) = Self::half_adder(g, e, gg)?;
+        let (v0, v1) = Self::half_adder(g, f, gg)?;
+        // If v1 is set, then f = g = 1, so v0 = 0 and the carry c is 0: bit 2 has no carry out.
+        let (r1, c) = Self::half_adder(g, &u1, &v0)?;
+        let r2 = g.xor(&v1, &c)?;
+        Ok(vec![u0, r1, r2])
+    }
+
+    /// Adds a 5-bit value (at most 21) and a 3-bit value (at most 6); the sum fits into 5 bits.
+    fn sha256_add_5bit_3bit<G: FancyBinary>(
+        g: &mut G,
+        m: &[G::Item],
+        r: &[G::Item],
+    ) -> Result<Vec<G::Item>, GcError> {
+        debug_assert_eq!(m.len(), 5);
+        debug_assert_eq!(r.len(), 3);
+        let (d0, c) = Self::half_adder(g, &m[0], &r[0])?;
+        let (d1, c) = Self::full_adder(g, &m[1], &r[1], &c)?;
+        let (d2, c) = Self::full_adder(g, &m[2], &r[2], &c)?;
+        let (d3, c) = Self::half_adder(g, &m[3], &c)?;
+        let d4 = g.xor(&m[4], &c)?;
+        Ok(vec![d0, d1, d2, d3, d4])
+    }
+
+    /// Given the bits f1 and f2 of the normalization table values f1 + 2 * f2 of 32 digits,
+    /// returns the low 32 bits of sum_i (f1_i + 2 * f2_i) * 2^i.
+    fn sha256_normalized_value<G: FancyBinary>(
+        g: &mut G,
+        f1: &[G::Item],
+        f2: &[G::Item],
+    ) -> Result<Vec<G::Item>, GcError> {
+        debug_assert_eq!(f1.len(), 32);
+        debug_assert_eq!(f2.len(), 32);
+        let mut result = Vec::with_capacity(32);
+        result.push(f1[0].to_owned());
+        result.extend(Self::bin_addition_no_carry(g, &f1[1..], &f2[..31])?);
+        Ok(result)
+    }
+
+    /// Computes the values behind all plookup reads of the SHA-256 compression gadget of the
+    /// UltraHonk circuit builder (`sha256_block` in co-builder's `sha_compression.rs`) for one
+    /// compression with shared inputs. Each read's key slices, sparse forms and normalized values
+    /// are public linear combinations of these bits, so one circuit replaces one garbled circuit
+    /// per read.
+    ///
+    /// The inputs are the two summands of the 24 inputs `h_init[0..8] || w_in[0..16]`, added mod p
+    /// and then reduced mod 2^32.
+    ///
+    /// The output has [`Self::SHA256_SPARSE_TRACE_BITS`] bits, one group per read in the order of
+    /// the gadget's reads, all LSB first:
+    /// 1. the 32 bits of `h_init[1]`, `h_init[2]` (majority input reads), `h_init[5]` and
+    ///    `h_init[6]` (choose input reads);
+    /// 2. for i = 16..64: the 32 bits of w\[i - 15\] and then of w\[i - 2\] (message schedule input
+    ///    reads), each only the first time it is used, then the message schedule output read:
+    ///    for each of the 32 bit positions k the base-16 digit
+    ///    d = sigma1-popcount + 4 * sigma0-popcount (4 bits), followed by f1 and f2 with
+    ///    f1 + 2 * f2 the WITNESS_EXTENSION_NORMALIZATION_TABLE value of d;
+    /// 3. for each of the 64 rounds: the 32 bits of e (choose input read); the choose output read,
+    ///    with d = e + 2f + 3g + 7 * Sigma1-popcount (base 28, 5 bits) and the
+    ///    CHOOSE_NORMALIZATION_TABLE value per bit position; the 32 bits of a (majority input
+    ///    read); the majority output read, with d = a + b + c + 4 * Sigma0-popcount (base 16, 4
+    ///    bits) and the MAJORITY_NORMALIZATION_TABLE value per bit position.
+    ///
+    /// The digits are exactly the base-B digits of the gadget's normalization keys: the tables
+    /// are sized such that no digit carries into the next one.
+    pub fn sha256_compression_sparse_trace<G: FancyBinary + FancyBinaryConstant, F: FieldUint>(
+        g: &mut G,
+        wires_x1: &BinaryBundle<G::Item>,
+        wires_x2: &BinaryBundle<G::Item>,
+    ) -> Result<BinaryBundle<G::Item>, GcError> {
+        let input_bitlen = F::MODULUS_BIT_SIZE as usize;
+        debug_assert_eq!(wires_x1.size(), 24 * input_bitlen);
+        debug_assert_eq!(wires_x2.size(), 24 * input_bitlen);
+
+        let mut words = Vec::with_capacity(24);
+        for (x1, x2) in izip!(
+            wires_x1.wires().chunks(input_bitlen),
+            wires_x2.wires().chunks(input_bitlen)
+        ) {
+            words.push(Self::adder_mod_p_with_output_size::<_, F>(g, x1, x2, 32)?);
+        }
+        // regs = [a, b, c, d, e, f, g, h]
+        let mut w = words.split_off(8);
+        let mut regs = words;
+
+        let mut outputs = Vec::with_capacity(Self::SHA256_SPARSE_TRACE_BITS);
+        for reg in [1, 2, 5, 6] {
+            outputs.extend_from_slice(&regs[reg]);
+        }
+
+        // Message schedule
+        let mut has_sparse_limbs = [false; 64];
+        for i in 16..64 {
+            for j in [i - 15, i - 2] {
+                if !has_sparse_limbs[j] {
+                    outputs.extend_from_slice(&w[j]);
+                    has_sparse_limbs[j] = true;
+                }
+            }
+            let (wl, wr) = (&w[i - 15], &w[i - 2]);
+            let mut f1 = Vec::with_capacity(32);
+            let mut f2 = Vec::with_capacity(32);
+            for k in 0..32 {
+                // sigma0(x) = rotr7 ^ rotr18 ^ shr3, sigma1(x) = rotr17 ^ rotr19 ^ shr10
+                let left = if k + 3 < 32 {
+                    Self::full_adder(g, &wl[(k + 7) % 32], &wl[(k + 18) % 32], &wl[k + 3])?
+                } else {
+                    Self::half_adder(g, &wl[(k + 7) % 32], &wl[(k + 18) % 32])?
+                };
+                let right = if k + 10 < 32 {
+                    Self::full_adder(g, &wr[(k + 17) % 32], &wr[(k + 19) % 32], &wr[k + 10])?
+                } else {
+                    Self::half_adder(g, &wr[(k + 17) % 32], &wr[(k + 19) % 32])?
+                };
+                let digit = [right.0, right.1, left.0, left.1];
+                let table = Self::get_witness_extension_normalization_table_value(g, &digit)?;
+                outputs.extend_from_slice(&digit);
+                outputs.extend_from_slice(&table);
+                f1.push(table[0].to_owned());
+                f2.push(table[1].to_owned());
+            }
+            // w[i] = sigma0(w[i - 15]) + sigma1(w[i - 2]) + w[i - 16] + w[i - 7] mod 2^32
+            let sigmas = Self::sha256_normalized_value(g, &f1, &f2)?;
+            let sum = Self::bin_addition_no_carry(g, &sigmas, &w[i - 16])?;
+            let w_i = Self::bin_addition_no_carry(g, &sum, &w[i - 7])?;
+            w.push(w_i);
+        }
+
+        // Rounds
+        for (w_i, round_constant) in w.iter().zip(Self::SHA256_ROUND_CONSTANTS) {
+            outputs.extend_from_slice(&regs[4]);
+            let mut f1 = Vec::with_capacity(32);
+            let mut f2 = Vec::with_capacity(32);
+            for k in 0..32 {
+                let (e, f, gg) = (&regs[4], &regs[5], &regs[6]);
+                // Sigma1(e) = rotr6 ^ rotr11 ^ rotr25
+                let rot =
+                    Self::full_adder(g, &e[(k + 6) % 32], &e[(k + 11) % 32], &e[(k + 25) % 32])?;
+                let rot_times_7 = Self::sha256_mul7_2bit(g, &rot.0, &rot.1)?;
+                let efg = Self::sha256_e_plus_2f_plus_3g(g, &e[k], &f[k], &gg[k])?;
+                let digit = Self::sha256_add_5bit_3bit(g, &rot_times_7, &efg)?;
+                let table = Self::get_choose_normalization_table_value(g, &digit)?;
+                outputs.extend_from_slice(&digit);
+                outputs.extend_from_slice(&table);
+                f1.push(table[0].to_owned());
+                f2.push(table[1].to_owned());
+            }
+            // Sigma1(e) + Ch(e, f, g)
+            let choose = Self::sha256_normalized_value(g, &f1, &f2)?;
+
+            outputs.extend_from_slice(&regs[0]);
+            let mut f1 = Vec::with_capacity(32);
+            let mut f2 = Vec::with_capacity(32);
+            for k in 0..32 {
+                let (a, b, c) = (&regs[0], &regs[1], &regs[2]);
+                let sum = Self::full_adder(g, &a[k], &b[k], &c[k])?;
+                // Sigma0(a) = rotr2 ^ rotr13 ^ rotr22
+                let rot =
+                    Self::full_adder(g, &a[(k + 2) % 32], &a[(k + 13) % 32], &a[(k + 22) % 32])?;
+                let digit = [sum.0, sum.1, rot.0, rot.1];
+                let table = Self::get_majority_normalization_table_value(g, &digit)?;
+                outputs.extend_from_slice(&digit);
+                outputs.extend_from_slice(&table);
+                f1.push(table[0].to_owned());
+                f2.push(table[1].to_owned());
+            }
+            // Sigma0(a) + Maj(a, b, c)
+            let majority = Self::sha256_normalized_value(g, &f1, &f2)?;
+
+            let round_constant = (0..32)
+                .map(|i| (round_constant >> i) & 1 == 1)
+                .collect::<Vec<_>>();
+            let w_plus_k = Self::bin_addition_constant_no_carry(g, w_i, &round_constant)?;
+            let temp1 = Self::bin_addition_no_carry(g, &choose, &regs[7])?;
+            let temp1 = Self::bin_addition_no_carry(g, &temp1, &w_plus_k)?;
+            let new_e = Self::bin_addition_no_carry(g, &regs[3], &temp1)?;
+            let new_a = Self::bin_addition_no_carry(g, &temp1, &majority)?;
+
+            regs.rotate_right(1);
+            regs[0] = new_a;
+            regs[4] = new_e;
+        }
+
+        debug_assert_eq!(outputs.len(), Self::SHA256_SPARSE_TRACE_BITS);
+        Ok(BinaryBundle::new(outputs))
+    }
+
     /// Computes the SHA256 compression using a Bristol fashion circuit which is first parsed from a .txt file. The field elements are represented as bitdecompositions x1s, x2s, y1s and y2s which need to be added first to get the two inputs. The output is composed using wires_c.
     pub(crate) fn sha256_compression<G: FancyBinary + FancyBinaryConstant, F: FieldUint>(
         g: &mut G,
@@ -4493,6 +4727,10 @@ impl GarbledCircuits {
 #[cfg(test)]
 #[path = "division_tests.rs"]
 mod division_tests;
+
+#[cfg(test)]
+#[path = "sha256_sparse_trace_tests.rs"]
+mod sha256_sparse_trace_tests;
 
 #[cfg(test)]
 mod test {
