@@ -1,3 +1,4 @@
+use crate::honk_proof::{HonkProofError, HonkProofResult};
 use crate::transcript::TranscriptHasher;
 use ark_ec::AffineRepr;
 use ark_ff::{PrimeField, Zero};
@@ -68,6 +69,18 @@ impl<F: PrimeField> TranscriptHasher<F> for Keccak256 {
         P::BaseField::from_be_bytes_mod_order(&bytes)
     }
 
+    fn validate_scalarfield<P: crate::honk_curve::HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()> {
+        validate_word::<P::ScalarField>(elements)
+    }
+
+    fn validate_basefield<P: crate::honk_curve::HonkCurve<F>>(
+        elements: &[Self::DataType],
+    ) -> HonkProofResult<()> {
+        validate_word::<P::BaseField>(elements)
+    }
+
     fn convert_challenge_into<P: crate::honk_curve::HonkCurve<F>>(challenge: &F) -> Self::DataType {
         U256::convert_field_into(challenge)
     }
@@ -96,4 +109,17 @@ impl<F: PrimeField> TranscriptHasher<F> for Keccak256 {
             })
             .collect::<Vec<U256>>()
     }
+}
+
+/// A field element is transmitted as one 32-byte word, which must be below the modulus (as in
+/// barretenberg's `U256Codec`). Reducing it instead would accept several encodings of one value.
+fn validate_word<T: PrimeField>(elements: &[U256]) -> HonkProofResult<()> {
+    let [word] = elements else {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    };
+    let value = T::from_be_bytes_mod_order(&word.0.to_be_bytes::<32>());
+    if U256::convert_field_into(&value) != *word {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    }
+    Ok(())
 }

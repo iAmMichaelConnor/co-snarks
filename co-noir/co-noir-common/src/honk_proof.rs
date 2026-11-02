@@ -19,6 +19,12 @@ pub enum HonkProofError {
     /// Invalid key length
     #[error("Invalid key length")]
     InvalidKeyLength,
+    /// A deserialized group element is not a point of the prime-order subgroup
+    #[error("Point is not on the curve")]
+    PointNotOnCurve,
+    /// A deserialized field element is not canonically encoded
+    #[error("Non-canonical field element encoding")]
+    NonCanonicalFieldEncoding,
     /// Corrupted Key
     #[error("Corrupted Key")]
     CorruptedKey,
