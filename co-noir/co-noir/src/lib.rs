@@ -63,11 +63,27 @@ pub fn execute_circuit_rep3<'a, N: Network>(
     Rep3SharedWitness<ark_bn254::Fr>,
     PssStore<Rep3AcvmSolver<'a, ark_bn254::Fr, N>, ark_bn254::Fr>,
 )> {
+    execute_circuit_rep3_with_level_scheduling(input, compiled_program, net, false)
+}
+
+#[expect(clippy::type_complexity)]
+/// Executes the noir circuit with REP3 protocol, optionally with level scheduling (see
+/// [`co_acvm::solver::CoSolver::set_level_scheduling`])
+pub fn execute_circuit_rep3_with_level_scheduling<'a, N: Network>(
+    input: Rep3SharedInput<ark_bn254::Fr>,
+    compiled_program: ProgramArtifact,
+    net: &'a N,
+    level_scheduling: bool,
+) -> Result<(
+    Rep3SharedWitness<ark_bn254::Fr>,
+    PssStore<Rep3AcvmSolver<'a, ark_bn254::Fr, N>, ark_bn254::Fr>,
+)> {
     let witness = witness_map_from_string_map(input, &compiled_program.abi)?;
 
     // init MPC protocol
-    let rep3_vm = Rep3CoSolver::new_with_witness(net, compiled_program, witness)
+    let mut rep3_vm = Rep3CoSolver::new_with_witness(net, compiled_program, witness)
         .context("while creating VM")?;
+    rep3_vm.set_level_scheduling(level_scheduling);
 
     // execute witness generation in MPC
     let (result_witness_share, value_store) = rep3_vm

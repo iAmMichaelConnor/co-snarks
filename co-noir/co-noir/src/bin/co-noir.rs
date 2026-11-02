@@ -284,6 +284,9 @@ pub struct GenerateWitnessCli {
     #[arg(long)]
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub out: Option<PathBuf>,
+    /// Solve independent opcodes level by level, batching their multiplications of shared values
+    #[arg(long)]
+    pub level_scheduling: bool,
 }
 
 /// Config for `generate_witness`
@@ -297,6 +300,8 @@ pub struct GenerateWitnessConfig {
     pub protocol: MPCProtocol,
     /// The output file where the final witness share is written to
     pub out: PathBuf,
+    /// Solve independent opcodes level by level, batching their multiplications of shared values
+    pub level_scheduling: bool,
     /// Network config
     pub network: NetworkConfigFile,
 }
@@ -1199,7 +1204,12 @@ fn run_generate_witness(config: GenerateWitnessConfig) -> color_eyre::Result<Exi
 
     tracing::info!("Starting witness generation...");
     let start = Instant::now();
-    let result_witness_share = co_noir::generate_witness_rep3(input_share, program_artifact, &net)?;
+    let (result_witness_share, _) = co_noir::execute_circuit_rep3_with_level_scheduling(
+        input_share,
+        program_artifact,
+        &net,
+        config.level_scheduling,
+    )?;
     let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
     tracing::info!("Generate witness took {duration_ms} ms");
 

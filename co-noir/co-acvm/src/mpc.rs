@@ -168,6 +168,19 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
 
     fn add_assign(&mut self, lhs: &mut Self::AcvmType, rhs: Self::AcvmType);
 
+    /// Computes `c * lhs * rhs` for each of the given terms, which must not depend on each other.
+    /// The default solves them one by one with [`Self::solve_mul_term`]; a driver may compute the
+    /// products of shared values together.
+    fn solve_mul_terms(
+        &mut self,
+        terms: Vec<(F, Self::AcvmType, Self::AcvmType)>,
+    ) -> eyre::Result<Vec<Self::AcvmType>> {
+        terms
+            .into_iter()
+            .map(|(c, lhs, rhs)| self.solve_mul_term(c, lhs, rhs))
+            .collect()
+    }
+
     /// Multiply two acvm-types and a public value and stores them at target: \[*result\] = c * \[lhs\] * \[rhs\].
     fn solve_mul_term(
         &mut self,

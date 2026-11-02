@@ -1,7 +1,11 @@
 use acir::native_types::{WitnessMap, WitnessStack};
 use ark_ff::PrimeField;
+use co_acvm::solver::{PlainCoSolver, Rep3CoSolver};
 use co_acvm::{Rep3AcvmType, ShamirAcvmType};
 use itertools::izip;
+use mpc_net::local::LocalNetwork;
+use noirc_artifacts::program::ProgramArtifact;
+use std::path::PathBuf;
 
 mod plain_solver;
 mod rep3;
@@ -9,92 +13,108 @@ mod rep3_driver;
 mod shamir;
 
 macro_rules! add_plain_acvm_test {
-        ($name: expr) => {
-            paste::item! {
-                #[test]
-                fn [< test_plain_ $name >]() {
-                    let program = std::fs::read_to_string(format!(
-                        "../test_vectors/noir/{}/kat/{}.json",
-                    $name, $name))
-                    .unwrap();
-                    let program_artifact = serde_json::from_str::<ProgramArtifact>(&program)
-                        .expect("failed to parse program artifact");
-                    let should_witness =
-                        std::fs::read(format!("../test_vectors/noir/{}/kat/{}.gz", $name, $name)).unwrap();
-                    let should_witness =
-                      WitnessStack::deserialize(should_witness.as_slice()).unwrap();
-                    let prover_toml = format!("../test_vectors/noir/{}/Prover.toml", $name);
-                    let solver =
-                        PlainCoSolver::init_plain_driver(program_artifact, prover_toml).unwrap();
-                    let is_witness = solver.solve().unwrap();
-                    let is_witness = PlainCoSolver::convert_to_plain_acvm_witness(is_witness);
-                    assert_eq!(is_witness, should_witness);
-                }
+    ($name: expr) => {
+        paste::item! {
+            #[test]
+            fn [< test_plain_ $name >]() {
+                super::plain_acvm_test($name, false);
             }
-        };
-    }
+
+            #[test]
+            fn [< test_plain_level_scheduled_ $name >]() {
+                super::plain_acvm_test($name, true);
+            }
+        }
+    };
+}
+
+/// Solves the circuit with the plain driver and compares the witness with the known answer.
+fn plain_acvm_test(name: &str, level_scheduling: bool) {
+    let program =
+        std::fs::read_to_string(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap();
+    let program_artifact = serde_json::from_str::<ProgramArtifact>(&program)
+        .expect("failed to parse program artifact");
+    let should_witness =
+        std::fs::read(format!("../test_vectors/noir/{name}/kat/{name}.gz")).unwrap();
+    let should_witness = WitnessStack::deserialize(should_witness.as_slice()).unwrap();
+    let prover_toml = format!("../test_vectors/noir/{name}/Prover.toml");
+    let mut solver = PlainCoSolver::init_plain_driver(program_artifact, prover_toml).unwrap();
+    solver.set_level_scheduling(level_scheduling);
+    let is_witness = solver.solve().unwrap();
+    let is_witness = PlainCoSolver::convert_to_plain_acvm_witness(is_witness);
+    assert_eq!(is_witness, should_witness);
+}
 
 macro_rules! add_rep3_acvm_test {
     ($name: expr) => {
         paste::item! {
             #[test]
             fn [< test_rep3_ $name >]() {
-                let root = std::env!("CARGO_MANIFEST_DIR");
-                let program = std::fs::read_to_string(format!(
-                    "{root}/../test_vectors/noir/{}/kat/{}.json",
-                    $name, $name
-                ))
-                .unwrap();
-                let program_artifact = serde_json::from_str::<ProgramArtifact>(&program)
-                    .expect("failed to parse program artifact");
+                super::rep3_acvm_test($name, false);
+            }
 
-                let should_witness =
-                    std::fs::read(format!("{root}/../test_vectors/noir/{}/kat/{}.gz", $name, $name)).unwrap();
-
-                let should_witness =
-                   WitnessStack::deserialize(should_witness.as_slice()).unwrap();
-                let input = PathBuf::from(format!(
-                    "{root}/../test_vectors/noir/{}/Prover.toml",
-                    $name
-                ));
-                // read the input file
-                let inputs = noir_types::partially_read_abi_bn254(
-                    std::fs::File::open(input).unwrap(),
-                    &program_artifact.abi,
-                    &program_artifact.bytecode.functions[0].public_inputs().indices(),
-                ).expect("can share field elements for noir witness extension");
-
-                // create input shares
-                let shares = co_noir::split_input_rep3(inputs);
-                let nets = LocalNetwork::new_3_parties();
-                let mut threads = vec![];
-                for (net, program_artifact, share) in izip!(
-                    nets,
-                    [
-                        program_artifact.clone(),
-                        program_artifact.clone(),
-                        program_artifact
-                    ],
-                    shares
-                ) {
-                    threads.push(std::thread::spawn(move || {
-                        let input_share = co_noir::witness_map_from_string_map(share, &program_artifact.abi).expect("can translate witness for noir witness extension");
-                        let solver =
-                            Rep3CoSolver::new_with_witness(&net, program_artifact, input_share).unwrap();
-                        let proof = solver.solve().unwrap();
-                        proof
-                    }));
-                }
-
-                let result3 = threads.pop().unwrap().join().unwrap();
-                let result2 = threads.pop().unwrap().join().unwrap();
-                let result1 = threads.pop().unwrap().join().unwrap();
-                let is_witness = super::combine_field_elements_for_acvm(result1, result2, result3);
-                let is_witness = PlainCoSolver::convert_to_plain_acvm_witness(is_witness);
-                assert_eq!(should_witness, is_witness)
+            #[test]
+            fn [< test_rep3_level_scheduled_ $name >]() {
+                super::rep3_acvm_test($name, true);
             }
         }
     };
+}
+
+/// Solves the circuit with the REP3 driver and compares the opened witness with the known answer.
+fn rep3_acvm_test(name: &str, level_scheduling: bool) {
+    let root = std::env!("CARGO_MANIFEST_DIR");
+    let program = std::fs::read_to_string(format!(
+        "{root}/../test_vectors/noir/{name}/kat/{name}.json"
+    ))
+    .unwrap();
+    let program_artifact = serde_json::from_str::<ProgramArtifact>(&program)
+        .expect("failed to parse program artifact");
+
+    let should_witness =
+        std::fs::read(format!("{root}/../test_vectors/noir/{name}/kat/{name}.gz")).unwrap();
+
+    let should_witness = WitnessStack::deserialize(should_witness.as_slice()).unwrap();
+    let input = PathBuf::from(format!("{root}/../test_vectors/noir/{name}/Prover.toml"));
+    // read the input file
+    let inputs = noir_types::partially_read_abi_bn254(
+        std::fs::File::open(input).unwrap(),
+        &program_artifact.abi,
+        &program_artifact.bytecode.functions[0]
+            .public_inputs()
+            .indices(),
+    )
+    .expect("can share field elements for noir witness extension");
+
+    // create input shares
+    let shares = co_noir::split_input_rep3(inputs);
+    let nets = LocalNetwork::new_3_parties();
+    let mut threads = vec![];
+    for (net, program_artifact, share) in izip!(
+        nets,
+        [
+            program_artifact.clone(),
+            program_artifact.clone(),
+            program_artifact
+        ],
+        shares
+    ) {
+        threads.push(std::thread::spawn(move || {
+            let input_share = co_noir::witness_map_from_string_map(share, &program_artifact.abi)
+                .expect("can translate witness for noir witness extension");
+            let mut solver =
+                Rep3CoSolver::new_with_witness(&net, program_artifact, input_share).unwrap();
+            solver.set_level_scheduling(level_scheduling);
+            solver.solve().unwrap()
+        }));
+    }
+
+    let result3 = threads.pop().unwrap().join().unwrap();
+    let result2 = threads.pop().unwrap().join().unwrap();
+    let result1 = threads.pop().unwrap().join().unwrap();
+    let is_witness = combine_field_elements_for_acvm(result1, result2, result3);
+    let is_witness = PlainCoSolver::convert_to_plain_acvm_witness(is_witness);
+    assert_eq!(should_witness, is_witness)
 }
 
 fn combine_field_elements_for_acvm<F: PrimeField>(
