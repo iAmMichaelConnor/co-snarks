@@ -246,6 +246,20 @@ fn add3u64_proof_test_keccak256() {
 }
 
 #[test]
+fn rom_shared_proof_test_poseidon2sponge() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_pos";
+    proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+    proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
+}
+
+#[test]
+fn rom_shared_proof_test_keccak256() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_kec";
+    proof_test::<Keccak256>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+    proof_test::<Keccak256>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
+}
+
+#[test]
 #[ignore = "Test is too slow for the pipeline"]
 fn recursion_witness_and_proof_test_poseidon2sponge() {
     witness_and_proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::No, "");

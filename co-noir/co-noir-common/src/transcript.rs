@@ -669,4 +669,48 @@ mod tests {
             }
         }
     }
+
+    /// Replays the prover messages of `tests/fixtures/transcript_challenges.cpp` and compares the challenges with
+    /// the values barretenberg v6.0.0 prints for it: scalar and point encodings, several challenges from one
+    /// squeeze, a challenge after a round without new data, and an element that needs the full field width.
+    fn check_barretenberg_challenges<H: TranscriptHasher<TranscriptFieldType>>(name: &str) {
+        let expected: Vec<_> = include_str!("../tests/fixtures/transcript_challenges.txt")
+            .lines()
+            .filter_map(|line| {
+                let (hasher, value) = line.split_once(' ').unwrap();
+                let value = BigUint::parse_bytes(value.trim_start_matches("0x").as_bytes(), 16);
+                (hasher == name).then(|| Fr::from(value.unwrap()))
+            })
+            .collect();
+        assert_eq!(expected.len(), 7);
+
+        let mut transcript = Transcript::<TranscriptFieldType, H>::new();
+        transcript.send_fr_to_verifier::<G1Projective>("data0".to_string(), Fr::from(1u64));
+        transcript.send_fr_to_verifier::<G1Projective>("data1".to_string(), Fr::from(2u64));
+        transcript
+            .send_point_to_verifier::<G1Projective>("point".to_string(), G1Affine::generator());
+        let mut actual = transcript
+            .get_challenges::<G1Projective>(&["eta".to_string(), "rom_logup_gamma".to_string()]);
+        actual.push(transcript.get_challenge::<G1Projective>("tail".to_string()));
+        transcript
+            .send_fr_to_verifier::<G1Projective>("data2".to_string(), Fr::from(0xdeadbeefu64));
+        transcript.send_fr_to_verifier::<G1Projective>("large".to_string(), -Fr::from(1u64));
+        actual.extend(transcript.get_challenges::<G1Projective>(&[
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma".to_string(),
+        ]));
+        actual.push(transcript.get_challenge::<G1Projective>("delta".to_string()));
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn poseidon2_challenges_match_barretenberg() {
+        check_barretenberg_challenges::<Poseidon2Sponge>("poseidon2");
+    }
+
+    #[test]
+    fn keccak_challenges_match_barretenberg() {
+        check_barretenberg_challenges::<Keccak256>("keccak");
+    }
 }
