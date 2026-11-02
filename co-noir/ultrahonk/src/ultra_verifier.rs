@@ -25,6 +25,14 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
     ) -> HonkVerifyResult<bool> {
         tracing::trace!("UltraHonk verification");
+        // Without padding, the sumcheck runs `log_circuit_size` rounds, and with ZK the
+        // row-disabling polynomial is identically zero below three rounds (as in barretenberg).
+        if !H::USE_PADDING && has_zk == ZeroKnowledge::Yes {
+            eyre::ensure!(
+                verifying_key.inner_vk.log_circuit_size >= 3,
+                "ZK verification requires log_circuit_size >= 3"
+            );
+        }
         let honk_proof = honk_proof.insert_public_inputs(public_inputs.to_vec());
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new_verifier(honk_proof);
