@@ -111,7 +111,8 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
     ///
     /// With [`RecursionInputVisibility::RevealToParticipants`], the secret-shared inputs are opened
     /// to all parties. With [`RecursionInputVisibility::KeepSecret`], a secret-shared input is an
-    /// error. Before that, all parties check that they use the same setting, which sends only the
+    /// error. With [`RecursionInputVisibility::PrivateRecursion`], the inputs stay secret-shared
+    /// and the verifier is built on them. Before that, all parties check that they use the same setting, which sends only the
     /// setting itself. Nothing secret is sent before a party could reject.
     fn prepare_recursion_inputs(
         &mut self,
@@ -138,6 +139,7 @@ impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::Scala
             RecursionInputVisibility::KeepSecret => eyre::bail!(
                 "The recursion constraint has secret-shared inputs. Verifying it requires opening the inner proof, its public inputs, the verification key, the key hash and the predicate to all parties; all parties must explicitly allow this with RecursionInputVisibility::RevealToParticipants (co-noir: --reveal-recursion-inputs)"
             ),
+            RecursionInputVisibility::PrivateRecursion => Ok(()),
             RecursionInputVisibility::RevealToParticipants => {
                 let shares: Vec<_> = shared_indices
                     .iter()
@@ -893,6 +895,73 @@ mod recursion_input_visibility_tests {
                     let mut driver =
                         ShamirAcvmSolver::<Fr, _>::new(&net, ShamirState::from(preprocessing));
                     shared_inputs_are_rejected(&mut driver, &net, ShamirAcvmType::Shared(share));
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    /// With private recursion, secret-shared recursion inputs stay shared and the parties send
+    /// each other nothing but the setting. Drivers without support for it (`supported == false`)
+    /// fail after that.
+    fn private_recursion_keeps_inputs_shared<T: NoirWitnessExtensionProtocol<Fr>>(
+        driver: &mut T,
+        net: &RecordingNetwork,
+        shared: T::AcvmType,
+        supported: bool,
+    ) {
+        for proof_type in [ProofType::Honk, ProofType::HonkZk] {
+            for role in 0..5 {
+                let mut builder = GenericUltraCircuitBuilder::<Bn254G1, T>::new_minimal(0);
+                builder.recursion_input_visibility = RecursionInputVisibility::PrivateRecursion;
+                let (input, index) =
+                    constraint_with_shared_input(&mut builder, role, shared.clone(), proof_type);
+                net.clear();
+                let result = builder.prepare_recursion_inputs(&input, driver);
+                assert_eq!(result.is_ok(), supported, "{proof_type:?}, input {role}");
+                net.assert_sent_only_the_setting(2);
+                assert!(T::is_shared(&builder.get_variable(index as usize)));
+            }
+        }
+    }
+
+    #[test]
+    fn rep3_private_recursion_keeps_recursion_inputs_shared() {
+        let shares = share_field_elements(&[Fr::from(101u64)], &mut rand::thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                std::thread::spawn(move || {
+                    let net = RecordingNetwork::new(net);
+                    let mut driver =
+                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                    let shared = Rep3AcvmType::Shared(shares[0]);
+                    private_recursion_keeps_inputs_shared(&mut driver, &net, shared, true);
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn shamir_rejects_private_recursion_without_secret_traffic() {
+        let shares = shamir::share_field_element(Fr::from(101u64), 1, 3, &mut rand::thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, share)| {
+                std::thread::spawn(move || {
+                    let net = RecordingNetwork::new(net);
+                    let preprocessing = ShamirPreprocessing::new(3, 1, 0, &net).unwrap();
+                    let mut driver =
+                        ShamirAcvmSolver::<Fr, _>::new(&net, ShamirState::from(preprocessing));
+                    let shared = ShamirAcvmType::Shared(share);
+                    private_recursion_keeps_inputs_shared(&mut driver, &net, shared, false);
                 })
             })
             .collect();

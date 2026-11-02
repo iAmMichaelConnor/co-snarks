@@ -87,6 +87,9 @@ impl<
         verifying_key: &VerifyingKeyBarretenberg<C>,
         masking: ZkMasking,
     ) -> HonkProofResult<HonkProof<H::DataType>> {
+        proving_key
+            .proof_privacy
+            .validate_proving_mode(has_zk, matches!(masking, ZkMasking::Seeded(_)))?;
         tracing::trace!("CoUltraHonk prove");
 
         let mut transcript = Transcript::<TranscriptFieldType, H>::new();
@@ -275,4 +278,42 @@ where
         + num_pairs_sumcheck_prove
         + num_pairs_sumcheck_disabled_contributions
         + num_zk_randomness
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use co_noir_common::{
+        keys::proof_privacy::ProofPrivacy, transcript::Poseidon2Sponge, types::Bn254G1,
+    };
+
+    type Prover = CoUltraHonk<PlainUltraHonkDriver, Bn254G1, Poseidon2Sponge>;
+
+    /// Keys of the private recursion profile are rejected without ZK and with seeded masking,
+    /// before anything is proven.
+    #[test]
+    fn private_recursion_keys_need_fresh_zero_knowledge() {
+        let key = || ProvingKey::<PlainUltraHonkDriver, Bn254G1> {
+            proof_privacy: ProofPrivacy::PrivateRecursion,
+            num_public_inputs: PAIRING_POINT_ACCUMULATOR_SIZE,
+            ..Default::default()
+        };
+        let vk = VerifyingKeyBarretenberg {
+            log_circuit_size: 0,
+            num_public_inputs: 0,
+            pub_inputs_offset: 0,
+            commitments: Default::default(),
+        };
+        let crs = ProverCrs::default();
+        for error in [
+            Prover::prove(key(), &crs, ZeroKnowledge::No, &vk).unwrap_err(),
+            Prover::prove_with_seeded_zk_masking(key(), &crs, &vk, [7; 32]).unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires a zero-knowledge proof")
+            );
+        }
+    }
 }

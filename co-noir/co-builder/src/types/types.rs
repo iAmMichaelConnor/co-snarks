@@ -3,12 +3,13 @@ use super::field_ct::{CycleGroupCT, CycleScalarCT, FieldCT};
 use crate::prelude::GenericUltraCircuitBuilder;
 use crate::transcript_ct::{TranscriptCT, TranscriptFieldType, TranscriptHasherCT};
 use crate::types::field_ct::BoolCT;
-use ark_ec::CurveGroup;
-use ark_ff::PrimeField;
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::{One, PrimeField};
 use co_acvm::mpc::NoirWitnessExtensionProtocol;
 use co_noir_common::constants::{
     NUM_SELECTORS, NUM_WIRES, NUM_ZERO_ROWS, PAIRING_POINT_ACCUMULATOR_SIZE,
 };
+use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::polynomials::entities::ProverWitnessEntities;
 use co_noir_common::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK;
@@ -532,6 +533,76 @@ impl<C: CurveGroup, T: NoirWitnessExtensionProtocol<C::ScalarField>> PairingPoin
         self.p1.set_public(driver, builder)?;
         Ok(start_idx)
     }
+
+    /// Blinds the accumulator for [`RecursionInputVisibility::PrivateRecursion`]: replaces
+    /// `(P0, P1)` by `s * (P0, P1) + r * ([x]_1, -[1]_1)` for fresh secret random `r` and `s`,
+    /// where `[1]_1` and `[x]_1` are the first two points of the CRS. The verifier accepts an
+    /// accumulator if `e(P0, [1]_2) * e(P1, [x]_2) == 1`. The pairing of `([x]_1, -[1]_1)` is 1,
+    /// so the check holds for the blinded pair if and only if it holds for `(P0, P1)`, because
+    /// `s != 0` is constrained. A valid accumulator becomes a uniformly random valid one, so the
+    /// public output does not depend on the inner proof or verification key.
+    ///
+    /// [`RecursionInputVisibility::PrivateRecursion`]: crate::prelude::RecursionInputVisibility::PrivateRecursion
+    pub(crate) fn blind_for_private_recursion(
+        &mut self,
+        crs: &ProverCrs<C>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> eyre::Result<()>
+    where
+        C::BaseField: PrimeField,
+    {
+        eyre::ensure!(
+            crs.monomials.len() >= 2
+                && crs.monomials[0] == C::generator().into_affine()
+                && !crs.monomials[1].is_zero(),
+            "Private recursion needs the first two points of the CRS"
+        );
+        let r = driver.rand()?.into();
+        let s: T::AcvmType = driver.rand()?.into();
+        // s = 0 happens with negligible probability and only makes key generation fail.
+        let s_inverse = driver.invert(s.clone())?;
+        let r = FieldCT::from_witness(r, builder);
+        let s = FieldCT::from_witness(s, builder);
+        let s_inverse = FieldCT::from_witness(s_inverse, builder);
+        self.blind_with_scalars(crs, &r, &s, &s_inverse, builder, driver)
+    }
+
+    fn blind_with_scalars(
+        &mut self,
+        crs: &ProverCrs<C>,
+        r: &FieldCT<C::ScalarField>,
+        s: &FieldCT<C::ScalarField>,
+        s_inverse: &FieldCT<C::ScalarField>,
+        builder: &mut GenericUltraCircuitBuilder<C, T>,
+        driver: &mut T,
+    ) -> eyre::Result<()>
+    where
+        C::BaseField: PrimeField,
+    {
+        // s * s_inverse = 1, so s != 0: with s = 0 an invalid accumulator would become valid.
+        let s_index = s.get_witness_index(builder, driver);
+        let s_inverse_index = s_inverse.get_witness_index(builder, driver);
+        builder.create_arithmetic_gate(&PolyTriple {
+            a: s_index,
+            b: s_inverse_index,
+            c: builder.zero_idx,
+            q_m: C::ScalarField::one(),
+            q_c: -C::ScalarField::one(),
+            ..Default::default()
+        });
+        self.p0 = self.p0.scalar_mul(s, 0, builder, driver)?;
+        self.p1 = self.p1.scalar_mul(s, 0, builder, driver)?;
+        let mut x = BigGroup::from_constant_affine::<C>(&crs.monomials[1])?;
+        let mut minus_one = BigGroup::from_constant_affine::<C>(&(-crs.monomials[0]))?;
+        // The scalar multiplication and the addition are complete, so r = 0 and s * P = -r * Q
+        // need no special case.
+        let mut mask0 = x.scalar_mul(r, 0, builder, driver)?;
+        let mut mask1 = minus_one.scalar_mul(r, 0, builder, driver)?;
+        self.p0.add_assign(&mut mask0, builder, driver)?;
+        self.p1.add_assign(&mut mask1, builder, driver)?;
+        Ok(())
+    }
 }
 impl<C: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<C::ScalarField>>
     PairingPoints<C, T>
@@ -937,4 +1008,181 @@ pub(crate) struct NonNativeMultiplicationFieldWitnesses<F: PrimeField> {
     pub(crate) q: [u32; 4],
     pub(crate) r: [u32; 4],
     pub(crate) neg_modulus: [F; 4],
+}
+
+#[cfg(test)]
+mod accumulator_blinding_tests {
+    use super::*;
+    use crate::prelude::UltraCircuitBuilder;
+    use crate::transcript_ct::Bn254G1;
+    use ark_bn254::{Bn254, Fr};
+    use ark_ff::{Field, Zero};
+    use co_acvm::PlainAcvmSolver;
+    use co_noir_common::{
+        crs::parse::CrsParser, keys::verification_key::VerifyingKey, transcript::Poseidon2Sponge,
+        types::ZeroKnowledge,
+    };
+    use co_ultrahonk::prelude::UltraHonk;
+
+    type Affine = <Bn254G1 as CurveGroup>::Affine;
+
+    fn crs(
+        size: usize,
+    ) -> (
+        ProverCrs<Bn254G1>,
+        <Bn254 as ark_ec::pairing::Pairing>::G2Affine,
+    ) {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../co-noir-common/src/crs");
+        CrsParser::<Bn254G1>::get_crs::<Bn254>(
+            dir.join("bn254_g1.dat"),
+            dir.join("bn254_g2.dat"),
+            size,
+            ZeroKnowledge::No,
+        )
+        .unwrap()
+        .split()
+    }
+
+    /// Finalizes the circuit, proves it and returns whether the proof verifies, and the key.
+    fn prove_and_verify(
+        mut builder: UltraCircuitBuilder<Bn254G1>,
+        driver: &mut PlainAcvmSolver<Fr>,
+    ) -> (bool, Vec<u8>) {
+        builder.finalize_circuit(driver).unwrap();
+        let (prover_crs, verifier_crs) = crs(builder.compute_dyadic_size());
+        let (pk, vk): (_, VerifyingKey<Bn254>) = builder
+            .create_keys::<Bn254>(prover_crs.into(), verifier_crs, driver)
+            .unwrap();
+        let (proof, public_inputs) =
+            UltraHonk::<_, Poseidon2Sponge>::prove(pk, ZeroKnowledge::No, &vk.inner_vk).unwrap();
+        let key = vk.inner_vk.to_buffer();
+        let verified =
+            UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No)
+                .unwrap();
+        (verified, key)
+    }
+
+    /// The accumulator outputs (four public inputs per point) as points.
+    fn public_points(builder: &UltraCircuitBuilder<Bn254G1>) -> [Affine; 2] {
+        let value =
+            |i: usize| BigUint::from(builder.get_variable(builder.public_inputs[i] as usize));
+        std::array::from_fn(|point| {
+            let x: BigUint = value(4 * point) + (value(4 * point + 1) << 136);
+            let y: BigUint = value(4 * point + 2) + (value(4 * point + 3) << 136);
+            if x == BigUint::ZERO && y == BigUint::ZERO {
+                Affine::zero()
+            } else {
+                Affine::new(x.into(), y.into())
+            }
+        })
+    }
+
+    fn witness_points(
+        points: [Affine; 2],
+        builder: &mut UltraCircuitBuilder<Bn254G1>,
+        driver: &mut PlainAcvmSolver<Fr>,
+    ) -> PairingPoints<Bn254G1, PlainAcvmSolver<Fr>> {
+        PairingPoints::new(
+            BigGroup::from_witness::<Bn254G1>(&points[0], driver, builder).unwrap(),
+            BigGroup::from_witness::<Bn254G1>(&points[1], driver, builder).unwrap(),
+        )
+    }
+
+    /// The blinded accumulator is s * P + r * ([x]_1, -[1]_1), it satisfies the pairing check if
+    /// and only if P does, s = 0 is rejected, and the circuit does not depend on the values.
+    #[test]
+    fn blinding_preserves_the_pairing_check() {
+        let (basis, _) = crs(2);
+        let one = basis.monomials[0];
+        let x = basis.monomials[1];
+        // (x, -1) is a valid accumulator, (x + 1, -1) is not.
+        let valid = [x, -one];
+        let invalid = [(x + one).into_affine(), -one];
+        let infinity = [Affine::zero(); 2];
+        let mut reference_key = None;
+        // (accumulator, r, s, accumulator valid)
+        for (points, r, s, is_valid) in [
+            (valid, 0, 1, true),
+            (valid, 17, 31, true),
+            (valid, -13, 13, true), // cancels to infinity
+            (infinity, 19, 2, true),
+            (invalid, 17, 31, false),
+            (invalid, 17, 0, false),
+            (valid, 0, 0, true),
+        ] {
+            let (r, s) = (Fr::from(r), Fr::from(s));
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+            let mut accumulator = witness_points(points, &mut builder, &mut driver);
+            let r_ct = FieldCT::from_witness(r, &mut builder);
+            let s_ct = FieldCT::from_witness(s, &mut builder);
+            let s_inverse = FieldCT::from_witness(s.inverse().unwrap_or(Fr::one()), &mut builder);
+            accumulator
+                .blind_with_scalars(&basis, &r_ct, &s_ct, &s_inverse, &mut builder, &mut driver)
+                .unwrap();
+            accumulator.set_public(&mut builder, &mut driver).unwrap();
+            let expected = [
+                (points[0] * s + x * r).into_affine(),
+                (points[1] * s - one * r).into_affine(),
+            ];
+            assert_eq!(public_points(&builder), expected);
+            let (verified, key) = prove_and_verify(builder, &mut driver);
+            assert_eq!(
+                verified,
+                is_valid && !s.is_zero(),
+                "r {r}, s {s}, valid {is_valid}"
+            );
+            match &reference_key {
+                Some(reference) => assert_eq!(&key, reference, "the key changed"),
+                None => reference_key = Some(key),
+            }
+        }
+    }
+
+    /// The outputs are bound to the accumulator: replacing them by another valid accumulator
+    /// makes the circuit unsatisfiable.
+    #[test]
+    fn blinded_outputs_cannot_be_replaced_by_another_valid_accumulator() {
+        let (basis, _) = crs(2);
+        let valid = [basis.monomials[1], -basis.monomials[0]];
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        let mut accumulator = witness_points(valid, &mut builder, &mut driver);
+        accumulator
+            .blind_for_private_recursion(&basis, &mut builder, &mut driver)
+            .unwrap();
+        accumulator.set_public(&mut builder, &mut driver).unwrap();
+        let blinded = public_points(&builder);
+        assert_ne!(blinded, valid);
+        let mask = (BigUint::from(1u64) << 136) - 1u64;
+        let limbs = valid.iter().flat_map(|point| {
+            let (x, y) = point.xy().unwrap();
+            [x, y].into_iter().flat_map(|coordinate| {
+                let coordinate = BigUint::from(coordinate);
+                [Fr::from(&coordinate & &mask), Fr::from(coordinate >> 136)]
+            })
+        });
+        for (index, limb) in builder.public_inputs.clone().into_iter().zip(limbs) {
+            builder.set_variable(index, limb);
+        }
+        assert_eq!(public_points(&builder), valid);
+        assert!(!prove_and_verify(builder, &mut driver).0);
+    }
+
+    #[test]
+    fn blinding_needs_the_crs_basis() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        let mut accumulator = witness_points([Affine::zero(); 2], &mut builder, &mut driver);
+        let (mut basis, _) = crs(2);
+        basis.monomials.swap(0, 1);
+        for crs in [ProverCrs::default(), basis] {
+            assert!(
+                accumulator
+                    .blind_for_private_recursion(&crs, &mut builder, &mut driver)
+                    .is_err()
+            );
+        }
+    }
 }

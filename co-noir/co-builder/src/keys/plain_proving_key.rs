@@ -51,6 +51,7 @@ pub fn create_prover_instance<P: CurveGroup>(
         public_inputs: Vec::with_capacity(circuit.public_inputs.len()),
         circuit_size: dyadic_circuit_size as u32,
         final_active_wire_idx,
+        proof_privacy: circuit.proof_privacy(),
         ..Default::default()
     };
 

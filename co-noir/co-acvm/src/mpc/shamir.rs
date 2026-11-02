@@ -509,7 +509,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         &mut self,
         visibility: RecursionInputVisibility,
     ) -> eyre::Result<()> {
-        super::agree_recursion_input_visibility(self.net, self.state.num_parties, visibility)
+        super::agree_recursion_input_visibility(self.net, self.state.num_parties, visibility)?;
+        // Checked after the agreement, so that all parties fail together.
+        eyre::ensure!(
+            visibility != RecursionInputVisibility::PrivateRecursion,
+            "Private recursion is not supported by the Shamir driver"
+        );
+        Ok(())
     }
 
     fn is_shared(a: &Self::AcvmType) -> bool {
