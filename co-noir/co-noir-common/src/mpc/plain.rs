@@ -2,7 +2,6 @@ use super::NoirUltraHonkProver;
 use crate::HonkCurve;
 use crate::honk_proof::TranscriptFieldType;
 use ark_ec::AffineRepr;
-use ark_ff::Field;
 use ark_ff::One;
 use ark_ff::PrimeField;
 use ark_ff::UniformRand;
@@ -116,7 +115,11 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _state: &mut Self::State,
     ) -> Vec<P::ScalarField> {
         debug_assert_eq!(a.len(), b.len());
-        a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect()
+        a.par_iter()
+            .zip_eq(b.par_iter())
+            .with_min_len(1024)
+            .map(|(a, b)| *a * b)
+            .collect()
     }
 
     fn reshare<N: Network>(
@@ -143,7 +146,11 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
         debug_assert_eq!(a.len(), b.len());
-        Ok(a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect())
+        Ok(a.par_iter()
+            .zip_eq(b.par_iter())
+            .with_min_len(1024)
+            .map(|(a, b)| *a * b)
+            .collect())
     }
 
     fn add_with_public(
@@ -217,7 +224,11 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<P::ScalarField>> {
         debug_assert_eq!(a.len(), b.len());
-        Ok(a.iter().zip(b.iter()).map(|(a, b)| *a * b).collect())
+        Ok(a.par_iter()
+            .zip_eq(b.par_iter())
+            .with_min_len(1024)
+            .map(|(a, b)| *a * b)
+            .collect())
     }
 
     fn inv_many<N: Network>(
@@ -225,15 +236,11 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        let mut res = Vec::with_capacity(a.len());
-
-        for a in a {
-            if a.is_zero() {
-                eyre::bail!("Cannot invert zero");
-            }
-            res.push(a.inverse().unwrap());
+        if a.iter().any(|a| a.is_zero()) {
+            eyre::bail!("Cannot invert zero");
         }
-
+        let mut res = a.to_vec();
+        ark_ff::batch_inversion(&mut res);
         Ok(res)
     }
 
@@ -242,12 +249,10 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<()> {
-        for a in a.iter_mut() {
-            if a.is_zero() {
-                eyre::bail!("Cannot invert zero");
-            }
-            a.inverse_in_place().unwrap();
+        if a.iter().any(|a| a.is_zero()) {
+            eyre::bail!("Cannot invert zero");
         }
+        ark_ff::batch_inversion(a);
         Ok(())
     }
 
@@ -256,11 +261,8 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
         _net: &N,
         _state: &mut Self::State,
     ) -> eyre::Result<()> {
-        for a in a.iter_mut() {
-            if !a.is_zero() {
-                a.inverse_in_place().unwrap();
-            }
-        }
+        // Batch inversion leaves zeros unchanged.
+        ark_ff::batch_inversion(a);
         Ok(())
     }
 
@@ -367,5 +369,59 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for PlainUltraHon
                 [res0_0, res0_1, res1_0, res1_1]
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlainUltraHonkDriver;
+    use crate::mpc::NoirUltraHonkProver;
+    use ark_ff::{Field, UniformRand, Zero};
+    use rand::{SeedableRng, rngs::StdRng};
+
+    type Driver = PlainUltraHonkDriver;
+    type P = ark_bn254::G1Projective;
+    type F = ark_bn254::Fr;
+
+    #[test]
+    fn batched_inversion_matches_serial_reference() {
+        let mut rng = StdRng::seed_from_u64(0xC0DEC0DE);
+        let mut state = Default::default();
+        let net = ();
+
+        // Not a multiple of any chunk size used by the parallel batch inversion.
+        let a: Vec<F> = (0..1027).map(|_| F::rand(&mut rng)).collect();
+        let expected: Vec<F> = a.iter().map(|x| x.inverse().unwrap()).collect();
+
+        let res = <Driver as NoirUltraHonkProver<P>>::inv_many(&a, &net, &mut state).unwrap();
+        assert_eq!(res, expected);
+
+        let mut b = a.clone();
+        <Driver as NoirUltraHonkProver<P>>::inv_many_in_place(&mut b, &net, &mut state).unwrap();
+        assert_eq!(b, expected);
+
+        let mut with_zeros = a.clone();
+        for x in with_zeros.iter_mut().step_by(5) {
+            *x = F::zero();
+        }
+        let expected_with_zeros: Vec<F> = with_zeros
+            .iter()
+            .map(|x| x.inverse().unwrap_or(F::zero()))
+            .collect();
+        let mut c = with_zeros.clone();
+        <Driver as NoirUltraHonkProver<P>>::inv_many_in_place_leaking_zeros(
+            &mut c, &net, &mut state,
+        )
+        .unwrap();
+        assert_eq!(c, expected_with_zeros);
+
+        assert!(
+            <Driver as NoirUltraHonkProver<P>>::inv_many(&with_zeros, &net, &mut state).is_err()
+        );
+        let mut d = with_zeros.clone();
+        assert!(
+            <Driver as NoirUltraHonkProver<P>>::inv_many_in_place(&mut d, &net, &mut state)
+                .is_err()
+        );
     }
 }

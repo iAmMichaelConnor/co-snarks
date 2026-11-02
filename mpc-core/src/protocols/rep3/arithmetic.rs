@@ -256,13 +256,14 @@ pub fn inv_vec<F: PrimeField, N: Network>(
     state: &mut Rep3State,
 ) -> eyre::Result<Vec<FieldShare<F>>> {
     let r = (0..a.len()).map(|_| rand(state)).collect_vec();
-    let y = mul_open_vec(a, &r, net, state)?;
+    let mut y = mul_open_vec(a, &r, net, state)?;
     if y.iter().any(|y| y.is_zero()) {
         eyre::bail!("During execution of inverse in MPC: cannot compute inverse of zero",);
     }
 
-    // we can unwrap as we checked that none of the y is zero
-    Ok(izip!(r, y).map(|(r, y)| r * y.inverse().unwrap()).collect())
+    // y is public, so all elements are inverted with one batch inversion.
+    ark_ff::batch_inversion(&mut y);
+    Ok(izip!(r, y).map(|(r, y)| r * y).collect())
 }
 
 /// Performs the opening of a shared value and returns the equivalent public value.
