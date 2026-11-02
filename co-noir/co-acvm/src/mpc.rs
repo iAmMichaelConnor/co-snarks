@@ -16,6 +16,58 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
+/// How the recursive verifier treats secret-shared recursion inputs: the inner proof, its public
+/// inputs, the inner verification key, the key hash and a witness predicate.
+///
+/// All MPC parties must select the same value; the builder checks this with
+/// [`NoirWitnessExtensionProtocol::agree_recursion_input_visibility`] before it looks at any
+/// recursion input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecursionInputVisibility {
+    /// Never open recursion inputs. A recursion constraint with a secret-shared input is rejected
+    /// before any secret-dependent message is sent.
+    #[default]
+    KeepSecret,
+    /// Open the secret-shared recursion inputs (including a witness predicate) to all MPC parties
+    /// before the recursive verifier is built. The inner proof is then verified on public values,
+    /// so the circuit is the same as barretenberg's.
+    RevealToParticipants,
+}
+
+impl RecursionInputVisibility {
+    fn tag(self) -> u8 {
+        match self {
+            RecursionInputVisibility::KeepSecret => 0,
+            RecursionInputVisibility::RevealToParticipants => 1,
+        }
+    }
+}
+
+/// Sends `visibility` to all other parties and checks that every party sent the same value. Only
+/// this public setting is sent.
+fn agree_recursion_input_visibility<N: mpc_net::Network>(
+    net: &N,
+    num_parties: usize,
+    visibility: RecursionInputVisibility,
+) -> eyre::Result<()> {
+    let mut message = b"co-noir recursion input visibility v1".to_vec();
+    message.push(visibility.tag());
+    let others = (0..num_parties).filter(|party| *party != net.id());
+    for party in others.clone() {
+        net.send(party, message.clone().into())?;
+    }
+    // Receive from every party before deciding, so that no message is left in the channels.
+    let mut agree = true;
+    for party in others {
+        agree &= net.recv(party)?.as_ref() == message.as_slice();
+    }
+    eyre::ensure!(
+        agree,
+        "The MPC parties selected different recursion input visibilities; no recursion input was opened"
+    );
+    Ok(())
+}
+
 /// The default maximum number of shared-index lookup gates whose one-hot vectors are built
 /// together when the proving key's lookup read counts are constructed, see
 /// [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`].
@@ -455,6 +507,14 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )>;
+
+    /// Checks that all parties use the same [`RecursionInputVisibility`]. Called by the circuit
+    /// builder for every recursion constraint, before any recursion input is examined or opened.
+    /// Implementations must exchange only the given public setting.
+    fn agree_recursion_input_visibility(
+        &mut self,
+        visibility: RecursionInputVisibility,
+    ) -> eyre::Result<()>;
 
     /// Called by the SHA-256 compression gadget of the circuit builder (`sha256_block`) before its
     /// first plookup read, with the compression's inputs. A driver may compute the values of all

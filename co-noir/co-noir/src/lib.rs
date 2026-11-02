@@ -35,6 +35,7 @@ use std::{array, collections::BTreeMap, fs::File, io::Write, path::Path, sync::A
 pub use acir::FieldElement;
 pub use ark_bn254::Bn254;
 pub use ark_ec::pairing::Pairing;
+pub use co_acvm::mpc::RecursionInputVisibility;
 pub use co_acvm::{Rep3AcvmType, ShamirAcvmType};
 pub use co_builder::prelude::constraint_system_from_reader;
 pub use co_builder::prelude::get_constraint_system_from_artifact;
@@ -199,12 +200,33 @@ pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
     )
 }
 
-/// Generate a REP3 shared proving key
+/// Generate a REP3 shared proving key. Secret-shared recursion inputs are rejected, see
+/// [`generate_proving_key_rep3_with_recursion_input_visibility`].
 pub fn generate_proving_key_rep3<N: Network>(
     constraint_system: &AcirFormat<ark_bn254::Fr>,
     witness_share: Rep3SharedWitness<ark_bn254::Fr>,
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+) -> Result<Rep3ProvingKey<Bn254G1>> {
+    generate_proving_key_rep3_with_recursion_input_visibility(
+        constraint_system,
+        witness_share,
+        net,
+        prover_crs,
+        RecursionInputVisibility::default(),
+    )
+}
+
+/// Generate a REP3 shared proving key with the given treatment of secret-shared recursion
+/// inputs. [`RecursionInputVisibility::RevealToParticipants`] opens the inner proof, its public
+/// inputs, the verification key, the key hash and the predicate of every recursion constraint to
+/// all parties. All parties must pass the same value.
+pub fn generate_proving_key_rep3_with_recursion_input_visibility<N: Network>(
+    constraint_system: &AcirFormat<ark_bn254::Fr>,
+    witness_share: Rep3SharedWitness<ark_bn254::Fr>,
+    net: &N,
+    prover_crs: &ProverCrs<Bn254G1>,
+    recursion_input_visibility: RecursionInputVisibility,
 ) -> Result<Rep3ProvingKey<Bn254G1>> {
     let id = PartyID::try_from(net.id())?;
     let mut driver = Rep3AcvmSolver::new(net, A2BType::default())?;
@@ -215,13 +237,14 @@ pub fn generate_proving_key_rep3<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
-    let builder = Rep3CoBuilder::create_circuit(
+    let builder = Rep3CoBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         witness_share,
         HonkRecursion::UltraHonk,
         crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     // generate pk
     Ok(proving_key::create_prover_instance(
@@ -231,7 +254,8 @@ pub fn generate_proving_key_rep3<N: Network>(
     )?)
 }
 
-/// Generate a shamir shared proving key
+/// Generate a shamir shared proving key. Secret-shared recursion inputs are rejected, see
+/// [`generate_proving_key_shamir_with_recursion_input_visibility`].
 pub fn generate_proving_key_shamir<N: Network>(
     num_parties: usize,
     threshold: usize,
@@ -239,6 +263,28 @@ pub fn generate_proving_key_shamir<N: Network>(
     witness_share: ShamirSharedWitness<ark_bn254::Fr>,
     net: &N,
     prover_crs: &ProverCrs<Bn254G1>,
+) -> Result<ShamirProvingKey<Bn254G1>> {
+    generate_proving_key_shamir_with_recursion_input_visibility(
+        num_parties,
+        threshold,
+        constraint_system,
+        witness_share,
+        net,
+        prover_crs,
+        RecursionInputVisibility::default(),
+    )
+}
+
+/// Generate a shamir shared proving key with the given treatment of secret-shared recursion
+/// inputs, see [`generate_proving_key_rep3_with_recursion_input_visibility`].
+pub fn generate_proving_key_shamir_with_recursion_input_visibility<N: Network>(
+    num_parties: usize,
+    threshold: usize,
+    constraint_system: &AcirFormat<ark_bn254::Fr>,
+    witness_share: ShamirSharedWitness<ark_bn254::Fr>,
+    net: &N,
+    prover_crs: &ProverCrs<Bn254G1>,
+    recursion_input_visibility: RecursionInputVisibility,
 ) -> Result<ShamirProvingKey<Bn254G1>> {
     let id = net.id();
     // We have to handle precomputation on the fly, so amount is 0 initially
@@ -255,13 +301,14 @@ pub fn generate_proving_key_shamir<N: Network>(
         &ProverCrs::<Bn254G1>::default()
     };
     // create the circuit
-    let builder = ShamirCoBuilder::create_circuit(
+    let builder = ShamirCoBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         witness_share,
         HonkRecursion::UltraHonk,
         crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     // generate pk
     Ok(proving_key::create_prover_instance(

@@ -1,5 +1,8 @@
 use super::plain::PlainAcvmSolver;
-use super::{DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, downcast};
+use super::{
+    DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, RecursionInputVisibility,
+    downcast,
+};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
@@ -934,6 +937,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         lut: &<Self::Lookup as LookupTableProvider<F>>::LutType,
     ) -> eyre::Result<&Vec<F>> {
         <Self::Lookup as mpc_core::lut::LookupTableProvider<F>>::get_public_lut(lut)
+    }
+
+    fn agree_recursion_input_visibility(
+        &mut self,
+        visibility: RecursionInputVisibility,
+    ) -> eyre::Result<()> {
+        super::agree_recursion_input_visibility(self.net, 3, visibility)
     }
 
     fn is_shared(a: &Self::AcvmType) -> bool {

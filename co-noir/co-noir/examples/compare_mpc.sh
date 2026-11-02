@@ -132,6 +132,11 @@ for f in "${test_cases[@]}"; do
 
   failed=0
   case_failed=0
+  # the recursion circuits verify a secret-shared inner proof, which all parties must agree to open
+  reveal_flag=""
+  if [[ "$f" == recursion* ]]; then
+    reveal_flag="--reveal-recursion-inputs"
+  fi
 
   # compile witnesses and bytecode with specified nargo version
   echo "compiling circuits with nargo"
@@ -151,9 +156,9 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying without ZK in co-noir and poseidon transcript"
   # run proving in MPC
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --fields-as-json $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   wait $(jobs -p)
   # verify proof
   bash -c "cargo run --release --bin co-noir -- verify --proof test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --hasher poseidon2 --crs ../../co-noir-common/src/crs/bn254_g2.dat$PIPE"  || failed=1
@@ -169,9 +174,9 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying with ZK in co-noir and poseidon transcript"
   # run proving in MPC with ZK
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party2.toml --out test_vectors/${f}/zk_proof.1.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher poseidon2 --config configs/party3.toml --out test_vectors/${f}/zk_proof.2.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party2.toml --out test_vectors/${f}/zk_proof.1.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher poseidon2 --config configs/party3.toml --out test_vectors/${f}/zk_proof.2.proof --zk --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   wait $(jobs -p)
   # verify proof
   bash -c "cargo run --release --bin co-noir -- verify --proof test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --hasher poseidon2 --crs ../../co-noir-common/src/crs/bn254_g2.dat --has-zk $PIPE"  || failed=1
@@ -190,9 +195,9 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying without ZK in co-noir and keccak transcript"
   # run proving in MPC
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --fields-as-json $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --fields-as-json $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk  $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk $PIPE"  || failed=1
   wait $(jobs -p)
   # verify proof
   bash -c "cargo run --release --bin co-noir -- verify --proof test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --hasher keccak --crs ../../co-noir-common/src/crs/bn254_g2.dat $PIPE"  || failed=1
@@ -208,9 +213,9 @@ for f in "${test_cases[@]}"; do
 
   echo "proving and verifying with ZK in co-noir and keccak transcript"
   # run proving in MPC with ZK
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1&
-  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 --hasher keccak --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.0.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party1.toml --out test_vectors/${f}/cosnark_proof --public-input test_vectors/${f}/cosnark_public_input --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.1.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party2.toml --out test_vectors/${f}/cosnark_proof.1.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1&
+  bash -c "cargo run --release --bin co-noir -- build-and-generate-proof --witness test_vectors/${f}/${f}.gz.2.shared --circuit test_vectors/${f}/target/${f}.json --crs ../../co-noir-common/src/crs/bn254_g1.dat --protocol REP3 $reveal_flag --hasher keccak --config configs/party3.toml --out test_vectors/${f}/cosnark_proof.2.proof --vk test_vectors/${f}/cosnark_vk --zk $PIPE"  || failed=1
   wait $(jobs -p)
   # verify proof
   bash -c "cargo run --release --bin co-noir -- verify --proof test_vectors/${f}/cosnark_proof --vk test_vectors/${f}/cosnark_vk --public-input test_vectors/${f}/cosnark_public_input --hasher keccak --crs ../../co-noir-common/src/crs/bn254_g2.dat --has-zk $PIPE"  || failed=1

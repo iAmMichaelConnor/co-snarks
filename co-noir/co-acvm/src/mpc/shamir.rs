@@ -1,4 +1,4 @@
-use super::{NoirWitnessExtensionProtocol, plain::PlainAcvmSolver};
+use super::{NoirWitnessExtensionProtocol, RecursionInputVisibility, plain::PlainAcvmSolver};
 use ark_ec::CurveGroup;
 use ark_ff::{One, PrimeField};
 use co_brillig::mpc::{ShamirBrilligDriver, ShamirBrilligType};
@@ -503,6 +503,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         _lut: &<Self::Lookup as mpc_core::lut::LookupTableProvider<F>>::LutType,
     ) -> usize {
         panic!("get_length_of_lut: Operation atm not supported")
+    }
+
+    fn agree_recursion_input_visibility(
+        &mut self,
+        visibility: RecursionInputVisibility,
+    ) -> eyre::Result<()> {
+        super::agree_recursion_input_visibility(self.net, self.state.num_parties, visibility)
     }
 
     fn is_shared(a: &Self::AcvmType) -> bool {

@@ -36,7 +36,10 @@ use ark_ff::AdditiveGroup;
 use ark_ff::{Field, One, PrimeField, Zero};
 use co_acvm::Rep3AcvmSolver;
 use co_acvm::ShamirAcvmSolver;
-use co_acvm::{PlainAcvmSolver, mpc::NoirWitnessExtensionProtocol};
+use co_acvm::{
+    PlainAcvmSolver,
+    mpc::{NoirWitnessExtensionProtocol, RecursionInputVisibility},
+};
 use co_noir_common::constants::{NUM_WIRES, PUBLIC_INPUTS_SIZE};
 use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
@@ -199,6 +202,7 @@ pub struct GenericUltraCircuitBuilder<
     // Stores gate index where Read/Write type is shared
     pub memory_records_shared: BTreeMap<u32, T::AcvmType>, // order does not matter
     pub is_write_vk_mode: bool,
+    pub(crate) recursion_input_visibility: RecursionInputVisibility,
 }
 
 // This workaround is required due to mutability issues
@@ -4231,6 +4235,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             memory_records_shared: BTreeMap::new(),
             current_tag: 0,
             is_write_vk_mode: true,
+            recursion_input_visibility: RecursionInputVisibility::default(),
         }
     }
 
@@ -4241,13 +4246,37 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         builder
     }
 
+    /// Builds the circuit with the default [`RecursionInputVisibility::KeepSecret`], i.e. a
+    /// recursion constraint with a secret-shared input is rejected.
     pub fn create_circuit(
+        constraint_system: &AcirFormat<P::ScalarField>,
+        size_hint: usize,
+        witness: Vec<T::AcvmType>,
+        honk_recursion: HonkRecursion, // 1 for ultrahonk
+        crs: &ProverCrs<P>, // We need the CRS because in recursive verification, we need to generate a placeholder proof
+        driver: &mut T,
+    ) -> eyre::Result<Self> {
+        Self::create_circuit_with_recursion_input_visibility(
+            constraint_system,
+            size_hint,
+            witness,
+            honk_recursion,
+            crs,
+            driver,
+            RecursionInputVisibility::default(),
+        )
+    }
+
+    /// Builds the circuit with the given treatment of secret-shared recursion inputs. All MPC
+    /// parties must pass the same `recursion_input_visibility`.
+    pub fn create_circuit_with_recursion_input_visibility(
         constraint_system: &AcirFormat<P::ScalarField>,
         size_hint: usize,
         mut witness: Vec<T::AcvmType>,
         honk_recursion: HonkRecursion, // 1 for ultrahonk
         crs: &ProverCrs<P>, // We need the CRS because in recursive verification, we need to generate a placeholder proof
         driver: &mut T,
+        recursion_input_visibility: RecursionInputVisibility,
     ) -> eyre::Result<Self> {
         tracing::trace!("Builder create circuit");
 
@@ -4274,6 +4303,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             constraint_system.public_inputs.to_owned(),
             is_write_vk_mode,
         );
+        builder.recursion_input_visibility = recursion_input_visibility;
         let metadata = ProgramMetadata {
             honk_recursion,
             size_hint,
