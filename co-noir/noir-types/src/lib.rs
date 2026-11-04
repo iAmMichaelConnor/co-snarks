@@ -53,7 +53,7 @@ impl HonkProofType {
         buf_public_inputs: &[u8],
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::from_buffer(buf_proof)?;
-        let public_inputs = U256::from_buffer(buf_public_inputs);
+        let public_inputs = U256::from_buffer(buf_public_inputs)?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 
@@ -107,20 +107,41 @@ impl HonkProofType {
                 .collect(),
         }
     }
+    /// Parses a decimal or `0x`-prefixed hexadecimal string as a 256-bit integer.
+    fn parse_u256(s: &str) -> eyre::Result<U256> {
+        if s.strip_prefix("0x").unwrap_or(s).is_empty() {
+            eyre::bail!("invalid integer {s:?}");
+        }
+        s.parse::<Uint<256, 4>>()
+            .map(U256)
+            .map_err(|e| eyre::eyre!("invalid integer {s:?}: {e}"))
+    }
+
+    /// Parses a decimal or `0x`-prefixed hexadecimal string as a field element, which must be
+    /// below the modulus.
+    fn parse_field(s: &str) -> eyre::Result<ark_bn254::Fr> {
+        let value = Self::parse_u256(s)?;
+        let field = ark_bn254::Fr::from_be_bytes_mod_order(&value.0.to_be_bytes::<32>());
+        if U256::convert_field_into(&field) != value {
+            eyre::bail!("non-canonical field element {s:?}");
+        }
+        Ok(field)
+    }
+
     pub fn proof_and_public_inputs_from_string_field(
         str_proof: Vec<String>,
         str_public_inputs: Vec<String>,
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<ark_bn254::Fr>::new(
             str_proof
-                .into_iter()
-                .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_field(s))
+                .collect::<eyre::Result<_>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| s.parse::<ark_bn254::Fr>().unwrap())
-            .collect();
+            .iter()
+            .map(|s| Self::parse_field(s))
+            .collect::<eyre::Result<_>>()?;
         Ok(HonkProofType::FieldElements(proof, public_inputs))
     }
     pub fn proof_and_public_inputs_from_string_u256(
@@ -129,14 +150,14 @@ impl HonkProofType {
     ) -> eyre::Result<HonkProofType> {
         let proof = HonkProof::<U256>::new(
             str_proof
-                .into_iter()
-                .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-                .collect(),
+                .iter()
+                .map(|s| Self::parse_u256(s))
+                .collect::<eyre::Result<_>>()?,
         );
         let public_inputs = str_public_inputs
-            .into_iter()
-            .map(|s| U256(Uint::<256, 4>::from(s.parse::<u128>().unwrap())))
-            .collect();
+            .iter()
+            .map(|s| Self::parse_u256(s))
+            .collect::<eyre::Result<_>>()?;
         Ok(HonkProofType::U256Values(proof, public_inputs))
     }
 }
@@ -185,15 +206,7 @@ impl HonkProof<U256> {
     }
 
     pub fn from_buffer(buf: &[u8]) -> eyre::Result<Self> {
-        let res = buf
-            .chunks(32)
-            .map(|chunk| {
-                U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
-                ))
-            })
-            .collect::<Vec<U256>>();
-        Ok(Self::new(res))
+        Ok(Self::new(U256::from_buffer(buf)?))
     }
 }
 
@@ -211,12 +224,13 @@ impl<F: Field> SerializeF<F> {
         let size = buf.len();
         let mut offset = 0;
 
-        // Check sizes
+        // Check sizes. An element of an extension field takes `field_size()` bytes.
         let num_elements = if size_included {
-            let num_elements =
-                (size - Self::VEC_LEN_BYTES as usize) / Self::FIELDSIZE_BYTES as usize;
-            if num_elements * Self::FIELDSIZE_BYTES as usize + Self::VEC_LEN_BYTES as usize != size
-            {
+            let payload_size = size
+                .checked_sub(Self::VEC_LEN_BYTES as usize)
+                .ok_or_else(|| eyre::eyre!("invalid length"))?;
+            let num_elements = payload_size / Self::field_size();
+            if num_elements * Self::field_size() != payload_size {
                 eyre::bail!("invalid length");
             }
 
@@ -226,8 +240,8 @@ impl<F: Field> SerializeF<F> {
             }
             num_elements
         } else {
-            let num_elements = size / Self::FIELDSIZE_BYTES as usize;
-            if num_elements * Self::FIELDSIZE_BYTES as usize != size {
+            let num_elements = size / Self::field_size();
+            if num_elements * Self::field_size() != size {
                 eyre::bail!("invalid length");
             }
             num_elements
@@ -612,22 +626,23 @@ impl U256 {
             .flat_map(|el| el.0.to_be_bytes::<32>().to_vec())
             .collect::<Vec<u8>>()
     }
-    pub fn from_buffer(buffer: &[u8]) -> Vec<Self> {
-        buffer
-            .chunks(32)
-            .map(|chunk| {
-                U256(Uint::<256, 4>::from_be_bytes::<32>(
-                    chunk.try_into().expect("Chunk should be 32 bytes"),
-                ))
-            })
-            .collect::<Vec<U256>>()
+    /// Parses a buffer of 32-byte big-endian words.
+    pub fn from_buffer(buffer: &[u8]) -> eyre::Result<Vec<Self>> {
+        let (words, rest) = buffer.as_chunks::<32>();
+        if !rest.is_empty() {
+            eyre::bail!("invalid length");
+        }
+        Ok(words
+            .iter()
+            .map(|word| U256(Uint::<256, 4>::from_be_bytes(*word)))
+            .collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{HonkProofType, SerializeF};
-    use ark_bn254::Fr;
+    use super::{HonkProof, HonkProofType, SerializeF, U256};
+    use ark_bn254::{Fq, Fq2, Fr};
     use ark_ff::PrimeField;
     use num_bigint::BigUint;
 
@@ -636,6 +651,109 @@ mod tests {
         let mut bytes = vec![0u8; 32 - raw.len()];
         bytes.extend(raw);
         bytes
+    }
+
+    #[test]
+    fn malformed_buffer_lengths_are_errors() {
+        for len in 0..100 {
+            let bytes = vec![0u8; len];
+            // A zero length prefix declares an empty vector, so only 4 bytes are valid.
+            assert_eq!(
+                SerializeF::<Fr>::from_buffer(&bytes, true).is_ok(),
+                len == 4
+            );
+            assert_eq!(
+                SerializeF::<Fr>::from_buffer(&bytes, false).is_ok(),
+                len % 32 == 0
+            );
+            assert_eq!(
+                HonkProof::<U256>::from_buffer(&bytes).is_ok(),
+                len % 32 == 0
+            );
+            assert_eq!(U256::from_buffer(&bytes).is_ok(), len % 32 == 0);
+            assert_eq!(
+                HonkProofType::proof_and_public_inputs_from_buffer_u256(&bytes, &[]).is_ok(),
+                len % 32 == 0
+            );
+            assert_eq!(
+                HonkProofType::proof_and_public_inputs_from_buffer_u256(&[], &bytes).is_ok(),
+                len % 32 == 0
+            );
+        }
+    }
+
+    #[test]
+    fn extension_field_buffers_count_whole_elements() {
+        let mut bytes = vec![0u8; 64];
+        bytes[31] = 3;
+        bytes[63] = 5;
+        let expected = vec![Fq2::new(Fq::from(3u64), Fq::from(5u64))];
+        assert_eq!(
+            SerializeF::<Fq2>::from_buffer(&bytes, false).unwrap(),
+            expected
+        );
+        let mut prefixed = 1u32.to_be_bytes().to_vec();
+        prefixed.extend(&bytes);
+        assert_eq!(
+            SerializeF::<Fq2>::from_buffer(&prefixed, true).unwrap(),
+            expected
+        );
+        assert!(SerializeF::<Fq2>::from_buffer(&bytes[..32], false).is_err());
+    }
+
+    fn from_strings(strings: &[String], field: bool) -> eyre::Result<HonkProofType> {
+        if field {
+            HonkProofType::proof_and_public_inputs_from_string_field(strings.to_vec(), vec![])
+        } else {
+            HonkProofType::proof_and_public_inputs_from_string_u256(strings.to_vec(), vec![])
+        }
+    }
+
+    #[test]
+    fn json_strings_are_parsed_at_full_width() {
+        let modulus: BigUint = Fr::MODULUS.into();
+        let max = &modulus - 1u8;
+        for (text, expected) in [
+            ("0".to_string(), "0".to_string()),
+            ("0x0".to_string(), "0".to_string()),
+            (max.to_string(), max.to_string()),
+            (format!("0x{max:x}"), max.to_string()),
+        ] {
+            for field in [true, false] {
+                let parsed = from_strings(std::slice::from_ref(&text), field).unwrap();
+                assert_eq!(parsed.proof_to_strings(), vec![expected.clone()]);
+            }
+        }
+        // Above 2^128, as Keccak words routinely are, and above the field modulus.
+        let wide: BigUint = (BigUint::from(1u8) << 255u32) + 12345u32;
+        let parsed = from_strings(&[wide.to_string()], false).unwrap();
+        assert_eq!(parsed.proof_to_strings(), vec![wide.to_string()]);
+    }
+
+    #[test]
+    fn invalid_json_strings_are_errors() {
+        let modulus: BigUint = Fr::MODULUS.into();
+        for text in ["", "0x", "abc", "-1", "1.5", "0xzz"] {
+            for field in [true, false] {
+                assert!(from_strings(&[text.to_string()], field).is_err(), "{text}");
+                let strings = vec![text.to_string()];
+                let public_inputs = if field {
+                    HonkProofType::proof_and_public_inputs_from_string_field(vec![], strings)
+                } else {
+                    HonkProofType::proof_and_public_inputs_from_string_u256(vec![], strings)
+                };
+                assert!(public_inputs.is_err(), "{text}");
+            }
+        }
+        // Too wide for 256 bits.
+        let too_wide = (BigUint::from(1u8) << 256u32).to_string();
+        assert!(from_strings(&[too_wide], false).is_err());
+        // Field elements must be below the modulus.
+        for value in [modulus.clone(), &modulus + 1u8] {
+            for text in [value.to_string(), format!("0x{value:x}")] {
+                assert!(from_strings(&[text], true).is_err());
+            }
+        }
     }
 
     #[test]
