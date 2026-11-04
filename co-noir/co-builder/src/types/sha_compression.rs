@@ -128,6 +128,11 @@ impl<F: PrimeField> SHA256<F> {
         h_init[7].create_range_constraint(32, builder, driver)?;
         input[0].create_range_constraint(32, builder, driver)?;
 
+        // Lets the driver compute the values of all lookup reads below at once.
+        let state = array::from_fn(|i| h_init[i].get_value(builder, driver));
+        let message = array::from_fn(|i| input[i].get_value(builder, driver));
+        driver.precompute_sha256_compression(&state, &message)?;
+
         // Initialize round variables with previous block output
         let mut a = SparseValue::new(h_init[0].clone(), builder, driver);
         let mut b = Self::map_into_maj_sparse_form(h_init[1].clone(), builder, driver)?;

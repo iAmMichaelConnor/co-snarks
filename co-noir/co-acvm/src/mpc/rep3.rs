@@ -30,8 +30,11 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::any::TypeId;
 use std::array;
+use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::BitXor;
+
+mod sha256_reads;
 
 type ArithmeticShare<F> = Rep3PrimeFieldShare<F>;
 
@@ -42,6 +45,9 @@ pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     lut_provider: Rep3FieldLookupTable<F>,
     plain_solver: PlainAcvmSolver<F>,
     lookup_read_count_batch_size: Option<usize>,
+    /// The remaining lookup reads of the current SHA-256 compression, see
+    /// [`NoirWitnessExtensionProtocol::precompute_sha256_compression`].
+    sha256_reads: VecDeque<sha256_reads::Sha256Read<F>>,
     phantom_data: PhantomData<F>,
 }
 
@@ -55,6 +61,7 @@ impl<'a, F: PrimeField + FieldUint, N: Network> Rep3AcvmSolver<'a, F, N> {
             lut_provider: Rep3FieldLookupTable::new(),
             plain_solver: PlainAcvmSolver::<F>::default(),
             lookup_read_count_batch_size: Some(DEFAULT_LOOKUP_READ_COUNT_BATCH),
+            sha256_reads: VecDeque::new(),
             phantom_data: PhantomData,
         })
     }
@@ -65,6 +72,34 @@ impl<'a, F: PrimeField + FieldUint, N: Network> Rep3AcvmSolver<'a, F, N> {
     /// same value.
     pub fn set_lookup_read_count_batch_size(&mut self, batch_size: Option<usize>) {
         self.lookup_read_count_batch_size = batch_size;
+    }
+
+    /// Returns the next precomputed read of the current SHA-256 compression if `table` is a table
+    /// of the compression gadget and reads are precomputed. A read of another table than the
+    /// next precomputed one is an error.
+    fn next_sha256_read(
+        &mut self,
+        table: Option<sha256_reads::Sha256Table>,
+    ) -> eyre::Result<Option<Vec<Vec<Rep3AcvmType<F>>>>> {
+        let Some(table) = table else {
+            return Ok(None);
+        };
+        let Some(read) = self.sha256_reads.pop_front() else {
+            return Ok(None);
+        };
+        if read.table != table {
+            self.sha256_reads.clear();
+            eyre::bail!(
+                "SHA-256 lookup read of {table:?} where {:?} was precomputed: the reads do not follow the compression gadget's order",
+                read.table
+            );
+        }
+        Ok(Some(
+            read.outputs
+                .into_iter()
+                .map(|output| output.into_iter().map(Rep3AcvmType::Shared).collect())
+                .collect(),
+        ))
     }
 
     /// Inverts a shared non-native field element without revealing whether it is zero (see
@@ -1731,6 +1766,38 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         conversion::b2a_selector(&result, self.net, &mut self.state)
     }
 
+    fn precompute_sha256_compression(
+        &mut self,
+        state: &[Self::AcvmType; 8],
+        message: &[Self::AcvmType; 16],
+    ) -> eyre::Result<()> {
+        eyre::ensure!(
+            self.sha256_reads.is_empty(),
+            "The previous SHA-256 compression made fewer lookup reads than were precomputed"
+        );
+        // With a public input, some reads have public keys and never reach the driver. Whether a
+        // value is shared is the same for all parties.
+        let inputs = state
+            .iter()
+            .chain(message)
+            .map(|x| match x {
+                Rep3AcvmType::Shared(x) => Some(*x),
+                Rep3AcvmType::Public(_) => None,
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(inputs) = inputs else {
+            return Ok(());
+        };
+        let bits = yao::sha256_compression_sparse_trace(
+            &array::from_fn(|i| inputs[i]),
+            &array::from_fn(|i| inputs[8 + i]),
+            self.net,
+            &mut self.state,
+        )?;
+        self.sha256_reads = sha256_reads::reads_from_trace(&bits)?;
+        Ok(())
+    }
+
     fn slice_and_get_sparse_table_with_rotation_values(
         &mut self,
         input1: Self::ArithmeticShare,
@@ -1745,6 +1812,12 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )> {
+        let table = sha256_reads::Sha256Table::of_rotation_read(basis_bits, rotation, base);
+        if let Some(read) = self.next_sha256_read(table)? {
+            let [sparse, rotated, key_a_slices, key_b_slices] =
+                <[_; 4]>::try_from(read).expect("A sparse-form read has four outputs");
+            return Ok((sparse, rotated, key_a_slices, key_b_slices));
+        }
         let result = yao::get_sparse_table_with_rotation_values(
             input1,
             input2,
@@ -1816,6 +1889,12 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         Vec<Self::AcvmType>,
         Vec<Self::AcvmType>,
     )> {
+        let table = sha256_reads::Sha256Table::of_normalization_read(table_type);
+        if let Some(read) = self.next_sha256_read(Some(table))? {
+            let [values, key_a_slices, key_b_slices] =
+                <[_; 3]>::try_from(read).expect("A normalization read has three outputs");
+            return Ok((values, key_a_slices, key_b_slices));
+        }
         let result = yao::get_sparse_normalization_values(
             input1,
             input2,

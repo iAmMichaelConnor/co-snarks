@@ -443,6 +443,20 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         Vec<Self::AcvmType>,
     )>;
 
+    /// Called by the SHA-256 compression gadget of the circuit builder (`sha256_block`) before its
+    /// first plookup read, with the compression's inputs. A driver may compute the values of all
+    /// of the gadget's reads here and return them from the following calls of
+    /// [`Self::slice_and_get_sparse_table_with_rotation_values`] and
+    /// [`Self::slice_and_get_sparse_normalization_values`], which then come in the gadget's fixed
+    /// order. The default does nothing.
+    fn precompute_sha256_compression(
+        &mut self,
+        _state: &[Self::AcvmType; 8],
+        _message: &[Self::AcvmType; 16],
+    ) -> eyre::Result<()> {
+        Ok(())
+    }
+
     /// Slices input1 and input2 according to base_bits, ANDs all values and rotates the results by rotation. The rotated values are then mapped into sparse form using base_powers, compare fn map_into_sparse_form in co-noir/co-builder/src/utils.rs.
     #[expect(clippy::type_complexity)]
     fn slice_and_get_sparse_table_with_rotation_values(

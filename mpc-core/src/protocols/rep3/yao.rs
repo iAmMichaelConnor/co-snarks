@@ -13,6 +13,9 @@ pub mod streaming_evaluator;
 pub mod streaming_garbler;
 
 use super::{Rep3PrimeFieldShare, Rep3State, Rep3UintShare, id::PartyID, network::Rep3NetworkExt};
+use crate::protocols::rep3_ring::{
+    Rep3RingShare, conversion::bit_inject_from_bits_to_field_many, ring::bit::Bit,
+};
 use crate::uint::{FieldUint, UintBackend};
 use circuits::{GarbledCircuits, SHA256Table};
 use fancy::{BinaryBundle, Block, WireMod2};
@@ -1154,75 +1157,38 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
     }};
 }
 
-// Returns the output as binary share
-#[expect(unused_macros)]
+// Returns the output as binary shares, packed into chunks of `F::Uint::BITS` bits
 macro_rules! decompose_circuit_compose_blueprint_to_binary {
-    ($inputs:expr, $io_context:expr, $output_size:expr, $circuit:expr, ($( $args:expr ),*)) => {{
-   use $crate::protocols::rep3::yao;
-        use mpc_types::protocols::rep3::{id::PartyID, };
-        use crate::protocols::rep3::conversion::y2b_many;
+    ($inputs:expr, $net:expr, $state:expr, $circuit:expr, ($( $args:expr ),*)) => {{
+        use $crate::protocols::rep3::yao;
+        use $crate::protocols::rep3::PartyID;
+        use $crate::protocols::rep3::conversion::y2b_many;
 
-        let delta = $io_context
-            .rngs
-            .generate_random_garbler_delta($io_context.id);
+        let delta = $state.rngs
+            .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $io_context)?;
+        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
 
-      let res=  match $io_context.id {
+        let output = match $state.id {
             PartyID::ID0 => {
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $io_context)?;
-
-                let mut evaluator = yao::evaluator::Rep3Evaluator::new($io_context);
+                let mut evaluator = yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
-
-                let x1 = $circuit(&mut evaluator, &x01, &x2, &x23, $($args),*)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                 y2b_many(x1_vec,  $io_context)?
+                $circuit(&mut evaluator, &x01, &x2, $($args),*)?
             }
-            PartyID::ID1 => {
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $io_context)?;
-
+            PartyID::ID1 | PartyID::ID2 => {
                 let mut garbler =
-                    yao::garbler::Rep3Garbler::new_with_delta($io_context, delta.expect("Delta not provided"));
-
-                let x1 = $circuit(&mut garbler, &x01, &x2, &x23, $($args),*)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                y2b_many(x1_vec,  $io_context)?
-            }
-            PartyID::ID2 => {
-                let mut x23 = Vec::with_capacity($output_size);
-                for _ in 0..$output_size {
-                    let k2 = $io_context.rngs.bitcomp1.random_fes_3keys::<F>();
-                    let k3 = $io_context.rngs.bitcomp2.random_fes_3keys::<F>();
-                    let k2_comp = k2.0 + k2.1 + k2.2;
-                    let k3_comp = k3.0 + k3.1 + k3.2;
-                    x23.push(k2_comp + k3_comp);
-                }
-
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many(Some(x23), delta, $output_size, $io_context)?;
-
-                let mut garbler =
-                   yao::garbler::Rep3Garbler::new_with_delta($io_context, delta.expect("Delta not provided"));
-
-                let x1 = $circuit(&mut garbler, &x01, &x2, &x23, $($args),*)?;
-                let mut x1_vec= Vec::new();
-                for chunk in x1.wires().chunks(F::MODULUS_BIT_SIZE as usize) {
-                    x1_vec.push(BinaryBundle::new(chunk.to_vec()));
-                }
-                y2b_many(x1_vec,  $io_context)?
+                    yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
+                let output = $circuit(&mut garbler, &x01, &x2, $($args),*)?;
+                garbler.send_circuit()?;
+                output
             }
         };
-
-        Ok(res)
+        let chunks = output
+            .wires()
+            .chunks(F::Uint::BITS)
+            .map(|chunk| BinaryBundle::new(chunk.to_vec()))
+            .collect();
+        y2b_many::<F, _>(chunks, $net, $state)
     }};
 }
 
@@ -1443,6 +1409,45 @@ pub fn sha256_from_bristol<F: FieldUint, N: Network>(
         GarbledCircuits::sha256_compression::<_, F>,
         (state.len())
     )
+}
+
+/// Computes, in one garbled circuit, the bits behind all plookup reads that the SHA-256
+/// compression gadget of the UltraHonk circuit builder makes for one compression of the shared
+/// `state` and `message`, and returns them as arithmetic shares of 0 or 1. The bits are laid out
+/// as documented at [`GarbledCircuits::sha256_compression_sparse_trace`]; their number is
+/// [`GarbledCircuits::SHA256_SPARSE_TRACE_BITS`].
+///
+/// The garbled circuit's outputs are converted to binary shares and then to arithmetic shares with
+/// one batched bit injection.
+pub fn sha256_compression_sparse_trace<F: FieldUint, N: Network>(
+    state: &[Rep3PrimeFieldShare<F>; 8],
+    message: &[Rep3PrimeFieldShare<F>; 16],
+    net: &N,
+    rep3_state: &mut Rep3State,
+) -> eyre::Result<Vec<Rep3PrimeFieldShare<F>>> {
+    let mut combined_inputs = Vec::with_capacity(state.len() + message.len());
+    combined_inputs.extend_from_slice(state);
+    combined_inputs.extend_from_slice(message);
+
+    let binary: Vec<Rep3UintShare<F>> = decompose_circuit_compose_blueprint_to_binary!(
+        &combined_inputs,
+        net,
+        rep3_state,
+        GarbledCircuits::sha256_compression_sparse_trace::<_, F>,
+        ()
+    )?;
+
+    let width = F::Uint::BITS;
+    let bits = (0..GarbledCircuits::SHA256_SPARSE_TRACE_BITS)
+        .map(|i| {
+            let chunk = &binary[i / width];
+            Rep3RingShare::new(
+                Bit::new(chunk.a.bit(i % width)),
+                Bit::new(chunk.b.bit(i % width)),
+            )
+        })
+        .collect::<Vec<_>>();
+    bit_inject_from_bits_to_field_many(&bits, net, rep3_state)
 }
 
 /// Slices two slices of field elements, does XOR on the slices and then rotates them. The rotation is done on 32-bit values. Base_bit is the size of the slices, rotation the the length of the rotation and total_output_bitlen_per_field is the amount of bits per input. It also prepares the (rotated) slices into 32 bits such that these can be multiplied with the base powers and then summed up. See get_sparse_table_with_rotation_values in co-noir/co-builder/src/types/plookup.rs for the intended functionality.
