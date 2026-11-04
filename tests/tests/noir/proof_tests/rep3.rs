@@ -253,6 +253,11 @@ fn random_access_proof_test_poseidon2sponge() {
 }
 
 #[test]
+fn embedded_curve_predicate_witness_and_proof_test_poseidon2sponge() {
+    witness_and_proof_test::<Poseidon2Sponge>("embedded_curve_predicate", ZeroKnowledge::Yes, "");
+}
+
+#[test]
 fn rom_shared_witness_and_proof_test_poseidon2sponge() {
     witness_and_proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::Yes, "");
 }

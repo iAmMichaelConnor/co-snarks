@@ -268,11 +268,34 @@ where
         Ok(driver.mul_many(x_is_zero, y_is_zero)?)
     }
 
+    /// Applies the predicate of a `MultiScalarMul` or `EmbeddedCurveAdd` opcode to its operands.
+    ///
+    /// As in Noir's ACVM, the operation is only performed if the predicate is one; otherwise the
+    /// output is (0, 0) and the operands are not evaluated, so they may be invalid (e.g. points not
+    /// on the curve). Returns `None` for a public predicate other than one. For a shared predicate,
+    /// the operands are multiplied by `predicate == 1`, so a disabled operation runs on the point
+    /// at infinity and zero scalars, outputs (0, 0), and the predicate stays secret.
+    fn apply_curve_predicate(
+        driver: &mut T,
+        initial_witness: &WitnessMap<T::AcvmType>,
+        predicate: &FunctionInput<GenericFieldElement<F>>,
+        operands: Vec<T::AcvmType>,
+    ) -> CoAcvmResult<Option<Vec<T::AcvmType>>> {
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+        if let Some(predicate) = T::get_public(&predicate) {
+            return Ok(predicate.is_one().then_some(operands));
+        }
+        let enabled = driver.equal(&predicate, &T::AcvmType::from(F::one()))?;
+        let enabled = vec![enabled; operands.len()];
+        Ok(Some(driver.mul_many(&operands, &enabled)?))
+    }
+
     pub(super) fn multi_scalar_mul(
         driver: &mut T,
         initial_witness: &mut WitnessMap<T::AcvmType>,
         points: &[FunctionInput<GenericFieldElement<F>>],
         scalars: &[FunctionInput<GenericFieldElement<F>>],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
         outputs: &(Witness, Witness),
         pedantic_solving: bool,
     ) -> CoAcvmResult<()> {
@@ -280,7 +303,21 @@ where
             .iter()
             .map(|input| Self::input_to_value(initial_witness, *input))
             .collect();
-        let points: Vec<_> = points?;
+        let mut operands: Vec<_> = points?;
+        let num_coordinates = operands.len();
+        let scalars: Result<Vec<_>, _> = scalars
+            .iter()
+            .map(|input| Self::input_to_value(initial_witness, *input))
+            .collect();
+        operands.extend(scalars?);
+        let Some(mut points) =
+            Self::apply_curve_predicate(driver, initial_witness, predicate, operands)?
+        else {
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        };
+        let scalars = points.split_off(num_coordinates);
 
         // acir encodes each point as an (x, y) pair with no explicit is_infinity input;
         // reconstruct the (x, y, is_infinity) triples the driver still expects.
@@ -303,11 +340,6 @@ where
             points_with_infinity.push(is_infinity);
         }
 
-        let scalars: Result<Vec<_>, _> = scalars
-            .iter()
-            .map(|input| Self::input_to_value(initial_witness, *input))
-            .collect();
-        let scalars = scalars?;
         let mut scalars_lo = Vec::with_capacity(scalars.len().div_ceil(2));
         let mut scalars_hi = Vec::with_capacity(scalars.len() / 2);
         for (i, scalar) in scalars.into_iter().enumerate() {
@@ -337,12 +369,23 @@ where
         initial_witness: &mut WitnessMap<T::AcvmType>,
         input1: &[FunctionInput<GenericFieldElement<F>>; 2],
         input2: &[FunctionInput<GenericFieldElement<F>>; 2],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
         outputs: &(Witness, Witness),
     ) -> CoAcvmResult<()> {
-        let input1_x = Self::input_to_value(initial_witness, input1[0])?;
-        let input1_y = Self::input_to_value(initial_witness, input1[1])?;
-        let input2_x = Self::input_to_value(initial_witness, input2[0])?;
-        let input2_y = Self::input_to_value(initial_witness, input2[1])?;
+        let coordinates = [input1[0], input1[1], input2[0], input2[1]]
+            .into_iter()
+            .map(|input| Self::input_to_value(initial_witness, input))
+            .collect::<Result<Vec<_>, _>>()?;
+        let Some(coordinates) =
+            Self::apply_curve_predicate(driver, initial_witness, predicate, coordinates)?
+        else {
+            Self::insert_value(&outputs.0, T::public_zero(), initial_witness)?;
+            Self::insert_value(&outputs.1, T::public_zero(), initial_witness)?;
+            return Ok(());
+        };
+        let [input1_x, input1_y, input2_x, input2_y]: [_; 4] = coordinates
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("four coordinates"));
 
         let mut is_infinite = Self::point_is_infinity_many(
             driver,
@@ -521,24 +564,30 @@ where
             BlackBoxFuncCall::MultiScalarMul {
                 points,
                 scalars,
+                predicate,
                 outputs,
-                ..
             } => Self::multi_scalar_mul(
                 &mut self.driver,
                 initial_witness,
                 points,
                 scalars,
+                predicate,
                 outputs,
                 pedantic_solving,
             )?,
             BlackBoxFuncCall::EmbeddedCurveAdd {
                 input1,
                 input2,
+                predicate,
                 outputs,
-                ..
-            } => {
-                Self::embedded_curve_add(&mut self.driver, initial_witness, input1, input2, outputs)
-            }?,
+            } => Self::embedded_curve_add(
+                &mut self.driver,
+                initial_witness,
+                input1,
+                input2,
+                predicate,
+                outputs,
+            )?,
             BlackBoxFuncCall::Sha256Compression {
                 inputs,
                 hash_values,

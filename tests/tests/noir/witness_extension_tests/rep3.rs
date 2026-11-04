@@ -38,3 +38,4 @@ add_rep3_acvm_test!("pedersen_commitment");
 add_rep3_acvm_test!("blake2s");
 add_rep3_acvm_test!("blake3");
 add_rep3_acvm_test!("embedded_curve_add");
+add_rep3_acvm_test!("embedded_curve_predicate");

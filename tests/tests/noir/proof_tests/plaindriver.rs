@@ -272,3 +272,8 @@ fn zk_recursion_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
     proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
 }
+
+#[test]
+fn embedded_curve_predicate_witness_and_proof_test_poseidon2sponge() {
+    witness_and_proof_test::<Poseidon2Sponge>("embedded_curve_predicate", ZeroKnowledge::Yes, "");
+}
