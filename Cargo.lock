@@ -1381,6 +1381,7 @@ dependencies = [
  "ark-grumpkin",
  "ark-poly",
  "ark-serialize 0.6.0",
+ "bincode",
  "eyre",
  "itertools 0.15.0",
  "mpc-core",

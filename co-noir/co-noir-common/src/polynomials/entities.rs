@@ -813,3 +813,73 @@ impl<T: Default> ShiftedWitnessEntities<T> {
         &mut self.elements[Self::Z_PERM]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The column order fixes the order of the VK commitments and of the sumcheck evaluations in the proof, so it
+    // must match barretenberg's `UltraFlavor` `EntityId` (flavor/generated/ultra_flavor_generated.hpp):
+    // precomputed 0..28, witness 28..36, shifted 36..41.
+    #[test]
+    fn entity_order_matches_barretenberg() {
+        type Pre = PrecomputedEntities<()>;
+        let precomputed = [
+            Pre::SIGMA_1,
+            Pre::SIGMA_2,
+            Pre::SIGMA_3,
+            Pre::SIGMA_4,
+            Pre::ID_1,
+            Pre::ID_2,
+            Pre::ID_3,
+            Pre::ID_4,
+            Pre::LAGRANGE_FIRST,
+            Pre::LAGRANGE_LAST,
+            Pre::Q_LOOKUP,
+            Pre::TABLE_1,
+            Pre::TABLE_2,
+            Pre::TABLE_3,
+            Pre::TABLE_4,
+            Pre::Q_M,
+            Pre::Q_R,
+            Pre::Q_O,
+            Pre::Q_C,
+            Pre::Q_L,
+            Pre::Q_4,
+            Pre::Q_ARITH,
+            Pre::Q_DELTA_RANGE,
+            Pre::Q_ELLIPTIC,
+            Pre::Q_MEMORY,
+            Pre::Q_NNF,
+            Pre::Q_POSEIDON2_EXTERNAL,
+            Pre::Q_POSEIDON2_INTERNAL,
+        ];
+        assert_eq!(precomputed.to_vec(), (0..28).collect::<Vec<_>>());
+        assert_eq!(PRECOMPUTED_ENTITIES_SIZE, 28);
+
+        type Wit = WitnessEntities<()>;
+        let witness = [
+            Wit::W_L,
+            Wit::W_R,
+            Wit::W_O,
+            Wit::W_4,
+            Wit::Z_PERM,
+            Wit::LOOKUP_INVERSES,
+            Wit::LOOKUP_READ_COUNTS,
+            Wit::LOOKUP_READ_TAGS,
+        ];
+        assert_eq!(witness.to_vec(), (0..8).collect::<Vec<_>>());
+        assert_eq!(WITNESS_ENTITIES_SIZE, 8);
+
+        type Shifted = ShiftedWitnessEntities<()>;
+        let shifted = [
+            Shifted::W_L,
+            Shifted::W_R,
+            Shifted::W_O,
+            Shifted::W_4,
+            Shifted::Z_PERM,
+        ];
+        assert_eq!(shifted.to_vec(), (0..5).collect::<Vec<_>>());
+        assert_eq!(SHIFTED_WITNESS_ENTITIES_SIZE, 5);
+    }
+}

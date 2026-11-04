@@ -5198,4 +5198,119 @@ mod tests {
             );
         }
     }
+
+    /// Wire `w_l` (the index) of every memory gate whose selectors match `pattern` = (q_1, q_2, q_3, q_m), in order.
+    fn memory_index_wires(
+        builder: &mut UltraCircuitBuilder<Bn254G1>,
+        pattern: [u64; 4],
+    ) -> Vec<u32> {
+        let block = &mut builder.blocks.memory;
+        let selectors = [
+            block.q_1().clone(),
+            block.q_2().clone(),
+            block.q_3().clone(),
+            block.q_m().clone(),
+        ];
+        let q_memory = block.q_memory().clone();
+        let w_l = block.w_l().clone();
+        (0..w_l.len())
+            .filter(|&row| {
+                q_memory[row].is_one()
+                    && selectors
+                        .iter()
+                        .zip(pattern)
+                        .all(|(selector, expected)| selector[row] == Fr::from(expected))
+            })
+            .map(|row| w_l[row])
+            .collect()
+    }
+
+    /// The index-delta check of the sorted ROM chain accepts deltas 0 and 1 in the field, so a chain could start at
+    /// p - 1 and wrap to 0. The first sorted index must be the constant-zero witness and the last one the constant
+    /// `rom_size - 1`.
+    #[test]
+    fn sorted_rom_chain_is_pinned_at_both_ends() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        // A pair ROM uses the sorted consistency check rather than LogUp.
+        let rom = builder.create_rom_array(3);
+        for (i, value) in [10u64, 20, 30].into_iter().enumerate() {
+            let value = builder.add_variable(Fr::from(value));
+            builder.set_rom_element_pair(rom, i, [value, builder.zero_idx]);
+        }
+        let index = builder.add_variable(Fr::from(1u64));
+        builder
+            .read_rom_array_pair(rom, index, &mut driver)
+            .unwrap();
+        builder.process_rom_arrays(&mut driver).unwrap();
+
+        // ROM consistency check: q_1 = q_2 = 1, q_3 = q_m = 0.
+        let sorted = memory_index_wires(&mut builder, [1, 1, 0, 0]);
+        assert_eq!(sorted.len(), 4);
+        assert_eq!(sorted[0], builder.zero_idx);
+        let last = builder.put_constant_variable(Fr::from(2u64));
+        assert_eq!(sorted[3], last);
+        assert!(
+            sorted[1..3]
+                .iter()
+                .all(|&wire| wire != builder.zero_idx && wire != last)
+        );
+    }
+
+    /// The sorted RAM chain has the same index-delta check; its first index must be the constant-zero witness.
+    #[test]
+    fn sorted_ram_chain_starts_at_constant_zero() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        let ram = builder.create_ram_array(3, &mut driver);
+        for (i, value) in [10u64, 20, 30].into_iter().enumerate() {
+            let value = builder.add_variable(Fr::from(value));
+            builder
+                .init_ram_element(&mut driver, ram, i, value)
+                .unwrap();
+        }
+        let index = builder.add_variable(Fr::from(1u64));
+        let value = builder.add_variable(Fr::from(99u64));
+        builder
+            .write_ram_array(&mut driver, ram, index, value)
+            .unwrap();
+        builder.process_ram_arrays(&mut driver).unwrap();
+
+        // RAM consistency check: q_3 = 1, q_1 = q_2 = q_m = 0. Four sorted records; the last one has its own gate.
+        let sorted = memory_index_wires(&mut builder, [0, 0, 1, 0]);
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted[0], builder.zero_idx);
+        assert!(sorted[1..].iter().all(|&wire| wire != builder.zero_idx));
+    }
+
+    /// Lookup table indices start at 1, so the batched term of the log-derivative lookup relation always contains
+    /// at least the third power of the batching challenge.
+    #[test]
+    fn lookup_table_indices_start_at_one() {
+        let mut builder = UltraCircuitBuilder::<Bn254G1>::new_minimal(0);
+        assert_eq!(builder.get_table(BasicTableId::Sha256Base16).table_index, 1);
+        assert_eq!(
+            builder
+                .get_table(BasicTableId::Sha256Base28Rotate3)
+                .table_index,
+            2
+        );
+        assert_eq!(builder.get_table(BasicTableId::Sha256Base16).table_index, 1);
+    }
+
+    /// The basic tables in the last slot of the SHA-256 choose and majority input multi-tables are 10-bit (2^10
+    /// rows), as in barretenberg; a larger table would admit keys outside the declared slice width.
+    #[test]
+    fn sha256_input_last_slice_tables_are_10_bit() {
+        for id in [
+            BasicTableId::Sha256Base16,
+            BasicTableId::Sha256Base28Rotate3,
+        ] {
+            let table = PlookupBasicTable::<Bn254G1, PlainAcvmSolver<Fr>>::create_basic_table(
+                id.clone(),
+                1,
+            );
+            assert_eq!(table.column_1.len(), 1 << 10, "{id:?}");
+        }
+    }
 }
