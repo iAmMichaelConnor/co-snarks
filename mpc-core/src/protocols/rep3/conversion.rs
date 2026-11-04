@@ -56,6 +56,59 @@ pub fn a2b_selector_many<F: FieldUint, N: Network>(
     }
 }
 
+/// Decomposes shared field elements into shared limbs: the low `total_bit_size_per_field` bits of
+/// each (canonical) value, split into little-endian limbs of `decompose_bit_size` bits; the last
+/// limb is shorter if `decompose_bit_size` does not divide `total_bit_size_per_field`.
+///
+/// The values are converted to binary sharings (as selected by the state's [`A2BType`]), the
+/// selected bits are converted to arithmetic sharings with one batched [`bit_inject_many`], and
+/// the limbs are recomposed locally. Compared with the garbled-circuit decomposition
+/// ([`super::yao::decompose_arithmetic_many`]), no full-field masked addition is garbled per limb,
+/// which sends far fewer bytes, at the cost of one more message (the bit injection). The
+/// communication only depends on the public sizes.
+pub fn decompose_arithmetic_many<F: FieldUint, N: Network>(
+    inputs: &[Rep3PrimeFieldShare<F>],
+    net: &N,
+    state: &mut Rep3State,
+    total_bit_size_per_field: usize,
+    decompose_bit_size: usize,
+) -> eyre::Result<Vec<Rep3PrimeFieldShare<F>>> {
+    eyre::ensure!(
+        decompose_bit_size > 0,
+        "The decomposition limb size must be positive"
+    );
+    eyre::ensure!(
+        total_bit_size_per_field <= F::MODULUS_BIT_SIZE as usize,
+        "The decomposition size exceeds the field size"
+    );
+    if inputs.is_empty() || total_bit_size_per_field == 0 {
+        return Ok(Vec::new());
+    }
+    let binary = a2b_selector_many(inputs, net, state)?;
+    let one = F::Uint::from(1u64);
+    let bits = binary
+        .iter()
+        .flat_map(|value| {
+            (0..total_bit_size_per_field)
+                .map(move |i| Rep3UintShare::new((value.a >> i) & one, (value.b >> i) & one))
+        })
+        .collect_vec();
+    let bits = bit_inject_many(&bits, net, state)?;
+    let two = F::from(2u64);
+    Ok(bits
+        .chunks(total_bit_size_per_field)
+        .flat_map(|value| {
+            value.chunks(decompose_bit_size).map(|limb| {
+                limb.iter()
+                    .rev()
+                    .fold(Rep3PrimeFieldShare::zero_share(), |acc, bit| {
+                        arithmetic::add(arithmetic::mul_public(acc, two), *bit)
+                    })
+            })
+        })
+        .collect())
+}
+
 /// Depending on the `A2BType` of the state, this function selects the appropriate implementation for the binary-to-arithmetic conversion. The input must be a binary sharing of a valid field element (< p), see [b2a_selector_mod_p] otherwise.
 pub fn b2a_selector<F: FieldUint, N: Network>(
     x: &Rep3UintShare<F>,
