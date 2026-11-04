@@ -96,6 +96,7 @@ impl<F: PrimeField> FieldCT<F> {
             let right = T::get_public(&other.get_value(builder, driver))
                 .expect("Constant should be public");
             builder.assert_if_has_witness(left == right);
+            return;
         }
         if self.is_constant() {
             let left =
@@ -1022,7 +1023,7 @@ impl<F: PrimeField> FieldCT<F> {
             let val: BigUint = T::get_public(&self.get_value(builder, driver))
                 .expect("Constants are public")
                 .into();
-            assert!((val.bits() as usize) < num_bits);
+            assert!((val.bits() as usize) <= num_bits);
         } else {
             let index = self.get_witness_index(builder, driver);
             // We have plookup
@@ -4920,6 +4921,69 @@ mod tests {
             ByteArray::from_field_ct_with_bytes(&input, 32, bytes, &mut builder, &mut driver)
                 .unwrap();
             assert_eq!(prove_and_verify(builder, &mut driver), valid, "{integer}");
+        }
+    }
+
+    #[test]
+    fn constant_range_constraint_accepts_values_of_exactly_num_bits() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        for (value, num_bits) in [(0u64, 1), (1, 1), (255, 8), (256, 9), (u64::MAX, 64)] {
+            FieldCT::from(Fr::from(value))
+                .create_range_constraint(num_bits, &mut builder, &mut driver)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn constant_range_constraint_rejects_values_wider_than_num_bits() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        FieldCT::from(Fr::from(256u64))
+            .create_range_constraint(8, &mut builder, &mut driver)
+            .unwrap();
+    }
+
+    #[test]
+    fn assert_equal_of_two_constants_adds_no_constraint() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        let num_gates = builder.num_gates;
+        let num_variables = builder.variables.len();
+        let a = FieldCT::from(Fr::from(7u64));
+        a.assert_equal(&FieldCT::from(Fr::from(7u64)), &mut builder, &mut driver);
+        assert_eq!(builder.num_gates, num_gates);
+        assert_eq!(builder.variables.len(), num_variables);
+    }
+
+    #[test]
+    fn byte_array_from_constant_field_ct() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        for (value, num_bytes) in [
+            (Fr::one(), 1),
+            (Fr::from(0xab_cdefu64), 4),
+            (Fr::from(0x7f_0102u64), 32),
+        ] {
+            let bytes = ByteArray::from_field_ct(
+                &FieldCT::from(value),
+                num_bytes,
+                &mut builder,
+                &mut driver,
+            )
+            .unwrap();
+            assert!(bytes.values.iter().all(FieldCT::is_constant));
+            let bytes: Vec<_> = bytes
+                .values
+                .iter()
+                .map(|byte| byte.get_value(&builder, &mut driver))
+                .collect();
+            assert_eq!(
+                bytes,
+                expected_bytes(value, num_bytes),
+                "{value} {num_bytes}"
+            );
         }
     }
 }
