@@ -1028,13 +1028,15 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         lhs: Self::OtherAcvmType<C>,
         rhs: Self::OtherAcvmType<C>,
     ) -> eyre::Result<Self::OtherAcvmType<C>> {
-        Ok(lhs / rhs)
+        Ok(lhs * self.inverse_other_acvm_type::<C>(rhs)?)
     }
 
     fn inverse_other_acvm_type<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
         &mut self,
         a: Self::OtherAcvmType<C>,
     ) -> eyre::Result<Self::OtherAcvmType<C>> {
+        // All values are public here, so a zero is an error, as in barretenberg. The Rep3 driver
+        // returns zero for a secret zero instead, see the trait documentation.
         a.inverse()
             .ok_or_else(|| eyre::eyre!("Element has no inverse"))
     }

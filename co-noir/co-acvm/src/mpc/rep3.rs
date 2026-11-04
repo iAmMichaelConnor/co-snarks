@@ -57,6 +57,20 @@ impl<'a, F: PrimeField + FieldUint, N: Network> Rep3AcvmSolver<'a, F, N> {
         })
     }
 
+    /// Inverts a shared non-native field element without revealing whether it is zero (see
+    /// [`arithmetic::inv0`]). A secret zero yields zero instead of an error. Only BN254's base
+    /// field is supported.
+    fn inv0_other<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
+        &mut self,
+        a: Rep3PrimeFieldShare<C::BaseField>,
+    ) -> eyre::Result<Rep3PrimeFieldShare<C::BaseField>> {
+        let Some(a) = downcast::<_, Rep3PrimeFieldShare<ark_bn254::Fq>>(&a) else {
+            eyre::bail!("Inverting shared non-native field elements is only supported for BN254");
+        };
+        let inverse = arithmetic::inv0(*a, self.net, &mut self.state)?;
+        Ok(*downcast(&inverse).expect("We checked types"))
+    }
+
     fn combine_grumpkin_scalar_field_limbs(
         low: &Rep3AcvmType<ark_bn254::Fr>,
         high: &Rep3AcvmType<ark_bn254::Fr>,
@@ -2507,11 +2521,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         rhs: Self::OtherAcvmType<C>,
     ) -> eyre::Result<Self::OtherAcvmType<C>> {
         match (lhs, rhs) {
-            (Rep3AcvmType::Public(lhs), Rep3AcvmType::Public(rhs)) => {
-                Ok(Rep3AcvmType::Public(lhs / rhs))
-            }
+            (Rep3AcvmType::Public(lhs), Rep3AcvmType::Public(rhs)) => Ok(Rep3AcvmType::Public(
+                lhs * rhs
+                    .inverse()
+                    .ok_or_else(|| eyre::eyre!("Element has no inverse"))?,
+            )),
             (Rep3AcvmType::Public(lhs), Rep3AcvmType::Shared(rhs)) => {
-                let rhs_inv = arithmetic::inv(rhs, self.net, &mut self.state)?;
+                let rhs_inv = self.inv0_other::<C>(rhs)?;
                 self.mul_other_acvm_types::<C>(
                     Rep3AcvmType::Public(lhs),
                     Rep3AcvmType::Shared(rhs_inv),
@@ -2525,7 +2541,7 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )))
             }
             (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
-                let rhs_inv = arithmetic::inv(rhs, self.net, &mut self.state)?;
+                let rhs_inv = self.inv0_other::<C>(rhs)?;
                 self.mul_other_acvm_types::<C>(
                     Rep3AcvmType::Shared(lhs),
                     Rep3AcvmType::Shared(rhs_inv),
@@ -2544,10 +2560,7 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                     .inverse()
                     .ok_or_else(|| eyre::eyre!("Element has no inverse"))?,
             )),
-            Rep3AcvmType::Shared(shared) => {
-                let inv = arithmetic::inv(shared, self.net, &mut self.state)?;
-                Ok(Rep3AcvmType::Shared(inv))
-            }
+            Rep3AcvmType::Shared(shared) => Ok(Rep3AcvmType::Shared(self.inv0_other::<C>(shared)?)),
         }
     }
 
@@ -2660,6 +2673,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         &mut self,
         a: &[Self::AcvmType; 4],
     ) -> eyre::Result<[Self::AcvmType; 4]> {
+        if a.iter().all(|x| !Self::is_shared(x)) {
+            // Same as the plain driver, including 0 for a public zero
+            let limbs = a
+                .clone()
+                .map(|x| Self::get_public(&x).expect("Already checked it is public"));
+            let result = self.plain_solver.inverse_acvm_type_limbs::<C>(&limbs)?;
+            return Ok(result.map(Rep3AcvmType::Public));
+        }
         let other_acvm_type = self.acvm_type_limbs_to_other_acvm_type::<4, 68, C>(a)?;
         let other_acvm_type_inv = self.inverse_other_acvm_type::<C>(other_acvm_type)?;
         let limbs_inv =

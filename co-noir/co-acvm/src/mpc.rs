@@ -622,11 +622,19 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         rhs: Self::OtherAcvmType<C>,
     ) -> Self::OtherAcvmType<C>;
 
+    /// Computes the inverse of a non-native field element.
+    ///
+    /// Zero has no inverse. For a public zero this returns an error, like barretenberg's field
+    /// inversion. For a secret-shared zero, an MPC driver must not abort, because aborting would
+    /// reveal that the secret is zero; the Rep3 driver returns zero instead. Circuits that need
+    /// a nonzero value must enforce it with constraints.
     fn inverse_other_acvm_type<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
         &mut self,
         a: Self::OtherAcvmType<C>,
     ) -> eyre::Result<Self::OtherAcvmType<C>>;
 
+    /// Computes the inverse of a non-native field element given as four 68-bit limbs. Zero maps
+    /// to zero (all drivers).
     fn inverse_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
         &mut self,
         a: &[Self::AcvmType; 4],
@@ -650,6 +658,9 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         rhs: &[Self::AcvmType; 4],
     ) -> eyre::Result<[Self::AcvmType; 4]>;
 
+    /// Computes `lhs / rhs` for non-native field elements. A zero divisor is handled as in
+    /// [`Self::inverse_other_acvm_type`]: an error if it is public, and a zero result (no abort)
+    /// if it is secret-shared in an MPC driver.
     fn div_unchecked_other_acvm_types<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
         &mut self,
         lhs: Self::OtherAcvmType<C>,

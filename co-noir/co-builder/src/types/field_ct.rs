@@ -621,7 +621,10 @@ impl<F: PrimeField> FieldCT<F> {
                 let q_l = other.additive_constant;
                 let q_c = -val;
                 let other_val = other.get_value(builder, driver);
-                let inverse = driver.invert(other_val)?;
+                // As in barretenberg, a zero denominator gives a zero witness; the gate below
+                // then cannot be satisfied. Inverting directly would fail on zero, and in MPC
+                // reveal that a secret denominator is zero.
+                let inverse = Self::zero_or_inverse::<P, T>(other_val, driver)?;
                 let out_value = driver.mul_with_public(val, inverse);
                 result.witness_index = builder.add_variable(out_value);
                 builder.create_arithmetic_gate(&PolyTriple {
@@ -4668,7 +4671,7 @@ impl<F: PrimeField> ByteArray<F> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::transcript_ct::Bn254G1;
     use ark_bn254::{Bn254, Fr};
@@ -4695,7 +4698,10 @@ mod tests {
 
     /// Finalizes the circuit, proves it with the plain prover and returns whether the proof
     /// verifies, i.e. whether the witness satisfies all constraints.
-    fn prove_and_verify(mut builder: PlainBuilder, driver: &mut PlainAcvmSolver<Fr>) -> bool {
+    pub(crate) fn prove_and_verify(
+        mut builder: PlainBuilder,
+        driver: &mut PlainAcvmSolver<Fr>,
+    ) -> bool {
         if !builder.circuit_finalized {
             builder.add_default_to_public_inputs();
             builder.finalize_circuit(driver).unwrap();
@@ -4943,6 +4949,44 @@ mod tests {
         FieldCT::from(Fr::from(256u64))
             .create_range_constraint(8, &mut builder, &mut driver)
             .unwrap();
+    }
+
+    #[derive(Clone, Copy)]
+    struct InverseOfWitness;
+
+    impl Gadget for InverseOfWitness {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            for input in inputs {
+                let input = FieldCT::from_witness(input.clone(), builder);
+                input.inverse(builder, driver).unwrap();
+                FieldCT::from(Fr::from(5u64))
+                    .divide_no_zero_check(&input, builder, driver)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn plain_division_by_zero_witness_gives_unsatisfiable_circuit() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        InverseOfWitness.build(&[Fr::from(3u64)], &mut builder, &mut driver);
+        assert!(prove_and_verify(builder, &mut driver));
+
+        let mut builder = PlainBuilder::new_minimal(0);
+        InverseOfWitness.build(&[Fr::zero()], &mut builder, &mut driver);
+        assert!(!prove_and_verify(builder, &mut driver));
+    }
+
+    #[test]
+    fn shared_division_by_zero_witness_does_not_abort() {
+        assert!(rep3_witness_verifies(&[Fr::from(3u64)], InverseOfWitness));
+        assert!(!rep3_witness_verifies(&[Fr::zero()], InverseOfWitness));
     }
 
     #[test]

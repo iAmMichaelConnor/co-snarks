@@ -229,6 +229,26 @@ pub fn inv<F: PrimeField, N: Network>(
     Ok(r * y_inv)
 }
 
+/// Computes the inverse of a shared value, or zero if the value is zero.
+///
+/// Unlike [`inv`], which opens a masked product and fails on zero (and thereby reveals that the
+/// shared value is zero), this function does not reveal anything about the value: it inverts
+/// `a + is_zero(a)`, which is never zero, and multiplies the result by `1 - is_zero(a)`.
+pub fn inv0<F: FieldUint, N: Network>(
+    a: FieldShare<F>,
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<FieldShare<F>> {
+    let is_zero = eq_public(a, F::zero(), net, state)?;
+    let inverse = inv(add(a, is_zero), net, state)?;
+    mul(
+        inverse,
+        sub_public_by_shared(F::one(), is_zero, state.id),
+        net,
+        state,
+    )
+}
+
 /// Computes the inverse of a vector of shared field elements
 pub fn inv_vec<F: PrimeField, N: Network>(
     a: &[FieldShare<F>],

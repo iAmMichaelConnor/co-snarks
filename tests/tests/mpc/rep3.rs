@@ -452,6 +452,40 @@ mod field_share {
         assert_eq!(is_result, should_result);
     }
 
+    fn rep3_inv0_of<F: FieldUint>(x: F) -> F {
+        let nets = LocalNetwork::new_3_parties();
+        let x_shares = rep3::share_field_element(x, &mut thread_rng());
+        let threads: Vec<_> = nets
+            .into_iter()
+            .zip(x_shares)
+            .map(|(net, x)| {
+                std::thread::spawn(move || {
+                    let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    arithmetic::inv0(x, &net, &mut state).unwrap()
+                })
+            })
+            .collect();
+        let [r1, r2, r3]: [_; 3] = threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        rep3::combine_field_element(r1, r2, r3)
+    }
+
+    #[test]
+    fn rep3_inv0() {
+        let mut rng = thread_rng();
+        assert_eq!(rep3_inv0_of(ark_bn254::Fr::zero()), ark_bn254::Fr::zero());
+        assert_eq!(rep3_inv0_of(ark_bn254::Fq::zero()), ark_bn254::Fq::zero());
+        assert_eq!(rep3_inv0_of(ark_bn254::Fq::one()), ark_bn254::Fq::one());
+        let x = ark_bn254::Fr::rand(&mut rng);
+        assert_eq!(rep3_inv0_of(x), x.inverse().unwrap_or_default());
+        let x = ark_bn254::Fq::rand(&mut rng);
+        assert_eq!(rep3_inv0_of(x), x.inverse().unwrap_or_default());
+    }
+
     #[test]
     fn rep3_sqrt() {
         let nets = LocalNetwork::new_3_parties();
