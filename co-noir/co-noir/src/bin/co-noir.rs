@@ -416,6 +416,11 @@ pub struct BuildProvingKeyCli {
     #[arg(long)]
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub crs: Option<PathBuf>,
+    /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
+    /// and predicate) to all parties. Without this flag, a recursive circuit with secret-shared
+    /// recursion inputs is rejected. All parties must pass the same value.
+    #[arg(long)]
+    pub reveal_recursion_inputs: bool,
 }
 
 /// Config for `build_proving_key`
@@ -435,6 +440,9 @@ pub struct BuildProvingKeyConfig {
     pub network: NetworkConfigFile,
     /// The path to the prover crs file
     pub crs: PathBuf,
+    /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
+    /// and predicate) to all parties. All parties must use the same value.
+    pub reveal_recursion_inputs: bool,
 }
 
 /// Cli arguments for `generate_proof`
@@ -561,6 +569,11 @@ pub struct BuildAndGenerateProofCli {
     #[arg(long)]
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub vk: Option<PathBuf>,
+    /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
+    /// and predicate) to all parties. Without this flag, a recursive circuit with secret-shared
+    /// recursion inputs is rejected. All parties must pass the same value.
+    #[arg(long)]
+    pub reveal_recursion_inputs: bool,
 }
 
 /// Config for `build_and_generate_proof`
@@ -590,6 +603,9 @@ pub struct BuildAndGenerateProofConfig {
     pub fields_as_json: bool,
     /// The path to the verification key file
     pub vk: PathBuf,
+    /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
+    /// and predicate) to all parties. All parties must use the same value.
+    pub reveal_recursion_inputs: bool,
 }
 
 /// Cli arguments for `creating_vk`
@@ -1287,8 +1303,17 @@ fn run_translate_proving_key(config: TranslateProvingKeyConfig) -> color_eyre::R
     Ok(ExitCode::SUCCESS)
 }
 
+fn recursion_input_visibility(reveal_recursion_inputs: bool) -> co_noir::RecursionInputVisibility {
+    if reveal_recursion_inputs {
+        co_noir::RecursionInputVisibility::RevealToParticipants
+    } else {
+        co_noir::RecursionInputVisibility::KeepSecret
+    }
+}
+
 #[instrument(level = "debug", skip(config))]
 fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<ExitCode> {
+    let recursion_input_visibility = recursion_input_visibility(config.reveal_recursion_inputs);
     let witness = config.witness;
     let circuit_path = config.circuit;
     let protocol = config.protocol;
@@ -1327,11 +1352,12 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
                 .context("while deserializing witness share")?;
 
             let start = Instant::now();
-            let proving_key = co_noir::generate_proving_key_rep3(
+            let proving_key = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
                 &constraint_system,
                 witness_share,
                 &net,
                 &prover_crs,
+                recursion_input_visibility,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1346,13 +1372,14 @@ fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<Ex
                 .context("while deserializing witness share")?;
 
             let start = Instant::now();
-            let proving_key = co_noir::generate_proving_key_shamir(
+            let proving_key = co_noir::generate_proving_key_shamir_with_recursion_input_visibility(
                 n,
                 t,
                 &constraint_system,
                 witness_share,
                 &net,
                 &prover_crs,
+                recursion_input_visibility,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1575,6 +1602,7 @@ fn run_build_and_generate_proof(
     let t = config.threshold;
     let fields_as_json = config.fields_as_json;
     let has_zk = ZeroKnowledge::from(config.zk);
+    let recursion_input_visibility = recursion_input_visibility(config.reveal_recursion_inputs);
     let network_config = NetworkConfig::try_from(config.network)?;
 
     // parse witness shares
@@ -1615,11 +1643,12 @@ fn run_build_and_generate_proof(
                 .context("while deserializing witness share")?;
 
             let start = Instant::now();
-            let proving_key = co_noir::generate_proving_key_rep3(
+            let proving_key = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
                 &constraint_system,
                 witness_share,
                 &net,
                 &prover_crs,
+                recursion_input_visibility,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1659,13 +1688,14 @@ fn run_build_and_generate_proof(
                 .context("while deserializing witness share")?;
 
             let start = Instant::now();
-            let proving_key = co_noir::generate_proving_key_shamir(
+            let proving_key = co_noir::generate_proving_key_shamir_with_recursion_input_visibility(
                 n,
                 t,
                 &constraint_system,
                 witness_share,
                 &net,
                 &prover_crs,
+                recursion_input_visibility,
             )?;
             let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
             tracing::info!("Build proving key took {duration_ms} ms");
@@ -1928,5 +1958,25 @@ fn run_verify(config: VerifyConfig) -> color_eyre::Result<ExitCode> {
     } else {
         tracing::error!("Proof verification failed");
         Ok(ExitCode::FAILURE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recursion_inputs_are_revealed_only_with_the_flag() {
+        for command in ["build-proving-key", "build-and-generate-proof"] {
+            for (flags, reveal) in [(&[][..], false), (&["--reveal-recursion-inputs"][..], true)] {
+                let cli = Cli::try_parse_from(["co-noir", command].iter().chain(flags)).unwrap();
+                let parsed = match cli.command {
+                    Commands::BuildProvingKey(cli) => cli.reveal_recursion_inputs,
+                    Commands::BuildAndGenerateProof(cli) => cli.reveal_recursion_inputs,
+                    _ => unreachable!(),
+                };
+                assert_eq!(parsed, reveal, "{command} {flags:?}");
+            }
+        }
     }
 }

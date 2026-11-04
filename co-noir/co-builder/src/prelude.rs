@@ -9,4 +9,5 @@ pub use crate::ultra_builder::{
     GenericUltraCircuitBuilder, Rep3CoBuilder, ShamirCoBuilder, UltraCircuitBuilder,
 };
 pub use co_acvm::PlainAcvmSolver;
+pub use co_acvm::mpc::RecursionInputVisibility;
 pub use noir_types::SerializeF;

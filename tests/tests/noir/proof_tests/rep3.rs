@@ -1,7 +1,7 @@
 use crate::proof_tests::{CRS_PATH_G1, CRS_PATH_G2};
 use ark_bn254::{Bn254, Fr};
 use co_acvm::solver::Rep3CoSolver;
-use co_noir::{Bn254G1, HonkProof};
+use co_noir::{Bn254G1, HonkProof, RecursionInputVisibility};
 use co_noir_common::{
     crs::parse::CrsParser,
     honk_proof::TranscriptFieldType,
@@ -29,8 +29,25 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
     has_zk: ZeroKnowledge,
     proof_file: &str,
 ) {
-    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
-    let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
+    proof_test_with_visibility::<H>(
+        name,
+        &format!("../test_vectors/noir/{name}/kat"),
+        has_zk,
+        proof_file,
+        RecursionInputVisibility::default(),
+    )
+}
+
+/// Like [`proof_test`], for the circuit and witness `{name}.json` and `{name}.gz` in `dir`.
+fn proof_test_with_visibility<H: TranscriptHasher<TranscriptFieldType>>(
+    name: &str,
+    dir: &str,
+    has_zk: ZeroKnowledge,
+    proof_file: &str,
+    recursion_input_visibility: RecursionInputVisibility,
+) {
+    let circuit_file = format!("{dir}/{name}.json");
+    let witness_file = format!("{dir}/{name}.gz");
 
     let program_artifact =
         co_noir::program_artifact_from_reader(File::open(&circuit_file).unwrap())
@@ -71,9 +88,14 @@ fn proof_test<H: TranscriptHasher<TranscriptFieldType>>(
         let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
         threads.push(std::thread::spawn(move || {
             // generate proving key and vk
-            let pk =
-                co_noir::generate_proving_key_rep3(&constraint_system, witness, &net, &prover_crs)
-                    .unwrap();
+            let pk = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
+                &constraint_system,
+                witness,
+                &net,
+                &prover_crs,
+                recursion_input_visibility,
+            )
+            .unwrap();
             let vk: VerifyingKey<Bn254> = pk.create_vk(&prover_crs, verifier_crs).unwrap();
 
             let (proof, public_input) =
@@ -445,11 +467,25 @@ fn recursion_witness_and_proof_test_poseidon2sponge() {
     witness_and_proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::Yes, "");
 }
 
+// Circuits and witnesses of the recursion examples (the `kat` witnesses of `recursion` and
+// `recursion_zk` in `test_vectors/noir` do not satisfy their circuits).
+const RECURSION_EXAMPLES: &str = "../co-noir/co-noir/examples/test_vectors/recursion";
+const RECURSION_ZK_EXAMPLES: &str = "../co-noir/co-noir/examples/test_vectors/recursion_zk";
+
 #[test]
-#[ignore = "REP3 methods on shared values are not yet implemented"]
+#[ignore = "Test is too slow for the pipeline"]
 fn recursion_proof_test_poseidon2sponge() {
-    proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::No, "");
-    proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::Yes, "");
+    // The inner proof is secret-shared, so all parties must agree to open it.
+    let reveal = RecursionInputVisibility::RevealToParticipants;
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        proof_test_with_visibility::<Poseidon2Sponge>(
+            "recursion",
+            RECURSION_EXAMPLES,
+            has_zk,
+            "",
+            reveal,
+        );
+    }
 }
 
 #[test]
@@ -462,8 +498,17 @@ fn zk_recursion_witness_and_proof_test_poseidon2sponge() {
 #[test]
 #[ignore = "Test is too slow for the pipeline"]
 fn zk_recursion_proof_test_poseidon2sponge() {
-    proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::No, "");
-    proof_test::<Poseidon2Sponge>("recursion_zk", ZeroKnowledge::Yes, "");
+    // The inner proof is secret-shared, so all parties must agree to open it.
+    let reveal = RecursionInputVisibility::RevealToParticipants;
+    for has_zk in [ZeroKnowledge::No, ZeroKnowledge::Yes] {
+        proof_test_with_visibility::<Poseidon2Sponge>(
+            "recursion_zk",
+            RECURSION_ZK_EXAMPLES,
+            has_zk,
+            "",
+            reveal,
+        );
+    }
 }
 
 /// A [`Network`] that counts the messages a party sends.

@@ -1,4 +1,4 @@
-use super::{NoirWitnessExtensionProtocol, downcast};
+use super::{NoirWitnessExtensionProtocol, RecursionInputVisibility, downcast};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
@@ -271,6 +271,14 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
             .expect("Is an one_hot_encoded vector")
             .0;
         lut[index] = value;
+        Ok(())
+    }
+
+    fn agree_recursion_input_visibility(
+        &mut self,
+        _visibility: RecursionInputVisibility,
+    ) -> eyre::Result<()> {
+        // A single party has nothing to agree on.
         Ok(())
     }
 
