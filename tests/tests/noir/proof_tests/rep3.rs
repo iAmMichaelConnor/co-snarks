@@ -472,6 +472,59 @@ fn recursion_witness_and_proof_test_poseidon2sponge() {
 const RECURSION_EXAMPLES: &str = "../co-noir/co-noir/examples/test_vectors/recursion";
 const RECURSION_ZK_EXAMPLES: &str = "../co-noir/co-noir/examples/test_vectors/recursion_zk";
 
+/// The REP3 driver can evaluate the recursive verifier on secret-shared values. Without the
+/// opt-in, a recursion circuit with secret-shared recursion inputs must still be rejected, before
+/// the verifier runs.
+#[test]
+fn shared_recursion_inputs_are_rejected_by_default() {
+    for (name, dir) in [
+        ("recursion", RECURSION_EXAMPLES),
+        ("recursion_zk", RECURSION_ZK_EXAMPLES),
+    ] {
+        let program_artifact = co_noir::program_artifact_from_reader(
+            File::open(format!("{dir}/{name}.json")).unwrap(),
+        )
+        .unwrap();
+        let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+        let witness =
+            co_noir::witness_from_reader(File::open(format!("{dir}/{name}.gz")).unwrap()).unwrap();
+        let public_inputs = &constraint_system.public_inputs;
+        let mut witness_shares: [Vec<Rep3Type<Fr>>; 3] = Default::default();
+        for (index, value) in witness.into_iter().enumerate() {
+            let shares = if public_inputs.contains(&(index as u32)) {
+                std::array::from_fn(|_| Rep3Type::from(value))
+            } else {
+                share_field_element(value, &mut rand::thread_rng()).map(Rep3Type::from)
+            };
+            for (party, share) in witness_shares.iter_mut().zip(shares) {
+                party.push(share);
+            }
+        }
+        let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), witness_shares)
+            .map(|(net, witness)| {
+                let constraint_system =
+                    co_noir::get_constraint_system_from_artifact(&program_artifact);
+                std::thread::spawn(move || {
+                    co_noir::generate_proving_key_rep3(
+                        &constraint_system,
+                        witness,
+                        &net,
+                        &Default::default(),
+                    )
+                    .map(|_| ())
+                })
+            })
+            .collect();
+        for thread in threads {
+            let error = thread.join().unwrap().unwrap_err();
+            assert!(
+                error.to_string().contains("secret-shared inputs"),
+                "{name}: {error}"
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "Test is too slow for the pipeline"]
 fn recursion_proof_test_poseidon2sponge() {

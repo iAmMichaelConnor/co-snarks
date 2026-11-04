@@ -38,6 +38,7 @@ use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::BitXor;
 
+mod bigfield;
 mod sha256_reads;
 
 type ArithmeticShare<F> = Rep3PrimeFieldShare<F>;
@@ -2752,9 +2753,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             .into();
             return Ok(result.into());
         }
-        unimplemented!(
-            "functionality acvm_type_limbs_to_other_acvm_type not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let value = bigfield::limbs_to_fq::<NUM_LIMBS, LIMB_BITS, _>(
+            &bigfield::cast(limbs)?,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&Rep3AcvmType::Shared(value))
     }
 
     fn other_acvm_type_to_acvm_type_limbs<
@@ -2774,9 +2779,13 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 .collect::<Vec<_>>();
             return Ok(limbs.try_into().expect("We have NUM_LIMBS elements"));
         }
-        unimplemented!(
-            "functionality other_acvm_type_to_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let Rep3AcvmType::Shared(value) = bigfield::cast(input)? else {
+            unreachable!("We checked it is shared")
+        };
+        let limbs =
+            bigfield::fq_to_limbs::<NUM_LIMBS, LIMB_BITS, _>(value, self.net, &mut self.state)?;
+        bigfield::cast(&limbs)
     }
 
     fn add_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2795,9 +2804,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 PlainAcvmSolver::new().add_acvm_type_limbs::<C>(&lhs_limbs, &rhs_limbs)?;
             return Ok(result_limbs.map(Rep3AcvmType::Public));
         }
-        unimplemented!(
-            "functionality add_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let sum = bigfield::add(
+            &bigfield::cast(lhs)?,
+            &bigfield::cast(rhs)?,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&sum)
     }
 
     fn sub_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2821,9 +2835,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 .try_into()
                 .expect("We have 4 elements"));
         }
-        unimplemented!(
-            "functionality sub_acvm_type_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let difference = bigfield::sub(
+            &bigfield::cast(lhs)?,
+            &bigfield::cast(rhs)?,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&difference)
     }
 
     fn mul_mod_acvm_type_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2880,9 +2899,9 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 },
             );
         }
-        unimplemented!(
-            "functionality div_mod_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let result = bigfield::div_mod(&bigfield::cast(a)?, self.net, &mut self.state)?;
+        bigfield::cast(&result)
     }
 
     fn madd_div_mod_acvm_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2926,9 +2945,19 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let to_add = to_add
+            .iter()
+            .map(bigfield::cast)
+            .collect::<eyre::Result<Vec<_>>>()?;
+        let result = bigfield::madd_div_mod(
+            &[bigfield::cast(a)?],
+            &[bigfield::cast(b)?],
+            &to_add,
+            self.net,
+            &mut self.state,
+        )?;
+        bigfield::cast(&result)
     }
 
     fn madd_div_mod_many_acvm_limbs<C: CurveGroup<ScalarField = F, BaseField: PrimeField>>(
@@ -2984,8 +3013,14 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 )
             });
         }
-        unimplemented!(
-            "functionality madd_div_mod_many_acvm_limbs not implemented for Rep3 in the shared case"
-        )
+        bigfield::ensure_bn254::<F, C>()?;
+        let [a, b, to_add] = [a, b, to_add].map(|limbs| {
+            limbs
+                .iter()
+                .map(bigfield::cast)
+                .collect::<eyre::Result<Vec<_>>>()
+        });
+        let result = bigfield::madd_div_mod(&a?, &b?, &to_add?, self.net, &mut self.state)?;
+        bigfield::cast(&result)
     }
 }
