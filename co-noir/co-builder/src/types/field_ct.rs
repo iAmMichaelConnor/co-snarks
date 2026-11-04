@@ -1720,7 +1720,7 @@ impl<F: PrimeField> FieldCT<F> {
         let (lo_val, hi_val) = if T::is_shared(&value) {
             let value = T::get_shared(&value).expect("Already checked it is shared");
             let [lo, hi] = driver.slice(value, lo_bits as u8, 0, max_bits)?;
-            (T::AcvmType::from(hi), T::AcvmType::from(lo))
+            (T::AcvmType::from(lo), T::AcvmType::from(hi))
         } else {
             let value: BigUint = T::get_public(&value)
                 .expect("Already checked it is public")
@@ -4438,34 +4438,65 @@ impl<F: PrimeField> ByteArray<F> {
         driver: &mut T,
     ) -> eyre::Result<Self> {
         let max_num_bytes = 32;
-        let midpoint = max_num_bytes / 2;
-        let one = BigUint::one();
-
-        assert!(num_bytes < max_num_bytes);
-        let mut values = Vec::with_capacity(num_bytes);
+        assert!(num_bytes <= max_num_bytes);
         let value = input.get_value(builder, driver);
 
-        let is_shared = T::is_shared(&value);
-        let decomposed = if is_shared {
+        // Big-endian bytes of the value
+        let decomposed = if num_bytes == 0 {
+            Vec::new()
+        } else if T::is_shared(&value) {
             let value = T::get_shared(&value).expect("Already checked it is shared");
-
-            driver
-                .decompose_arithmetic(value, num_bytes * 8, 8)?
+            // A field element has at most MODULUS_BIT_SIZE bits, so for 32 bytes the top byte
+            // is shorter than 8 bits.
+            let num_bits = (num_bytes * 8).min(F::MODULUS_BIT_SIZE as usize);
+            let mut bytes = driver
+                .decompose_arithmetic(value, num_bits, 8)?
                 .into_iter()
-                .rev()
                 .map(T::AcvmType::from)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            bytes.resize(num_bytes, T::public_zero());
+            bytes.reverse();
+            bytes
         } else {
             let value: BigUint = T::get_public(&value)
                 .expect("Already checked it is public")
                 .into();
-            let mut bytes = value.to_bytes_be();
-            bytes.resize(num_bytes, 0);
-            bytes
-                .into_iter()
-                .map(|byte| F::from(byte).into())
+            (0..num_bytes)
+                .map(|i| {
+                    let bit_start = (num_bytes - i - 1) * 8;
+                    F::from(Utils::slice_u256(
+                        &value,
+                        bit_start as u64,
+                        bit_start as u64 + 8,
+                    ))
+                    .into()
+                })
                 .collect::<Vec<_>>()
         };
+
+        Self::from_field_ct_with_bytes(input, num_bytes, decomposed, builder, driver)
+    }
+
+    /// Constrains `decomposed` to be the big-endian byte decomposition of `input`. The bytes
+    /// are taken as given, so tests can pass a non-canonical decomposition, like the `test_val`
+    /// argument of barretenberg's `byte_array` constructor.
+    fn from_field_ct_with_bytes<
+        P: CurveGroup<ScalarField = F>,
+        T: NoirWitnessExtensionProtocol<P::ScalarField>,
+    >(
+        input: &FieldCT<F>,
+        num_bytes: usize,
+        decomposed: Vec<T::AcvmType>,
+        builder: &mut GenericUltraCircuitBuilder<P, T>,
+        driver: &mut T,
+    ) -> eyre::Result<Self> {
+        let max_num_bytes = 32;
+        let midpoint = max_num_bytes / 2;
+        let one = BigUint::one();
+
+        assert!(num_bytes <= max_num_bytes);
+        assert_eq!(decomposed.len(), num_bytes);
+        let mut values = Vec::with_capacity(num_bytes);
 
         // To optimize the computation of the reconstructed_hi  and reconstructed_lo, we use the `field_t::accumulate`
         // method.
@@ -4524,8 +4555,8 @@ impl<F: PrimeField> ByteArray<F> {
             let [diff_lo_lo_value, diff_lo_hi_value] = if T::is_shared(&diff_lo_value) {
                 let slice_result = driver.slice(
                     T::get_shared(&diff_lo_value).expect("we checked it is shared"),
+                    128,
                     0,
-                    127,
                     F::MODULUS_BIT_SIZE as usize,
                 )?;
                 [
@@ -4632,5 +4663,263 @@ impl<F: PrimeField> ByteArray<F> {
         let mut values = self.values.clone();
         values.reverse();
         Self { values }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript_ct::Bn254G1;
+    use ark_bn254::{Bn254, Fr};
+    use co_acvm::{PlainAcvmSolver, Rep3AcvmSolver, Rep3AcvmType};
+    use co_noir_common::{
+        crs::parse::CrsParser, transcript::Poseidon2Sponge, types::ZeroKnowledge,
+    };
+    use co_ultrahonk::prelude::UltraHonk;
+    use mpc_core::protocols::rep3::{conversion::A2BType, share_field_elements};
+    use mpc_net::local::LocalNetwork;
+    use rand::thread_rng;
+
+    type PlainBuilder = GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>;
+
+    /// A piece of circuit construction that runs unchanged on every driver.
+    trait Gadget: Copy + Send + 'static {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        );
+    }
+
+    /// Finalizes the circuit, proves it with the plain prover and returns whether the proof
+    /// verifies, i.e. whether the witness satisfies all constraints.
+    fn prove_and_verify(mut builder: PlainBuilder, driver: &mut PlainAcvmSolver<Fr>) -> bool {
+        if !builder.circuit_finalized {
+            builder.add_default_to_public_inputs();
+            builder.finalize_circuit(driver).unwrap();
+        }
+        let crs_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../co-noir-common/src/crs");
+        let crs = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+            crs_dir.join("bn254_g1.dat"),
+            crs_dir.join("bn254_g2.dat"),
+            builder.compute_dyadic_size(),
+            ZeroKnowledge::No,
+        )
+        .unwrap();
+        let (prover_crs, verifier_crs) = crs.split();
+        let (pk, vk) = builder
+            .create_keys::<Bn254>(prover_crs.into(), verifier_crs, driver)
+            .unwrap();
+        let (proof, public_inputs) =
+            UltraHonk::<_, Poseidon2Sponge>::prove(pk, ZeroKnowledge::No, &vk.inner_vk).unwrap();
+        UltraHonk::<_, Poseidon2Sponge>::verify(proof, &public_inputs, &vk, ZeroKnowledge::No)
+            .unwrap()
+    }
+
+    /// Runs `gadget` on secret-shared `values` with three Rep3 parties and on public `values`
+    /// with the plain driver. Checks that all parties build the same constraints as the plain
+    /// driver, then proves the plain circuit with the reconstructed Rep3 witness and returns
+    /// whether it verifies.
+    fn rep3_witness_verifies(values: &[Fr], gadget: impl Gadget) -> bool {
+        let shares = share_field_elements(values, &mut thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                std::thread::spawn(move || {
+                    let mut driver =
+                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                    let mut builder = GenericUltraCircuitBuilder::<Bn254G1, _>::new_minimal(0);
+                    let inputs: Vec<_> = shares.into_iter().map(Rep3AcvmType::Shared).collect();
+                    gadget.build(&inputs, &mut builder, &mut driver);
+                    builder.add_default_to_public_inputs();
+                    builder.finalize_circuit(&mut driver).unwrap();
+                    let witness: Vec<_> = builder
+                        .variables
+                        .iter()
+                        .map(|v| driver.get_as_shared(v))
+                        .collect();
+                    let blocks: Vec<_> = builder
+                        .blocks
+                        .get()
+                        .into_iter()
+                        .map(|b| (b.wires.clone(), b.selectors.clone()))
+                        .collect();
+                    (witness, blocks, builder.real_variable_index)
+                })
+            })
+            .collect();
+        let outputs: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        gadget.build(values, &mut builder, &mut driver);
+        builder.add_default_to_public_inputs();
+        builder.finalize_circuit(&mut driver).unwrap();
+        let blocks: Vec<_> = builder
+            .blocks
+            .get()
+            .into_iter()
+            .map(|b| (b.wires.clone(), b.selectors.clone()))
+            .collect();
+        for (witness, rep3_blocks, real_variable_index) in &outputs {
+            assert_eq!(rep3_blocks, &blocks, "Rep3 constraints differ from plain");
+            assert_eq!(real_variable_index, &builder.real_variable_index);
+            assert_eq!(witness.len(), builder.variables.len());
+        }
+        for (i, variable) in builder.variables.iter_mut().enumerate() {
+            *variable = outputs.iter().map(|(witness, _, _)| witness[i].a).sum();
+        }
+        prove_and_verify(builder, &mut driver)
+    }
+
+    #[derive(Clone, Copy)]
+    struct SplitUnique;
+
+    impl Gadget for SplitUnique {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            for input in inputs {
+                let input = FieldCT::from_witness(input.clone(), builder);
+                for lo_bits in [127, 128] {
+                    input.split_unique(lo_bits, builder, driver).unwrap();
+                }
+            }
+        }
+    }
+
+    fn split_values() -> Vec<Fr> {
+        vec![
+            Fr::zero(),
+            Fr::one(),
+            -Fr::one(),
+            Fr::from((BigUint::one() << 127) - 1u32),
+            Fr::from(BigUint::one() << 127),
+            Fr::from((BigUint::one() << 136) + 255u32),
+        ]
+    }
+
+    #[test]
+    fn plain_split_unique_verifies() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        SplitUnique.build(&split_values(), &mut builder, &mut driver);
+        assert!(prove_and_verify(builder, &mut driver));
+    }
+
+    #[test]
+    fn shared_split_unique_witness_verifies() {
+        assert!(rep3_witness_verifies(&split_values(), SplitUnique));
+    }
+
+    #[derive(Clone, Copy)]
+    struct BytesFromField;
+
+    impl Gadget for BytesFromField {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            // The first four inputs of `byte_values` fit into four bytes.
+            for (i, input) in inputs.iter().enumerate() {
+                let input = FieldCT::from_witness(input.clone(), builder);
+                if i < 4 {
+                    ByteArray::from_field_ct(&input, 4, builder, driver).unwrap();
+                }
+                ByteArray::from_field_ct(&input, 32, builder, driver).unwrap();
+            }
+        }
+    }
+
+    fn byte_values() -> Vec<Fr> {
+        vec![
+            Fr::zero(),
+            Fr::one(),
+            Fr::from(0xab_cdefu64),
+            Fr::from(0xfedc_ba98u64),
+            -Fr::one(),
+            Fr::from((BigUint::one() << 136) + 255u32),
+        ]
+    }
+
+    fn expected_bytes(value: Fr, num_bytes: usize) -> Vec<Fr> {
+        let value: BigUint = value.into();
+        (0..num_bytes)
+            .map(|i| Fr::from((&value >> ((num_bytes - i - 1) * 8)) & BigUint::from(255u32)))
+            .collect()
+    }
+
+    #[test]
+    fn byte_array_from_field_ct_is_big_endian() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        for (value, num_bytes) in [
+            (Fr::zero(), 0),
+            (Fr::one(), 1),
+            (Fr::from(255u32), 1),
+            (Fr::one(), 4),
+            (Fr::from(0xab_cdefu64), 4),
+            (Fr::one(), 32),
+            (-Fr::one(), 32),
+        ] {
+            let input = FieldCT::from_witness(value, &mut builder);
+            let bytes =
+                ByteArray::from_field_ct(&input, num_bytes, &mut builder, &mut driver).unwrap();
+            let bytes: Vec<_> = bytes
+                .values
+                .iter()
+                .map(|byte| byte.get_value(&builder, &mut driver))
+                .collect();
+            assert_eq!(
+                bytes,
+                expected_bytes(value, num_bytes),
+                "{value} {num_bytes}"
+            );
+        }
+        assert!(prove_and_verify(builder, &mut driver));
+    }
+
+    #[test]
+    fn plain_byte_array_witness_verifies() {
+        let mut driver = PlainAcvmSolver::<Fr>::new();
+        let mut builder = PlainBuilder::new_minimal(0);
+        BytesFromField.build(&byte_values(), &mut builder, &mut driver);
+        assert!(prove_and_verify(builder, &mut driver));
+    }
+
+    #[test]
+    fn shared_byte_array_witness_verifies() {
+        assert!(rep3_witness_verifies(&byte_values(), BytesFromField));
+    }
+
+    #[test]
+    fn full_width_byte_array_rejects_modular_aliases() {
+        let modulus: BigUint = Fr::MODULUS.into();
+        for (integer, valid) in [
+            (BigUint::zero(), true),
+            (BigUint::one(), true),
+            (&modulus - 1u32, true),
+            (modulus.clone(), false),
+            (&modulus + 1u32, false),
+            ((BigUint::one() << 256) - 1u32, false),
+        ] {
+            let mut driver = PlainAcvmSolver::<Fr>::new();
+            let mut builder = PlainBuilder::new_minimal(0);
+            let input = FieldCT::from_witness(Fr::from(integer.clone()), &mut builder);
+            let bytes = (0..32)
+                .map(|i| Fr::from((&integer >> ((31 - i) * 8)) & BigUint::from(255u32)))
+                .collect();
+            ByteArray::from_field_ct_with_bytes(&input, 32, bytes, &mut builder, &mut driver)
+                .unwrap();
+            assert_eq!(prove_and_verify(builder, &mut driver), valid, "{integer}");
+        }
     }
 }

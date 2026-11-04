@@ -1570,10 +1570,10 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                 Ok(arithmetic::lt_public(b, a, self.net, &mut self.state)?.into())
             }
             (Rep3AcvmType::Shared(a), Rep3AcvmType::Public(b)) => {
-                Ok(arithmetic::ge_public(a, b, self.net, &mut self.state)?.into())
+                Ok(arithmetic::gt_public(a, b, self.net, &mut self.state)?.into())
             }
             (Rep3AcvmType::Shared(a), Rep3AcvmType::Shared(b)) => {
-                Ok(arithmetic::ge(a, b, self.net, &mut self.state)?.into())
+                Ok(arithmetic::gt(a, b, self.net, &mut self.state)?.into())
             }
         }
     }
