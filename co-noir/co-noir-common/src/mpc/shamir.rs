@@ -1,9 +1,7 @@
 use super::NoirUltraHonkProver;
 use crate::HonkCurve;
 use crate::honk_proof::TranscriptFieldType;
-use ark_ff::Field;
 use ark_ff::PrimeField;
-use itertools::izip;
 use mpc_core::MpcState;
 use mpc_core::protocols::shamir::ShamirState;
 use mpc_core::protocols::shamir::network::ShamirNetworkExt;
@@ -116,7 +114,9 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for ShamirUltraHo
         net: &N,
         state: &mut Self::State,
     ) -> eyre::Result<Vec<Self::ArithmeticShare>> {
-        arithmetic::mul_vec(a, b, net, state)
+        // Same messages as `arithmetic::mul_vec`, but the local products run on rayon.
+        let local = arithmetic::local_mul_vec(a, b);
+        net.degree_reduce_many(state, local)
     }
 
     fn add_with_public(
@@ -212,15 +212,19 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for ShamirUltraHo
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
         if y.iter().any(|y| y.is_zero()) {
             eyre::bail!("Cannot compute inverse of zero");
         }
 
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            *a = r * y.inverse().unwrap();
-        }
+        // y is public, so all elements are inverted with one batch inversion.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
@@ -233,16 +237,17 @@ impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for ShamirUltraHo
         let r = (0..a.len())
             .map(|_| <Self as NoirUltraHonkProver<P>>::rand(net, state))
             .collect::<Result<Vec<_>, _>>()?;
-        let y: Vec<P::ScalarField> =
+        let mut y: Vec<P::ScalarField> =
             <Self as NoirUltraHonkProver<P>>::mul_open_many(a, &r, net, state)?;
 
-        for (a, r, y) in izip!(a.iter_mut(), r, y) {
-            if y.is_zero() {
-                *a = Self::ArithmeticShare::default();
-            } else {
-                *a = r * y.inverse().unwrap();
-            }
-        }
+        // y is public, so all elements are inverted with one batch inversion. It leaves zeros
+        // unchanged, and r * 0 is the zero share.
+        ark_ff::batch_inversion(&mut y);
+        a.par_iter_mut()
+            .zip_eq(r.par_iter())
+            .zip_eq(y.par_iter())
+            .with_min_len(1024)
+            .for_each(|((a, r), y)| *a = *r * *y);
 
         Ok(())
     }
