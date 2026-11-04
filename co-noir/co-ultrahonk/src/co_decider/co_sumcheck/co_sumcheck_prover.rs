@@ -18,7 +18,11 @@ use co_noir_common::{
     transcript::{Transcript, TranscriptHasher},
 };
 use mpc_net::Network;
+use rayon::prelude::*;
 use ultrahonk::{Utils, prelude::GateSeparatorPolynomial};
+
+/// Number of destination rows per rayon task when folding one column in the first round.
+const PARTIAL_EVALUATION_ROW_CHUNK: usize = 1 << 15;
 
 // Keep in mind, the UltraHonk protocol (UltraFlavor) does not per default have ZK
 impl<
@@ -36,27 +40,48 @@ impl<
     ) {
         tracing::trace!("Partially_evaluate init");
 
-        // Barretenberg uses multithreading here
+        // The columns are independent and the work is local for every driver. Source and destination are
+        // distinct buffers and destination row j only reads source rows 2j and 2j + 1, so each column is
+        // additionally split into row chunks. Every value is computed as in a serial loop.
+        let n_out = round_size >> 1;
 
-        for (poly_src, poly_des) in polys
+        polys
             .public_iter()
             .zip(partially_evaluated_poly.public_iter_mut())
-        {
-            for i in (0..round_size).step_by(2) {
-                poly_des[i >> 1] = poly_src[i] + (poly_src[i + 1] - poly_src[i]) * round_challenge;
-            }
-        }
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|(poly_src, poly_des)| {
+                poly_des[..n_out]
+                    .par_chunks_mut(PARTIAL_EVALUATION_ROW_CHUNK)
+                    .enumerate()
+                    .for_each(|(c, chunk)| {
+                        let base = c * PARTIAL_EVALUATION_ROW_CHUNK;
+                        for (k, des) in chunk.iter_mut().enumerate() {
+                            let i = 2 * (base + k);
+                            *des = poly_src[i] + (poly_src[i + 1] - poly_src[i]) * round_challenge;
+                        }
+                    });
+            });
 
-        for (poly_src, poly_des) in polys
+        polys
             .shared_iter()
             .zip(partially_evaluated_poly.shared_iter_mut())
-        {
-            for i in (0..round_size).step_by(2) {
-                let tmp = T::sub(poly_src[i + 1], poly_src[i]);
-                let tmp = T::mul_with_public(*round_challenge, tmp);
-                poly_des[i >> 1] = T::add(poly_src[i], tmp);
-            }
-        }
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|(poly_src, poly_des)| {
+                poly_des[..n_out]
+                    .par_chunks_mut(PARTIAL_EVALUATION_ROW_CHUNK)
+                    .enumerate()
+                    .for_each(|(c, chunk)| {
+                        let base = c * PARTIAL_EVALUATION_ROW_CHUNK;
+                        for (k, des) in chunk.iter_mut().enumerate() {
+                            let i = 2 * (base + k);
+                            let tmp = T::sub(poly_src[i + 1], poly_src[i]);
+                            let tmp = T::mul_with_public(*round_challenge, tmp);
+                            *des = T::add(poly_src[i], tmp);
+                        }
+                    });
+            });
     }
 
     pub(crate) fn partially_evaluate_inplace(
@@ -65,33 +90,42 @@ impl<
     ) {
         tracing::trace!("Partially_evaluate inplace");
 
-        // Barretenberg uses multithreading here
+        // The columns are independent and the work is local for every driver, so they run in parallel. Within a
+        // column the in-place fold reads rows that earlier iterations wrote, so it stays serial.
 
-        for poly in partially_evaluated_poly.public_iter_mut() {
-            let limit = poly.len();
-            for i in (0..limit).step_by(2) {
-                poly[i >> 1] = poly[i] + (poly[i + 1] - poly[i]) * round_challenge;
-            }
+        partially_evaluated_poly
+            .public_iter_mut()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|poly| {
+                let limit = poly.len();
+                for i in (0..limit).step_by(2) {
+                    poly[i >> 1] = poly[i] + (poly[i + 1] - poly[i]) * round_challenge;
+                }
 
-            poly.truncate(limit / 2 + limit % 2);
-            if poly.len() < 2 {
-                poly.push(P::ScalarField::zero());
-            }
-        }
+                poly.truncate(limit / 2 + limit % 2);
+                if poly.len() < 2 {
+                    poly.push(P::ScalarField::zero());
+                }
+            });
 
-        for poly in partially_evaluated_poly.shared_iter_mut() {
-            let limit = poly.len();
-            for i in (0..limit).step_by(2) {
-                let tmp = T::sub(poly[i + 1], poly[i]);
-                let tmp = T::mul_with_public(*round_challenge, tmp);
-                poly[i >> 1] = T::add(poly[i], tmp);
-            }
+        partially_evaluated_poly
+            .shared_iter_mut()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .for_each(|poly| {
+                let limit = poly.len();
+                for i in (0..limit).step_by(2) {
+                    let tmp = T::sub(poly[i + 1], poly[i]);
+                    let tmp = T::mul_with_public(*round_challenge, tmp);
+                    poly[i >> 1] = T::add(poly[i], tmp);
+                }
 
-            poly.truncate(limit / 2 + limit % 2);
-            if poly.len() < 2 {
-                poly.push(T::ArithmeticShare::default());
-            }
-        }
+                poly.truncate(limit / 2 + limit % 2);
+                if poly.len() < 2 {
+                    poly.push(T::ArithmeticShare::default());
+                }
+            });
     }
 
     fn add_evals_to_transcript(
