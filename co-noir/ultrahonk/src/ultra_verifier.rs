@@ -1,7 +1,8 @@
 use ark_ec::pairing::Pairing;
 use co_noir_common::{
+    constants::PAIRING_POINT_ACCUMULATOR_SIZE,
     honk_curve::HonkCurve,
-    honk_proof::TranscriptFieldType,
+    honk_proof::{HonkProofError, TranscriptFieldType},
     keys::verification_key::VerifyingKey,
     transcript::{Transcript, TranscriptHasher},
     types::ZeroKnowledge,
@@ -25,6 +26,21 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         has_zk: ZeroKnowledge,
     ) -> HonkVerifyResult<bool> {
         tracing::trace!("UltraHonk verification");
+        // The key may not come from a decoder that already checked it.
+        verifying_key.inner_vk.validate_metadata()?;
+        // The proof carries the pairing point accumulator, the caller passes all other public
+        // inputs. Since both are concatenated before verification, check the split: otherwise a
+        // proof could supply an input the caller did not pass (or the other way round).
+        let expected_public_inputs = verifying_key
+            .inner_vk
+            .num_public_inputs
+            .checked_sub(u64::from(PAIRING_POINT_ACCUMULATOR_SIZE))
+            .ok_or(HonkProofError::CorruptedKey)?;
+        eyre::ensure!(
+            public_inputs.len() as u64 == expected_public_inputs,
+            "expected {expected_public_inputs} public inputs, got {}",
+            public_inputs.len()
+        );
         // Without padding, the sumcheck runs `log_circuit_size` rounds, and with ZK the
         // row-disabling polynomial is identically zero below three rounds (as in barretenberg).
         if !H::USE_PADDING && has_zk == ZeroKnowledge::Yes {
