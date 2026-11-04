@@ -30,6 +30,12 @@ pub trait TranscriptHasher<F: PrimeField> {
     fn convert_point<P: HonkCurve<F>>(element: &P::Affine) -> Vec<Self::DataType>;
     fn convert_scalarfield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::ScalarField;
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField;
+    /// Checks that `elements` canonically encode a scalar-field element. The verifier calls this
+    /// on untrusted proof data before [`Self::convert_scalarfield_back`].
+    fn validate_scalarfield<P: HonkCurve<F>>(elements: &[Self::DataType]) -> HonkProofResult<()>;
+    /// Checks that `elements` canonically encode a base-field element. The verifier calls this
+    /// on untrusted proof data before [`Self::convert_basefield_back`].
+    fn validate_basefield<P: HonkCurve<F>>(elements: &[Self::DataType]) -> HonkProofResult<()>;
     fn convert_challenge_into<P: HonkCurve<F>>(challenge: &F) -> Self::DataType;
     fn convert_destinationfield_to_scalarfield<P: HonkCurve<F>>(
         element: &Self::DataType,
@@ -72,6 +78,14 @@ impl<F: PrimeField, const T: usize, const R: usize, H: FieldHash<F, T> + Default
 
     fn convert_basefield_back<P: HonkCurve<F>>(elements: &[Self::DataType]) -> P::BaseField {
         P::convert_basefield_back(elements)
+    }
+
+    fn validate_scalarfield<P: HonkCurve<F>>(elements: &[Self::DataType]) -> HonkProofResult<()> {
+        P::validate_scalarfield(elements)
+    }
+
+    fn validate_basefield<P: HonkCurve<F>>(elements: &[Self::DataType]) -> HonkProofResult<()> {
+        P::validate_basefield(elements)
     }
 
     fn convert_challenge_into<P: HonkCurve<F>>(challenge: &F) -> Self::DataType {
@@ -272,6 +286,7 @@ where
     ) -> HonkProofResult<P::ScalarField> {
         let elements = self.receive_n_from_prover(label, H::NUM_SCALARFIELD_ELEMENTS)?;
 
+        H::validate_scalarfield::<P>(&elements)?;
         Ok(H::convert_scalarfield_back::<P>(&elements))
     }
 
@@ -285,16 +300,20 @@ where
         #[allow(clippy::chunks_exact_to_as_chunks)]
         let coords = elements
             .chunks_exact(H::NUM_BASEFIELD_ELEMENTS)
-            .map(H::convert_basefield_back::<P>)
-            .collect::<Vec<_>>();
+            .map(|coord| {
+                H::validate_basefield::<P>(coord)?;
+                Ok(H::convert_basefield_back::<P>(coord))
+            })
+            .collect::<HonkProofResult<Vec<_>>>()?;
 
         let x: P::BaseField = coords[0];
         let y: P::BaseField = coords[1];
 
+        // The coordinates are canonical, so (0, 0) is the only encoding of the point at infinity.
         let res = if x.is_zero() && y.is_zero() {
             P::Affine::zero()
         } else {
-            P::g1_affine_from_xy(x, y)
+            P::g1_affine_from_xy(x, y)?
         };
 
         Ok(res)
@@ -311,8 +330,11 @@ where
         #[allow(clippy::chunks_exact_to_as_chunks)]
         let elements = elements
             .chunks_exact(H::NUM_SCALARFIELD_ELEMENTS)
-            .map(H::convert_scalarfield_back::<P>)
-            .collect();
+            .map(|element| {
+                H::validate_scalarfield::<P>(element)?;
+                Ok(H::convert_scalarfield_back::<P>(element))
+            })
+            .collect::<HonkProofResult<_>>()?;
 
         Ok(elements)
     }
@@ -330,6 +352,7 @@ where
             .chunks_exact(H::NUM_SCALARFIELD_ELEMENTS)
             .zip(res.iter_mut())
         {
+            H::validate_scalarfield::<P>(src)?;
             let el = H::convert_scalarfield_back::<P>(src);
             *des = el;
         }
@@ -482,5 +505,140 @@ impl Index<usize> for TranscriptManifest {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.manifest[&index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::honk_curve::HonkCurve;
+    use ark_bn254::{Fq, Fr, G1Affine, G1Projective};
+    use ark_ec::AffineRepr;
+    use noir_types::U256;
+    use num_bigint::BigUint;
+    use sha3::Keccak256;
+
+    fn word(value: BigUint) -> U256 {
+        let raw = value.to_bytes_be();
+        let mut bytes = [0u8; 32];
+        bytes[32 - raw.len()..].copy_from_slice(&raw);
+        U256(ruint::Uint::from_be_bytes(bytes))
+    }
+
+    fn keccak_verifier(words: Vec<U256>) -> Transcript<Fr, Keccak256> {
+        Transcript::new_verifier(HonkProof::new(words))
+    }
+
+    fn poseidon_verifier(frs: Vec<Fr>) -> Transcript<Fr, Poseidon2Sponge> {
+        Transcript::new_verifier(HonkProof::new(frs))
+    }
+
+    /// Encodes the coordinates of a point as the four (136-bit, 118-bit) limbs of a proof.
+    fn limbs(x: &BigUint, y: &BigUint) -> Vec<Fr> {
+        let mask = (BigUint::from(1u8) << 136) - 1u8;
+        [x, y]
+            .into_iter()
+            .flat_map(|c| [Fr::from(c & &mask), Fr::from(c >> 136)])
+            .collect()
+    }
+
+    fn read_point(frs: Vec<Fr>) -> HonkProofResult<G1Affine> {
+        poseidon_verifier(frs).receive_point_from_prover::<G1Projective>("P".to_string())
+    }
+
+    #[test]
+    fn field_points_reject_noncanonical_limbs() {
+        let q: BigUint = Fq::MODULUS.into();
+        let (gx, gy) = G1Projective::g1_affine_to_xy(&G1Affine::generator());
+        let (gx, gy): (BigUint, BigUint) = (gx.into(), gy.into());
+        assert_eq!(read_point(limbs(&gx, &gy)).unwrap(), G1Affine::generator());
+        assert!(read_point(vec![Fr::zero(); 4]).unwrap().is_zero());
+
+        // Same coordinate value, but the low limb exceeds its 136-bit bound.
+        let mut frs = limbs(&gx, &gy);
+        frs[0] += Fr::from(BigUint::from(1u8) << 136);
+        frs[1] -= Fr::from(1u64);
+        assert!(matches!(
+            read_point(frs),
+            Err(HonkProofError::NonCanonicalFieldEncoding)
+        ));
+        // Coordinates that are congruent to the honest ones (or to infinity) modulo q.
+        for frs in [
+            limbs(&(&gx + &q), &gy),
+            limbs(&gx, &(&gy + &q)),
+            limbs(&q, &q),
+        ] {
+            assert!(matches!(
+                read_point(frs),
+                Err(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+        }
+    }
+
+    #[test]
+    fn off_curve_points_are_errors() {
+        let off_curve = (BigUint::from(1u8), BigUint::from(3u8));
+        assert!(matches!(
+            read_point(limbs(&off_curve.0, &off_curve.1)),
+            Err(HonkProofError::PointNotOnCurve)
+        ));
+        assert!(matches!(
+            keccak_verifier(vec![word(off_curve.0), word(off_curve.1)])
+                .receive_point_from_prover::<G1Projective>("P".to_string()),
+            Err(HonkProofError::PointNotOnCurve)
+        ));
+    }
+
+    #[test]
+    fn keccak_scalars_reject_noncanonical_words() {
+        let r: BigUint = Fr::MODULUS.into();
+        for value in [BigUint::zero(), &r - 1u8] {
+            assert!(
+                keccak_verifier(vec![word(value)])
+                    .receive_fr_from_prover::<G1Projective>("x".to_string())
+                    .is_ok()
+            );
+        }
+        for value in [r.clone(), &r + 1u8, (BigUint::from(1u8) << 256) - 1u8] {
+            let w = word(value);
+            assert!(matches!(
+                keccak_verifier(vec![w]).receive_fr_from_prover::<G1Projective>("x".to_string()),
+                Err(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+            assert!(matches!(
+                keccak_verifier(vec![w])
+                    .receive_fr_vec_from_prover::<G1Projective>("x".to_string(), 1),
+                Err(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+            assert!(matches!(
+                keccak_verifier(vec![w])
+                    .receive_fr_array_from_prover::<G1Projective, 1>("x".to_string()),
+                Err(HonkProofError::NonCanonicalFieldEncoding)
+            ));
+        }
+    }
+
+    #[test]
+    fn keccak_points_reject_coordinates_above_the_modulus() {
+        let q: BigUint = Fq::MODULUS.into();
+        // (1, 2) is the generator, (0, 0) encodes the point at infinity.
+        for (x, y) in [(1u8, 2u8), (0, 0)] {
+            let (x, y) = (BigUint::from(x), BigUint::from(y));
+            assert!(
+                keccak_verifier(vec![word(x.clone()), word(y.clone())])
+                    .receive_point_from_prover::<G1Projective>("P".to_string())
+                    .is_ok()
+            );
+            for words in [
+                vec![word(&x + &q), word(y.clone())],
+                vec![word(x.clone()), word(&y + &q)],
+            ] {
+                assert!(matches!(
+                    keccak_verifier(words)
+                        .receive_point_from_prover::<G1Projective>("P".to_string()),
+                    Err(HonkProofError::NonCanonicalFieldEncoding)
+                ));
+            }
+        }
     }
 }

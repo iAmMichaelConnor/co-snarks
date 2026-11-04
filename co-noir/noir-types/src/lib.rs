@@ -233,6 +233,17 @@ impl<F: Field> SerializeF<F> {
             num_elements
         };
 
+        // Reject non-canonical encodings (values >= modulus), as barretenberg does, instead of
+        // reducing them: otherwise several byte strings decode to the same proof.
+        let modulus = <F::BasePrimeField as PrimeField>::MODULUS.to_bytes_be();
+        // `as_chunks` is not possible here since associated consts cannot be used as const generics on stable
+        #[allow(clippy::chunks_exact_to_as_chunks)]
+        for word in buf[offset..].chunks_exact(Self::FIELDSIZE_BYTES as usize) {
+            if word >= modulus.as_slice() {
+                eyre::bail!("non-canonical field element encoding");
+            }
+        }
+
         // Read data
         let mut res = Vec::with_capacity(num_elements);
         for _ in 0..num_elements {
@@ -610,5 +621,43 @@ impl U256 {
                 ))
             })
             .collect::<Vec<U256>>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HonkProofType, SerializeF};
+    use ark_bn254::Fr;
+    use ark_ff::PrimeField;
+    use num_bigint::BigUint;
+
+    fn be_bytes(value: &BigUint) -> Vec<u8> {
+        let raw = value.to_bytes_be();
+        let mut bytes = vec![0u8; 32 - raw.len()];
+        bytes.extend(raw);
+        bytes
+    }
+
+    #[test]
+    fn field_buffers_reject_values_above_the_modulus() {
+        let modulus: BigUint = Fr::MODULUS.into();
+        let max = be_bytes(&(&modulus - 1u8));
+        assert_eq!(
+            SerializeF::<Fr>::from_buffer(&max, false).unwrap(),
+            vec![-Fr::from(1u64)]
+        );
+        for value in [
+            modulus.clone(),
+            &modulus + 1u8,
+            (BigUint::from(1u8) << 256) - 1u8,
+        ] {
+            let bytes = be_bytes(&value);
+            assert!(SerializeF::<Fr>::from_buffer(&bytes, false).is_err());
+            let mut prefixed = 1u32.to_be_bytes().to_vec();
+            prefixed.extend(&bytes);
+            assert!(SerializeF::<Fr>::from_buffer(&prefixed, true).is_err());
+            assert!(HonkProofType::proof_and_public_inputs_from_buffer_field(&bytes, &[]).is_err());
+            assert!(HonkProofType::proof_and_public_inputs_from_buffer_field(&[], &bytes).is_err());
+        }
     }
 }

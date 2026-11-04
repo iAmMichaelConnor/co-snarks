@@ -5,6 +5,8 @@ use ark_grumpkin::GrumpkinConfig;
 use num_bigint::BigUint;
 use std::str::FromStr;
 
+use crate::honk_proof::{HonkProofError, HonkProofResult};
+
 // Des describes the PrimeField used for the Transcript.
 //
 // The optimized MSM and the affine-from-coordinates constructor only exist for short-Weierstrass
@@ -25,10 +27,11 @@ pub trait HonkCurve<Des: PrimeField>: CurveGroup<BaseField: PrimeField> {
     /// checked: rejecting off-curve and wrong-subgroup points here is load-bearing. Use
     /// [`Affine::new_unchecked`] for coordinates that are already trusted.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the coordinates are not a point of the prime-order subgroup.
-    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine;
+    /// Returns [`HonkProofError::PointNotOnCurve`] if the coordinates are not a point of the
+    /// prime-order subgroup.
+    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> HonkProofResult<Self::Affine>;
 
     /// Computes an MSM with [`taceo_ark_algebra::msm::msm_unchecked`], chopping the slices to the
     /// shorter of the two lengths.
@@ -43,8 +46,21 @@ pub trait HonkCurve<Des: PrimeField>: CurveGroup<BaseField: PrimeField> {
     fn convert_scalarfield_into(src: &Self::ScalarField) -> Vec<Des>;
     fn convert_scalarfield_back(src: &[Des]) -> Self::ScalarField;
 
+    /// Checks that `src` is the canonical encoding of a scalar-field element, i.e. the encoding
+    /// [`Self::convert_scalarfield_into`] produces. See [`Self::validate_basefield`].
+    fn validate_scalarfield(_src: &[Des]) -> HonkProofResult<()> {
+        Ok(())
+    }
+
     fn convert_basefield_into(src: &Self::BaseField) -> Vec<Des>;
     fn convert_basefield_back(src: &[Des]) -> Self::BaseField;
+
+    /// Checks that `src` is the canonical encoding of a base-field element, i.e. the encoding
+    /// [`Self::convert_basefield_into`] produces. [`Self::convert_basefield_back`] does not check
+    /// this, so call this first on untrusted input (as barretenberg's `FrCodec` does).
+    fn validate_basefield(_src: &[Des]) -> HonkProofResult<()> {
+        Ok(())
+    }
 
     fn convert_basefield_to_scalarfield(src: &Self::BaseField) -> Vec<Self::ScalarField>;
 
@@ -74,12 +90,19 @@ impl HonkCurve<ark_bn254::Fr> for ark_ec::short_weierstrass::Projective<ark_bn25
     const SUBGROUP_SIZE: usize = 256;
     const LIBRA_UNIVARIATES_LENGTH: usize = 9;
 
-    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine {
-        Affine::new(x, y)
+    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> HonkProofResult<Self::Affine> {
+        checked_affine(Affine::new_unchecked(x, y))
     }
 
     fn fast_msm(bases: &[Self::Affine], scalars: &[Self::ScalarField]) -> Self {
         taceo_ark_algebra::msm::msm_unchecked(bases, scalars)
+    }
+
+    fn validate_basefield(src: &[ark_bn254::Fr]) -> HonkProofResult<()> {
+        let [res0, res1] = src else {
+            return Err(HonkProofError::NonCanonicalFieldEncoding);
+        };
+        validate_bn254_fq_limbs(res0, res1)
     }
 
     fn convert_scalarfield_into(src: &ark_bn254::Fr) -> Vec<ark_bn254::Fr> {
@@ -168,8 +191,8 @@ impl HonkCurve<ark_bn254::Fr> for short_weierstrass::Projective<GrumpkinConfig> 
     const SUBGROUP_SIZE: usize = 87;
     const LIBRA_UNIVARIATES_LENGTH: usize = 3;
 
-    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> Self::Affine {
-        Affine::new(x, y)
+    fn g1_affine_from_xy(x: Self::BaseField, y: Self::BaseField) -> HonkProofResult<Self::Affine> {
+        checked_affine(Affine::new_unchecked(x, y))
     }
 
     fn fast_msm(bases: &[Self::Affine], scalars: &[Self::ScalarField]) -> Self {
@@ -184,6 +207,13 @@ impl HonkCurve<ark_bn254::Fr> for short_weierstrass::Projective<GrumpkinConfig> 
     fn convert_scalarfield_back(src: &[ark_bn254::Fr]) -> Self::ScalarField {
         debug_assert_eq!(src.len(), Self::NUM_BASEFIELD_ELEMENTS);
         bn254_fq_to_fr_rev(&src[0], &src[1])
+    }
+
+    fn validate_scalarfield(src: &[ark_bn254::Fr]) -> HonkProofResult<()> {
+        let [res0, res1] = src else {
+            return Err(HonkProofError::NonCanonicalFieldEncoding);
+        };
+        validate_bn254_fq_limbs(res0, res1)
     }
 
     fn convert_basefield_into(src: &Self::BaseField) -> Vec<ark_bn254::Fr> {
@@ -246,6 +276,14 @@ impl HonkCurve<ark_bn254::Fr> for short_weierstrass::Projective<GrumpkinConfig> 
     }
 }
 
+fn checked_affine<C: short_weierstrass::SWCurveConfig>(p: Affine<C>) -> HonkProofResult<Affine<C>> {
+    if p.is_on_curve() && p.is_in_correct_subgroup_assuming_on_curve() {
+        Ok(p)
+    } else {
+        Err(HonkProofError::PointNotOnCurve)
+    }
+}
+
 pub(crate) const NUM_LIMB_BITS: u32 = 68;
 const TOTAL_BITS: u32 = 254;
 
@@ -293,6 +331,21 @@ fn bn254_fq_to_fr_rev(res0: &ark_bn254::Fr, res1: &ark_bn254::Fr) -> ark_bn254::
 
     let value = res0 + (res1 << (NUM_LIMB_BITS * 2));
     ark_bn254::Fq::from(value)
+}
+
+/// Checks the limb bounds that [`bn254_fq_to_fr_rev`] only debug-asserts, and that the
+/// recombined value is below the modulus, so that every `Fq` has exactly one encoding. This
+/// matches barretenberg's `FrCodec::convert_grumpkin_fr_from_bn254_frs`.
+fn validate_bn254_fq_limbs(res0: &ark_bn254::Fr, res1: &ark_bn254::Fr) -> HonkProofResult<()> {
+    let res0 = BigUint::from(*res0);
+    let res1 = BigUint::from(*res1);
+    if res0 >= (BigUint::one() << (NUM_LIMB_BITS * 2))
+        || res1 >= (BigUint::one() << (TOTAL_BITS - NUM_LIMB_BITS * 2))
+        || res0 + (res1 << (NUM_LIMB_BITS * 2)) >= BigUint::from(ark_bn254::Fq::MODULUS)
+    {
+        return Err(HonkProofError::NonCanonicalFieldEncoding);
+    }
+    Ok(())
 }
 
 fn convert_grumpkin_fr_to_bn254_frs(val: &ark_grumpkin::Fr) -> (ark_bn254::Fr, ark_bn254::Fr) {
