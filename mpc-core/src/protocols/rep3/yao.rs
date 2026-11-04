@@ -151,7 +151,7 @@ impl GCUtils {
         Self::uint_to_bits(&uint, n_bits)
     }
 
-    fn field_to_bits_as_u16<F: FieldUint>(field: F) -> Vec<u16> {
+    pub(crate) fn field_to_bits_as_u16<F: FieldUint>(field: F) -> Vec<u16> {
         let n_bits = F::MODULUS_BIT_SIZE as usize;
         let uint = field.to_uint();
 
@@ -400,6 +400,170 @@ pub fn joint_input_arithmetic_added_many<F: FieldUint, N: Network>(
     };
 
     Ok([x01, x2])
+}
+
+/// A share of an arithmetically shared value that can be input into a garbled circuit as the two
+/// Yao shares x_1 and x_2 + x_3 (see [`joint_input_arithmetic_added_many`]).
+pub(crate) trait JointInputArithmetic {
+    /// The number of bits of one value.
+    fn bit_len() -> usize;
+    /// The bits (LSB first) of the sum of both components: party 1's input.
+    fn added_bits(&self) -> Vec<u16>;
+    /// The bits (LSB first) of the first component: party 2's input.
+    fn first_bits(&self) -> Vec<u16>;
+}
+
+impl<F: FieldUint> JointInputArithmetic for Rep3PrimeFieldShare<F> {
+    fn bit_len() -> usize {
+        F::MODULUS_BIT_SIZE as usize
+    }
+
+    fn added_bits(&self) -> Vec<u16> {
+        GCUtils::field_to_bits_as_u16(self.a + self.b)
+    }
+
+    fn first_bits(&self) -> Vec<u16> {
+        GCUtils::field_to_bits_as_u16(self.a)
+    }
+}
+
+/// The input round of a garbled circuit that takes both the Yao shares of arithmetically shared
+/// values `x` and values that party 2 inputs: the work of [`joint_input_arithmetic_added_many`]
+/// followed by an `input_*_id2_many` call, in one round instead of two.
+///
+/// The two exchanges are independent: party 1 encodes x_2 + x_3 and party 2 encodes x_1 and its
+/// own inputs, all from local values. Party 2 encodes the bits of x_1 first and then
+/// `id2_bits`, in the order of the two separate calls, so the wire labels and therefore all
+/// results are the same; party 2 sends both in one message to each other party.
+///
+/// `id2_bits` holds the `n_id2_bits` bits of party 2's inputs (`Some` exactly for party 2).
+/// Returns `[x01, x2]` and party 2's inputs, as the two calls do.
+pub(crate) fn joint_input_arithmetic_added_and_id2_bits_many<
+    S: JointInputArithmetic,
+    N: Network,
+>(
+    x: &[S],
+    id2_bits: Option<Vec<u16>>,
+    n_id2_bits: usize,
+    delta: Option<WireMod2>,
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<([BinaryBundle<WireMod2>; 2], BinaryBundle<WireMod2>)> {
+    let x_bits = x.len() * S::bit_len();
+    let split = |wires: &BinaryBundle<WireMod2>| {
+        let (x2, id2) = wires.wires().split_at(x_bits);
+        (
+            BinaryBundle::new(x2.to_vec()),
+            BinaryBundle::new(id2.to_vec()),
+        )
+    };
+
+    match state.id {
+        PartyID::ID0 => {
+            let x01 = GCUtils::receive_bundle_from(x_bits, net, PartyID::ID1)?;
+            let (x2, id2) = split(&GCUtils::receive_bundle_from(
+                x_bits + n_id2_bits,
+                net,
+                PartyID::ID2,
+            )?);
+            Ok(([x01, x2], id2))
+        }
+        PartyID::ID1 => {
+            let delta = delta.ok_or_else(|| eyre::eyre!("No delta provided"))?;
+            let bits = x.iter().flat_map(S::added_bits).collect();
+            let (garbler, evaluator) = GCUtils::encode_bits_as_wires(bits, &mut state.rng, delta);
+            let x01 = GCUtils::wires_to_gcinput(garbler, evaluator, delta);
+            GCUtils::send_inputs(&x01, net, PartyID::ID2)?;
+
+            let (x2, id2) = split(&GCUtils::receive_bundle_from(
+                x_bits + n_id2_bits,
+                net,
+                PartyID::ID2,
+            )?);
+            Ok(([x01.garbler_wires, x2], id2))
+        }
+        PartyID::ID2 => {
+            let delta = delta.ok_or_else(|| eyre::eyre!("No delta provided"))?;
+            let id2_bits = id2_bits.ok_or_else(|| eyre::eyre!("No input provided"))?;
+            if id2_bits.len() != n_id2_bits {
+                eyre::bail!(
+                    "Invalid number of input bits, expected {}, but got {}",
+                    n_id2_bits,
+                    id2_bits.len()
+                );
+            }
+            let mut bits = Vec::with_capacity(x_bits + n_id2_bits);
+            bits.extend(x.iter().flat_map(S::first_bits));
+            bits.extend(id2_bits);
+            let (garbler, evaluator) = GCUtils::encode_bits_as_wires(bits, &mut state.rng, delta);
+            let inputs = GCUtils::wires_to_gcinput(garbler, evaluator, delta);
+            GCUtils::send_inputs(&inputs, net, PartyID::ID1)?;
+            let (x2, id2) = split(&inputs.garbler_wires);
+
+            let x01 = GCUtils::receive_bundle_from(x_bits, net, PartyID::ID1)?;
+            Ok(([x01, x2], id2))
+        }
+    }
+}
+
+/// [`joint_input_arithmetic_added_many`] followed by [`input_field_id2_many`], in one round
+/// (see [`joint_input_arithmetic_added_and_id2_bits_many`]).
+pub(crate) fn joint_input_arithmetic_added_and_field_id2_many<
+    S: JointInputArithmetic,
+    K: FieldUint,
+    N: Network,
+>(
+    inputs: &[S],
+    x: Option<Vec<K>>,
+    delta: Option<WireMod2>,
+    n_inputs: usize,
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<([BinaryBundle<WireMod2>; 2], BinaryBundle<WireMod2>)> {
+    let bits = x.map(|x| {
+        x.into_iter()
+            .flat_map(GCUtils::field_to_bits_as_u16)
+            .collect()
+    });
+    let n_bits = n_inputs * K::MODULUS_BIT_SIZE as usize;
+    joint_input_arithmetic_added_and_id2_bits_many(inputs, bits, n_bits, delta, net, state)
+}
+
+/// [`joint_input_arithmetic_added_many`] followed by [`input_two_field_id2_many`], in one round
+/// (see [`joint_input_arithmetic_added_and_id2_bits_many`]).
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn joint_input_arithmetic_added_and_two_field_id2_many<
+    S: JointInputArithmetic,
+    F: FieldUint,
+    K: FieldUint,
+    N: Network,
+>(
+    inputs: &[S],
+    x_f: Option<Vec<F>>,
+    x_k: Option<Vec<K>>,
+    delta: Option<WireMod2>,
+    output_size_1: usize,
+    output_size_2: usize,
+    n_inputs_total: usize,
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<([BinaryBundle<WireMod2>; 2], BinaryBundle<WireMod2>)> {
+    let n_bits = n_inputs_total
+        * (output_size_1 * F::MODULUS_BIT_SIZE as usize
+            + output_size_2 * K::MODULUS_BIT_SIZE as usize);
+    let bits = match (x_f, x_k) {
+        (Some(x_f), Some(x_k)) => {
+            // The order of input_two_field_id2_many: per input, its F values, then its K values.
+            let mut bits = Vec::with_capacity(n_bits);
+            for (x_f, x_k) in izip!(x_f.chunks(output_size_1), x_k.chunks(output_size_2)) {
+                bits.extend(x_f.iter().flat_map(|x| GCUtils::field_to_bits_as_u16(*x)));
+                bits.extend(x_k.iter().flat_map(|x| GCUtils::field_to_bits_as_u16(*x)));
+            }
+            Some(bits)
+        }
+        _ => None,
+    };
+    joint_input_arithmetic_added_and_id2_bits_many(inputs, bits, n_bits, delta, net, state)
 }
 
 /// Transforms an binary shared input x = (x_1, x_2, x_3) into two yao shares x_1^Y, (x_2 xor x_3)^Y. The used delta is an input to the function to allow for the same delta to be used for multiple conversions.
@@ -831,8 +995,6 @@ macro_rules! decompose_circuit_compose_blueprint {
         let delta = $state.rngs
             .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
-
         let mut res = vec![Rep3PrimeFieldShare::zero_share(); $output_size];
 
         match $state.id {
@@ -842,8 +1004,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.b = (k3.0 + k3.1 + k3.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut evaluator = yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
@@ -862,8 +1023,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.a = (k2.0 + k2.1 + k2.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                     yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -889,8 +1049,7 @@ macro_rules! decompose_circuit_compose_blueprint {
                     res.b = k2_comp.neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many(Some(x23), delta, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many($inputs, Some(x23), delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                    yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -920,8 +1079,6 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
         let delta = $state.rngs
             .generate_random_garbler_delta($state.id);
 
-        let [x01, x2] = yao::joint_input_arithmetic_added_many($inputs, delta, $net, $state)?;
-
         let mut res = vec![Rep3PrimeFieldShare::<K>::zero_share(); $output_size];
 
         match $state.id {
@@ -931,8 +1088,7 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
                     res.b = (k3.0 + k3.1 + k3.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut evaluator = yao::evaluator::Rep3Evaluator::new($net);
                 evaluator.receive_circuit()?;
@@ -951,8 +1107,7 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
                     res.a = (k2.0 + k2.1 + k2.2).neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many::<F, _>(None, None, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many::<_, F, _>($inputs, None, delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                     yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -978,8 +1133,7 @@ macro_rules! decompose_circuit_compose_blueprint_to_other_field {
                     res.b = k2_comp.neg();
                 }
 
-                // TODO this can be parallelized with joint_input_arithmetic_added_many
-                let x23 = yao::input_field_id2_many(Some(x23), delta, $output_size, $net, $state)?;
+                let ([x01, x2], x23) = yao::joint_input_arithmetic_added_and_field_id2_many($inputs, Some(x23), delta, $output_size, $net, $state)?;
 
                 let mut garbler =
                    yao::garbler::Rep3Garbler::new_with_delta($net, $state, delta.expect("Delta not provided"));
@@ -1618,5 +1772,121 @@ mod tests {
         bits[0] = true;
 
         assert_eq!(GCUtils::bits_to_field::<F>(&bits).unwrap(), F::from(1u64));
+    }
+
+    /// Counts the messages a party sends.
+    struct CountingNetwork {
+        inner: mpc_net::local::LocalNetwork,
+        sent: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: bytes::Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<bytes::Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> mpc_net::ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    /// Party 0's evaluator wires, a garbler's wires (party 1's) and the delta: the bit of each
+    /// wire is whether the evaluator's label differs from the garbler's zero label.
+    fn decode(
+        evaluator: &BinaryBundle<WireMod2>,
+        garbler: &BinaryBundle<WireMod2>,
+        delta: WireMod2,
+    ) -> Vec<bool> {
+        izip!(evaluator.iter(), garbler.iter())
+            .map(|(e, g)| {
+                assert!(*e == *g || *e == *g ^ delta);
+                *e != *g
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merged_input_round_matches_separate_inputs() {
+        type F = ark_bn254::Fr;
+        use ark_ff::UniformRand;
+        let mut rng = rand::thread_rng();
+        let x: Vec<F> = (0..3).map(|_| F::rand(&mut rng)).collect();
+        let id2: Vec<F> = (0..2).map(|_| F::rand(&mut rng)).collect();
+        let shares = super::super::share_field_elements(&x, &mut rng);
+
+        let results = std::thread::scope(|s| {
+            let threads: Vec<_> = mpc_net::local::LocalNetwork::new_3_parties()
+                .into_iter()
+                .zip(shares)
+                .map(|(inner, x)| {
+                    let id2 = id2.clone();
+                    s.spawn(move || {
+                        let net = CountingNetwork {
+                            inner,
+                            sent: Default::default(),
+                        };
+                        let sent = || net.sent.load(std::sync::atomic::Ordering::SeqCst);
+                        let mut state = Rep3State::new(&net, Default::default()).unwrap();
+                        let delta = state.rngs.generate_random_garbler_delta(state.id);
+                        let id2 = (state.id == PartyID::ID2).then_some(id2);
+
+                        let before = sent();
+                        let [x01, x2] =
+                            joint_input_arithmetic_added_many(&x, delta, &net, &mut state).unwrap();
+                        let y =
+                            input_field_id2_many(id2.clone(), delta, 2, &net, &mut state).unwrap();
+                        let separate = ([x01, x2, y], sent() - before);
+
+                        let before = sent();
+                        let ([x01, x2], y) = joint_input_arithmetic_added_and_field_id2_many(
+                            &x, id2, delta, 2, &net, &mut state,
+                        )
+                        .unwrap();
+                        let merged = ([x01, x2, y], sent() - before);
+                        (separate, merged, delta)
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        let delta = results[1].2.unwrap();
+        let n_bits = <F as ark_ff::PrimeField>::MODULUS_BIT_SIZE as usize;
+        let runs = [
+            (&results[0].0.0, &results[1].0.0),
+            (&results[0].1.0, &results[1].1.0),
+        ];
+        for (evaluator, garbler) in runs {
+            let [x01, x2, y] = std::array::from_fn(|i| decode(&evaluator[i], &garbler[i], delta));
+            let to_fields = |bits: Vec<bool>| -> Vec<F> {
+                bits.chunks(n_bits)
+                    .map(|bits| GCUtils::bits_to_field(bits).unwrap())
+                    .collect()
+            };
+            let sums: Vec<F> = izip!(to_fields(x01), to_fields(x2))
+                .map(|(a, b)| a + b)
+                .collect();
+            assert_eq!(sums, x);
+            assert_eq!(to_fields(y), id2);
+        }
+
+        // Party 2 sends its inputs to both other parties once instead of twice; party 1 sends
+        // its inputs once in both cases.
+        let sent = |i: usize| (results[i].0.1, results[i].1.1);
+        assert_eq!(sent(0), (0, 0));
+        assert_eq!(sent(1), (2, 2));
+        assert_eq!(sent(2), (4, 2));
     }
 }
