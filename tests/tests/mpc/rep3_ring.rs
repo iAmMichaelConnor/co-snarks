@@ -1826,6 +1826,126 @@ mod ring_share {
         );
     }
 
+    /// With a divisor larger than the modulus of K, the low K::MODULUS_BIT_SIZE bits of the
+    /// remainder can encode a value >= K::MODULUS, which must be reduced before it is
+    /// composed into K.
+    #[test]
+    fn rep3_div_by_public_two_field_output_noncanonical_remainder() {
+        type F = ark_bn254::Fr;
+        type K = ark_bn254::Fq;
+        const VEC_SIZE: usize = 16;
+        const SLICE_SIZE: usize = 68;
+        const LIMBS_PER_FIELD: usize = 4;
+        let k_bits = K::MODULUS_BIT_SIZE as usize;
+
+        let nets = LocalNetwork::new_with_timeout(3, Some(std::time::Duration::from_secs(120)));
+        let mut rng = thread_rng();
+        let divisor = U512::mask(512);
+        // x < divisor, so the remainder is x; its low bits are all ones and >= K::MODULUS.
+        let x = (0..VEC_SIZE)
+            .map(|_| {
+                let x = RingElement(rng.r#gen::<U512>()) | RingElement(U512::mask(k_bits));
+                if x.0 == divisor {
+                    x ^ RingElement(U512::one() << k_bits)
+                } else {
+                    x
+                }
+            })
+            .collect_vec();
+        let x_shares = rep3_ring::share_ring_elements(&x, &mut rng);
+        let should_result_remainders = vec![u512_to_field::<K>(&U512::mask(k_bits)); VEC_SIZE];
+
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+
+        for (net, tx, x) in izip!(nets, [tx1, tx2, tx3], x_shares.into_iter(),) {
+            std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+
+                let div = yao::ring_div_by_public_to_fr_limbs_and_fq_many::<_, _, F, K>(
+                    &x,
+                    SLICE_SIZE,
+                    &divisor,
+                    LIMBS_PER_FIELD,
+                    &net,
+                    &mut state,
+                )
+                .unwrap();
+                tx.send(div)
+            });
+        }
+
+        let (result1, result1_other) = rx1.recv().unwrap();
+        let (result2, result2_other) = rx2.recv().unwrap();
+        let (result3, result3_other) = rx3.recv().unwrap();
+        let is_result: Vec<F> = rep3::combine_field_elements(&result1, &result2, &result3);
+        let is_result_other: Vec<K> =
+            rep3::combine_field_elements(&result1_other, &result2_other, &result3_other);
+
+        assert_eq!(is_result, vec![F::zero(); VEC_SIZE * LIMBS_PER_FIELD]);
+        assert_eq!(is_result_other, should_result_remainders);
+    }
+
+    /// A network that must not be used.
+    struct UnusedNetwork;
+
+    impl mpc_net::Network for UnusedNetwork {
+        fn id(&self) -> usize {
+            panic!("the network must not be used")
+        }
+
+        fn send(&self, _: usize, _: mpc_net::bytes::Bytes) -> eyre::Result<()> {
+            panic!("the network must not be used")
+        }
+
+        fn recv(&self, _: usize) -> eyre::Result<mpc_net::bytes::Bytes> {
+            panic!("the network must not be used")
+        }
+
+        fn get_connection_stats(&self) -> mpc_net::ConnectionStats {
+            panic!("the network must not be used")
+        }
+    }
+
+    #[test]
+    fn rep3_div_by_public_two_field_output_rejects_invalid_parameters() {
+        type F = ark_bn254::Fr;
+        type K = ark_bn254::Fq;
+        let nets = LocalNetwork::new_3_parties();
+        let mut rng = thread_rng();
+        let x = rep3_ring::share_ring_element(RingElement(rng.r#gen::<u64>()), &mut rng);
+        let mut handles = Vec::new();
+        for (net, x) in izip!(nets, x) {
+            handles.push(std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, A2BType::default()).unwrap();
+                let f_bits = F::MODULUS_BIT_SIZE as usize;
+                let one = U512::one();
+                // (limb size, divisor)
+                for (limb_size, divisor) in [
+                    (0, one),
+                    (f_bits, one),
+                    (f_bits + 1, one),
+                    (32, U512::zero()),
+                    (32, one << 64),
+                ] {
+                    let res = yao::ring_div_by_public_to_fr_limbs_and_fq_many::<u64, _, F, K>(
+                        &[x],
+                        limb_size,
+                        &divisor,
+                        2,
+                        &UnusedNetwork,
+                        &mut state,
+                    );
+                    assert!(res.is_err(), "limb size {limb_size}, divisor {divisor:?}");
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
     fn rep3_div_by_public_to_limbs_output_t<T: IntRing2k, F: FieldUint>(divisor: &U512)
     where
         Standard: Distribution<T>,

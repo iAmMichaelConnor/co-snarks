@@ -132,13 +132,17 @@ impl GarbledCircuits {
         Ok((s, c))
     }
 
-    fn half_adder_const<G: FancyBinary>(
+    fn half_adder_const<G: FancyBinary + FancyBinaryConstant>(
         g: &mut G,
         a: &G::Item,
         b: bool,
     ) -> Result<(G::Item, G::Item), GcError> {
-        let s = if b { g.negate(a)? } else { a.to_owned() };
-        let c = a.to_owned();
+        // s = a ^ b, c = a & b
+        let (s, c) = if b {
+            (g.negate(a)?, a.to_owned())
+        } else {
+            (a.to_owned(), g.const_zero()?)
+        };
         Ok((s, c))
     }
 
@@ -265,7 +269,7 @@ impl GarbledCircuits {
     }
 
     /// Binary addition. Returns just the result.
-    fn bin_addition_constant_no_carry<G: FancyBinary>(
+    fn bin_addition_constant_no_carry<G: FancyBinary + FancyBinaryConstant>(
         g: &mut G,
         xs: &[G::Item],
         ys: &[bool],
@@ -938,7 +942,8 @@ impl GarbledCircuits {
         let input_bitlen = wires_a.len();
         debug_assert_eq!(input_bitlen, F::MODULUS_BIT_SIZE as usize);
         debug_assert!(input_bitlen >= total_output_bitlen);
-        debug_assert!(decompose_bitlen <= total_output_bitlen);
+        // The last (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         debug_assert_eq!(wires_c.len(), input_bitlen * num_decomps_per_field);
 
         let input_bits =
@@ -976,7 +981,8 @@ impl GarbledCircuits {
 
         debug_assert_eq!(input_size % input_bitlen, 0);
         debug_assert!(input_bitlen >= total_output_bitlen_per_field);
-        debug_assert!(decompose_bitlen <= total_output_bitlen_per_field);
+        // The last (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         debug_assert_eq!(wires_c.size(), input_bitlen * total_output_elements);
 
         let mut results = Vec::with_capacity(wires_c.size());
@@ -1015,7 +1021,8 @@ impl GarbledCircuits {
         let output_bitlen = K::MODULUS_BIT_SIZE as usize;
         debug_assert_eq!(input_bitlen, F::MODULUS_BIT_SIZE as usize);
         debug_assert!(input_bitlen >= total_output_bitlen);
-        debug_assert!(decompose_bitlen <= total_output_bitlen);
+        // The last (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         debug_assert_eq!(wires_c.len(), input_bitlen * num_decomps_per_field);
 
         let input_bits =
@@ -1058,7 +1065,8 @@ impl GarbledCircuits {
 
         debug_assert_eq!(input_size % input_bitlen, 0);
         debug_assert!(input_bitlen >= total_output_bitlen_per_field);
-        debug_assert!(decompose_bitlen <= total_output_bitlen_per_field);
+        // The last (possibly only) limb may be shorter than decompose_bitlen.
+        debug_assert!(decompose_bitlen > 0);
         debug_assert_eq!(wires_c.size(), input_bitlen * total_output_elements);
 
         let mut results = Vec::with_capacity(wires_c.size());
@@ -1926,6 +1934,17 @@ impl GarbledCircuits {
         let km = Self::bin_mul_with_public(g, &quotient, divisor)?;
         let remainder = &Self::bin_subtraction(g, &dividend, &km[..dividend.len()])?.0;
 
+        // The low K::MODULUS_BIT_SIZE bits of the remainder can hold a value in
+        // [K::MODULUS, 2^K::MODULUS_BIT_SIZE) (e.g., for a divisor larger than K::MODULUS),
+        // which compose_field_element does not reduce. One conditional subtraction suffices.
+        let zero = g.const_zero()?;
+        let remainder = Self::sub_p_and_mux_with_output_size::<_, K>(
+            g,
+            &remainder[..K::MODULUS_BIT_SIZE as usize],
+            zero,
+            K::MODULUS_BIT_SIZE as usize,
+        )?;
+
         let mut results = Vec::with_capacity(
             F::MODULUS_BIT_SIZE as usize * limbs_per_field + K::MODULUS_BIT_SIZE as usize,
         );
@@ -1941,9 +1960,7 @@ impl GarbledCircuits {
             results.extend(result);
         }
         results.extend(Self::compose_field_element::<_, K>(
-            g,
-            remainder[..K::MODULUS_BIT_SIZE as usize].as_ref(),
-            wires_c_k,
+            g, &remainder, wires_c_k,
         )?);
         Ok(results)
     }
@@ -4548,6 +4565,43 @@ mod test {
             .collect::<Vec<_>>();
         for output in run_3party(&XorConstant(c), x, F::zero()) {
             assert_eq!(output, expected);
+        }
+    }
+
+    /// The lowest 64 bits of `x` plus the public constant, modulo 2^64.
+    struct AddConstant(u64);
+
+    impl TestCircuit for AddConstant {
+        fn build<G: FancyBinary<Item = WireMod2> + FancyBinaryConstant>(
+            &self,
+            g: &mut G,
+            x: &BinaryBundle<WireMod2>,
+            _: &BinaryBundle<WireMod2>,
+        ) -> Result<Vec<WireMod2>, GcError> {
+            let c = (0..64).map(|i| (self.0 >> i) & 1 == 1).collect::<Vec<_>>();
+            GarbledCircuits::bin_addition_constant_no_carry(g, &x.wires()[..64], &c)
+        }
+    }
+
+    fn gc_test_add_constant<F: FieldUint>(c: u64) {
+        let mut rng = thread_rng();
+        // An odd x, so that a wrong carry out of the lowest bit changes the result.
+        let x = rng.r#gen::<u64>() | 1;
+        let sum = x.wrapping_add(c);
+        let expected = (0..64).map(|i| (sum >> i) & 1 == 1).collect::<Vec<_>>();
+        for output in run_3party(&AddConstant(c), F::from(x), F::zero()) {
+            assert_eq!(output, expected, "x = {x}, c = {c}");
+        }
+    }
+
+    #[test]
+    fn gc_test_bn254_add_constant() {
+        for c in [0, 1, 2, 14, 15, u64::MAX - 1, u64::MAX] {
+            gc_test_add_constant::<ark_bn254::Fr>(c);
+        }
+        let mut rng = thread_rng();
+        for _ in 0..TESTRUNS {
+            gc_test_add_constant::<ark_bn254::Fr>(rng.r#gen());
         }
     }
 
