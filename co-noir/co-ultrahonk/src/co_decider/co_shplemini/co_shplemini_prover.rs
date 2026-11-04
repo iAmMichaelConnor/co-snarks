@@ -180,14 +180,17 @@ impl<
         // Construct the d-1 Gemini foldings of A₀(X)
         let fold_polynomials = self.compute_fold_polynomials(log_n, multilinear_challenge, a_0);
 
-        let mut commitments = Vec::with_capacity(fold_polynomials.len());
-        for f_poly in fold_polynomials.iter().take(virtual_log_n - 1) {
-            commitments.push(CoUtils::commit::<T, P>(
-                &f_poly.coefficients,
-                commitment_key,
-            ));
-        }
-        let commitments = T::open_point_many(&commitments, self.net, self.state)?;
+        let folds = fold_polynomials
+            .iter()
+            .take(virtual_log_n - 1)
+            .map(|f_poly| f_poly.coefficients.as_slice())
+            .collect::<Vec<_>>();
+        let commitments = CoUtils::commit_and_open_many::<T, P, N>(
+            &folds,
+            &commitment_key.monomials,
+            self.net,
+            self.state,
+        )?;
         // If virtual_log_n >= log_n, pad the fold commitments with dummy group elements [1]_1.
         for (l, res) in commitments.into_iter().enumerate() {
             transcript.send_point_to_verifier::<P>(format!("Gemini:FOLD_{}", l + 1), res.into());
@@ -455,10 +458,12 @@ impl<
             &gemini_fold_pos_evaluations,
             &libra_opening_claims,
         );
-        let batched_quotient_commitment =
-            CoUtils::commit::<T, P>(batched_quotient.as_ref(), commitment_key);
-        let batched_quotient_commitment =
-            T::open_point(batched_quotient_commitment, self.net, self.state)?;
+        let batched_quotient_commitment = CoUtils::commit_and_open::<T, P, N>(
+            batched_quotient.as_ref(),
+            &commitment_key.monomials,
+            self.net,
+            self.state,
+        )?;
         transcript.send_point_to_verifier::<P>(
             "Shplonk:Q".to_string(),
             batched_quotient_commitment.into(),

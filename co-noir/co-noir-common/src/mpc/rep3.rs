@@ -20,6 +20,17 @@ use std::any::TypeId;
 #[derive(Debug)]
 pub struct Rep3UltraHonkDriver;
 
+/// The msm of `points` with the a-components of `scalars`: one party's additive summand of
+/// the msm with the shared values.
+fn msm_a_components<P: HonkCurve<TranscriptFieldType>>(
+    points: &[P::Affine],
+    scalars: &[Rep3PrimeFieldShare<P::ScalarField>],
+) -> P {
+    debug_assert_eq!(points.len(), scalars.len());
+    let a = scalars.iter().map(|share| share.a).collect::<Vec<_>>();
+    P::fast_msm(points, &a)
+}
+
 impl<P: HonkCurve<TranscriptFieldType>> NoirUltraHonkProver<P> for Rep3UltraHonkDriver
 where
     P::ScalarField: FieldUint,
@@ -271,6 +282,33 @@ where
         Rep3PointShare::new(res_a, res_b)
     }
 
+    // The three parties' a-components are an additive sharing of the scalars, so their msms
+    // add up to the commitment: each party computes the msm of its a-components only and
+    // broadcasts it. This is half the local msm work of `msm_public_points`, in one round.
+    // A party learns nothing beyond the opened commitment: the third summand is the
+    // commitment minus the party's own two components.
+    fn commit_and_open<N: Network>(
+        points: &[P::Affine],
+        scalars: &[Self::ArithmeticShare],
+        net: &N,
+        _: &mut Self::State,
+    ) -> eyre::Result<P> {
+        pointshare::open_half_point(msm_a_components::<P>(points, scalars), net)
+    }
+
+    fn commit_and_open_many<N: Network>(
+        points: &[P::Affine],
+        scalars: &[&[Self::ArithmeticShare]],
+        net: &N,
+        _: &mut Self::State,
+    ) -> eyre::Result<Vec<P>> {
+        let halves = scalars
+            .iter()
+            .map(|scalars| msm_a_components::<P>(&points[..scalars.len()], scalars))
+            .collect::<Vec<_>>();
+        pointshare::open_half_point_many(&halves, net)
+    }
+
     fn point_add(a: &Self::PointShare, b: &Self::PointShare) -> Self::PointShare {
         pointshare::add(a, b)
     }
@@ -371,5 +409,93 @@ where
             })
             .collect();
         conversion::b2a_many(&res, net, state)
+    }
+}
+
+#[cfg(test)]
+mod half_commitment_tests {
+    use super::*;
+    use crate::round_tests::CountingNetwork;
+    use ark_ec::AffineRepr;
+    use ark_ff::UniformRand;
+    use mpc_core::protocols::rep3::share_field_elements;
+    use mpc_net::local::LocalNetwork;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    fn check_half_commitment<P: HonkCurve<TranscriptFieldType>>()
+    where
+        P::ScalarField: FieldUint,
+        P::BaseField: FieldUint<Uint = <P::ScalarField as FieldUint>::Uint>,
+    {
+        let mut rng = StdRng::seed_from_u64(0x48414c46);
+        // Includes infinity, repeated and opposite bases and the scalars 0, 1 and -1.
+        let n = 4096;
+        let mut points = P::normalize_batch(&(0..n).map(|_| P::rand(&mut rng)).collect::<Vec<_>>());
+        points[0] = P::Affine::zero();
+        points[1] = P::generator().into_affine();
+        points[2] = points[1];
+        points[3] = (-P::generator()).into_affine();
+        let mut values: Vec<_> = (0..n).map(|_| P::ScalarField::rand(&mut rng)).collect();
+        values[0] = P::ScalarField::zero();
+        values[1] = P::ScalarField::one();
+        values[2] = -P::ScalarField::one();
+        values[3] = P::ScalarField::one();
+        let shares = share_field_elements(&values, &mut rng);
+        let lengths = [0, 1, 2, 31, 32, n];
+        let expected: Vec<_> = lengths
+            .iter()
+            .map(|&len| P::msm_unchecked(&points[..len], &values[..len]))
+            .collect();
+        let workers: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(net, shares)| {
+                let points = points.clone();
+                let expected = expected.clone();
+                std::thread::spawn(move || {
+                    let net = CountingNetwork::new(net);
+                    let mut state = Rep3State::new(&net, Default::default()).unwrap();
+                    for (&len, expected) in lengths.iter().zip(&expected) {
+                        let before = net.sent();
+                        let opened =
+                            <Rep3UltraHonkDriver as NoirUltraHonkProver<P>>::commit_and_open(
+                                &points[..len],
+                                &shares[..len],
+                                &net,
+                                &mut state,
+                            )
+                            .unwrap();
+                        assert_eq!(opened, *expected);
+                        // One round: the party's summand to each of the two other parties.
+                        assert_eq!(net.sent() - before, 2);
+                    }
+                    let polynomials: Vec<_> = lengths.iter().map(|&len| &shares[..len]).collect();
+                    let before = net.sent();
+                    let opened =
+                        <Rep3UltraHonkDriver as NoirUltraHonkProver<P>>::commit_and_open_many(
+                            &points,
+                            &polynomials,
+                            &net,
+                            &mut state,
+                        )
+                        .unwrap();
+                    assert_eq!(opened, expected);
+                    assert_eq!(net.sent() - before, 2);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn half_commitments_match_plain_msm_bn254() {
+        check_half_commitment::<ark_bn254::G1Projective>();
+    }
+
+    #[test]
+    fn half_commitments_match_plain_msm_grumpkin() {
+        check_half_commitment::<ark_grumpkin::Projective>();
     }
 }

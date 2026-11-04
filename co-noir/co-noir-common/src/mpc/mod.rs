@@ -360,6 +360,35 @@ pub trait NoirUltraHonkProver<P: CurveGroup>: Send + Sized + std::fmt::Debug {
         scalars: &[Self::ArithmeticShare],
     ) -> Self::PointShare;
 
+    /// Computes the msm between `points` and `scalars` and opens the result right away.
+    ///
+    /// The default is [`Self::msm_public_points`] followed by [`Self::open_point`]. Since no
+    /// share of the commitment is kept, a protocol may open it differently, e.g. from a
+    /// local msm over only part of each share.
+    fn commit_and_open<N: Network>(
+        points: &[P::Affine],
+        scalars: &[Self::ArithmeticShare],
+        net: &N,
+        state: &mut Self::State,
+    ) -> eyre::Result<P> {
+        Self::open_point(Self::msm_public_points(points, scalars), net, state)
+    }
+
+    /// Computes the msm between a prefix of `points` and each of `scalars` and opens all
+    /// results right away in one round. See [`Self::commit_and_open`].
+    fn commit_and_open_many<N: Network>(
+        points: &[P::Affine],
+        scalars: &[&[Self::ArithmeticShare]],
+        net: &N,
+        state: &mut Self::State,
+    ) -> eyre::Result<Vec<P>> {
+        let commitments = scalars
+            .iter()
+            .map(|scalars| Self::msm_public_points(&points[..scalars.len()], scalars))
+            .collect::<Vec<_>>();
+        Self::open_point_many(&commitments, net, state)
+    }
+
     /// Adds two shared points: \[c\] = \[a\] + \[b\].
     fn point_add(a: &Self::PointShare, b: &Self::PointShare) -> Self::PointShare;
 
