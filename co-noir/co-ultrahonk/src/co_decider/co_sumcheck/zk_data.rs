@@ -1,4 +1,5 @@
 use crate::co_decider::univariates::SharedUnivariate;
+use crate::zk_masking::ZkMasking;
 use ark_ec::CurveGroup;
 use ark_ff::Field;
 use ark_ff::One;
@@ -35,13 +36,16 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         multivariate_d: usize,
         transcript: &mut Transcript<TranscriptFieldType, H>,
         commitment_key: &[P::Affine],
+        masking: &ZkMasking,
         net: &N,
         state: &mut T::State,
     ) -> HonkProofResult<Self> {
-        let constant_term = T::rand(net, state)?;
+        let constant_term =
+            masking.values::<T, P, N>("decider/libra/constant_term", 1, net, state)?[0];
         let libra_univariates = Self::generate_libra_univariates(
             multivariate_d,
             P::LIBRA_UNIVARIATES_LENGTH,
+            masking,
             net,
             state,
         )?;
@@ -62,7 +66,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
         };
 
         data.create_interpolation_domain();
-        data.compute_concatenated_libra_polynomial(net, state)?;
+        data.compute_concatenated_libra_polynomial(masking, net, state)?;
         // If proving_key is provided, commit to the concatenated and masked libra polynomial
         if !commitment_key.is_empty() {
             let libra_commitment = CoUtils::commit_and_open::<T, P, N>(
@@ -104,12 +108,22 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
     fn generate_libra_univariates<N: Network>(
         number_of_polynomials: usize,
         univariate_length: usize,
+        masking: &ZkMasking,
         net: &N,
         state: &mut T::State,
     ) -> eyre::Result<Vec<SharedPolynomial<T, P>>> {
-        (0..number_of_polynomials)
-            .map(|_| SharedPolynomial::random(univariate_length, net, state))
-            .collect()
+        let coefficients = masking.values::<T, P, N>(
+            "decider/libra/univariates",
+            number_of_polynomials * univariate_length,
+            net,
+            state,
+        )?;
+        Ok(coefficients
+            .chunks(univariate_length)
+            .map(|coefficients| SharedPolynomial {
+                coefficients: coefficients.to_vec(),
+            })
+            .collect())
     }
 
     /**
@@ -190,6 +204,7 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
      */
     fn compute_concatenated_libra_polynomial<N: Network>(
         &mut self,
+        masking: &ZkMasking,
         net: &N,
         state: &mut T::State,
     ) -> HonkProofResult<()> {
@@ -208,7 +223,12 @@ impl<T: NoirUltraHonkProver<P>, P: HonkCurve<TranscriptFieldType>> SharedZKSumch
             coefficients: coeffs_lagrange_subgroup,
         };
 
-        let masking_scalars = SharedUnivariate::<T, P, 2>::get_random(net, state)?;
+        let masking_scalars = SharedUnivariate::<T, P, 2> {
+            evaluations: masking
+                .values::<T, P, N>("decider/libra/concatenated_masking", 2, net, state)?
+                .try_into()
+                .expect("We requested 2 values"),
+        };
 
         let domain = GeneralEvaluationDomain::<P::ScalarField>::new(P::SUBGROUP_SIZE)
             .ok_or(HonkProofError::LargeSubgroup)?;

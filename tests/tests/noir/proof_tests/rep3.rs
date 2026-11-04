@@ -467,6 +467,125 @@ fn recursion_witness_and_proof_test_poseidon2sponge() {
     witness_and_proof_test::<Poseidon2Sponge>("recursion", ZeroKnowledge::Yes, "");
 }
 
+/// Proves `name` in ZK with the masking values derived from `seed`, with the plain driver and
+/// with REP3 on a secret-shared witness, and returns both proofs.
+fn seeded_zk_proofs(name: &str, seed: [u8; 32]) -> (HonkProof<Fr>, HonkProof<Fr>) {
+    use co_builder::prelude::{HonkRecursion, UltraCircuitBuilder};
+    use co_noir_common::mpc::plain::PlainUltraHonkDriver;
+    use co_ultrahonk::prelude::CoUltraHonk;
+
+    let program_artifact = co_noir::program_artifact_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
+    )
+    .unwrap();
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let witness = co_noir::witness_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.gz")).unwrap(),
+    )
+    .unwrap();
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let (prover_crs, verifier_crs) = CrsParser::<Bn254G1>::get_crs::<Bn254>(
+        CRS_PATH_G1,
+        CRS_PATH_G2,
+        crs_size,
+        ZeroKnowledge::Yes,
+    )
+    .unwrap()
+    .split();
+    let prover_crs = Arc::new(prover_crs);
+    let vk = co_noir::generate_vk::<Bn254>(&constraint_system, prover_crs.clone(), verifier_crs)
+        .unwrap();
+
+    let mut driver = co_acvm::PlainAcvmSolver::new();
+    let builder = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+        &constraint_system,
+        0,
+        witness.clone(),
+        HonkRecursion::UltraHonk,
+        &Default::default(),
+        &mut driver,
+    )
+    .unwrap();
+    let proving_key = co_builder::keys::proving_key::create_prover_instance::<
+        Bn254G1,
+        PlainUltraHonkDriver,
+        _,
+    >(0, builder, &mut driver)
+    .unwrap();
+    let (plain_proof, public_inputs) =
+        CoUltraHonk::<PlainUltraHonkDriver, _, Poseidon2Sponge>::prove_with_seeded_zk_masking(
+            proving_key,
+            &prover_crs,
+            &vk.inner_vk,
+            seed,
+        )
+        .unwrap();
+    assert!(UltraHonk::<_, Poseidon2Sponge>::verify(
+        plain_proof.clone(),
+        &public_inputs,
+        &vk,
+        ZeroKnowledge::Yes
+    )
+    .unwrap());
+
+    let mut witness_shares: [Vec<Rep3Type<Fr>>; 3] = Default::default();
+    for (index, value) in witness.into_iter().enumerate() {
+        let shares = if constraint_system.public_inputs.contains(&(index as u32)) {
+            std::array::from_fn(|_| Rep3Type::from(value))
+        } else {
+            share_field_element(value, &mut rand::thread_rng()).map(Rep3Type::from)
+        };
+        for (party, share) in witness_shares.iter_mut().zip(shares) {
+            party.push(share);
+        }
+    }
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), witness_shares)
+        .map(|(net, witness)| {
+            let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+            let prover_crs = prover_crs.clone();
+            let vk = vk.inner_vk.clone();
+            std::thread::spawn(move || {
+                let proving_key = co_noir::generate_proving_key_rep3(
+                    &constraint_system,
+                    witness,
+                    &net,
+                    &prover_crs,
+                )
+                .unwrap();
+                Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove_with_seeded_zk_masking(
+                    &net,
+                    proving_key,
+                    &prover_crs,
+                    &vk,
+                    seed,
+                )
+                .unwrap()
+                .0
+            })
+        })
+        .collect();
+    let rep3_proofs: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert!(rep3_proofs.iter().all(|proof| *proof == rep3_proofs[0]));
+    (plain_proof, rep3_proofs[0].clone())
+}
+
+/// With the same (seeded) masking values, the ZK proofs of the plain driver and of REP3 on a
+/// secret-shared witness are identical, so the REP3 prover computes exactly the plain ZK proof.
+#[test]
+fn seeded_zk_proofs_of_plain_driver_and_rep3_are_identical() {
+    for name in ["poseidon", "rom_shared"] {
+        let (plain, rep3) = seeded_zk_proofs(name, [1; 32]);
+        assert_eq!(
+            Poseidon2Sponge::to_buffer(plain.inner_as_ref()),
+            Poseidon2Sponge::to_buffer(rep3.inner_as_ref()),
+            "{name}"
+        );
+        // Other masking values give another valid proof.
+        let (other, _) = seeded_zk_proofs(name, [2; 32]);
+        assert_ne!(plain, other, "{name}");
+    }
+}
+
 // Circuits and witnesses of the recursion examples (the `kat` witnesses of `recursion` and
 // `recursion_zk` in `test_vectors/noir` do not satisfy their circuits).
 const RECURSION_EXAMPLES: &str = "../co-noir/co-noir/examples/test_vectors/recursion";

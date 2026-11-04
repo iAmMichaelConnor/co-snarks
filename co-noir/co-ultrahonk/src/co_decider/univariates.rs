@@ -1,7 +1,6 @@
 use ark_ec::CurveGroup;
 use ark_ff::Field;
 use co_noir_common::{barycentric::Barycentric, mpc::NoirUltraHonkProver};
-use mpc_net::Network;
 use std::array;
 use ultrahonk::prelude::Univariate;
 
@@ -70,14 +69,6 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup, const SIZE: usize> SharedUnivaria
         } else {
             result.add_assign(&extended);
         }
-    }
-
-    pub fn get_random<N: Network>(net: &N, state: &mut T::State) -> eyre::Result<Self> {
-        let mut evaluations = [T::ArithmeticShare::default(); SIZE];
-        for eval in evaluations.iter_mut() {
-            *eval = T::rand(net, state)?;
-        }
-        Ok(Self { evaluations })
     }
 
     /**
