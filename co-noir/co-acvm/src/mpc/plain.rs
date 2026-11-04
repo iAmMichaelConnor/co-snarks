@@ -1174,6 +1174,10 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         b: &[[Self::AcvmType; 4]],
         to_add: &[[Self::AcvmType; 4]],
     ) -> eyre::Result<([Self::AcvmType; 4], Self::OtherAcvmType<C>)> {
+        eyre::ensure!(
+            a.len() == b.len(),
+            "madd_div_mod_many_acvm_limbs: a and b must have the same length"
+        );
         let as_as_biguint = a.iter().map(Utils::field_limbs_to_biguint::<_, 4, 68>);
         let bs_as_biguint = b.iter().map(Utils::field_limbs_to_biguint::<_, 4, 68>);
         let to_add_as_biguint = to_add.iter().map(Utils::field_limbs_to_biguint::<_, 4, 68>);

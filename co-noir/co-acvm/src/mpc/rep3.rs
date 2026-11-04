@@ -2469,9 +2469,11 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             (Rep3AcvmType::Public(lhs), Rep3AcvmType::Public(rhs)) => {
                 Rep3AcvmType::Public(lhs - rhs)
             }
-            (Rep3AcvmType::Public(public), Rep3AcvmType::Shared(shared))
-            | (Rep3AcvmType::Shared(shared), Rep3AcvmType::Public(public)) => {
+            (Rep3AcvmType::Public(public), Rep3AcvmType::Shared(shared)) => {
                 Rep3AcvmType::Shared(arithmetic::sub_public_by_shared(public, shared, self.id))
+            }
+            (Rep3AcvmType::Shared(shared), Rep3AcvmType::Public(public)) => {
+                Rep3AcvmType::Shared(arithmetic::sub_shared_by_public(shared, public, self.id))
             }
             (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
                 let result = arithmetic::sub(lhs, rhs);
@@ -2766,6 +2768,10 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         b: &[[Self::AcvmType; 4]],
         to_add: &[[Self::AcvmType; 4]],
     ) -> eyre::Result<([Self::AcvmType; 4], Self::OtherAcvmType<C>)> {
+        eyre::ensure!(
+            a.len() == b.len(),
+            "madd_div_mod_many_acvm_limbs: a and b must have the same length"
+        );
         let a_public = a.iter().all(|arr| arr.iter().all(|x| !Self::is_shared(x)));
         let b_public = b.iter().all(|arr| arr.iter().all(|x| !Self::is_shared(x)));
         let to_add_public = to_add
