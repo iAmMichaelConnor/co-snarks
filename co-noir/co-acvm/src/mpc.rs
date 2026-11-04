@@ -32,6 +32,12 @@ pub enum RecursionInputVisibility {
     /// before the recursive verifier is built. The inner proof is then verified on public values,
     /// so the circuit is the same as barretenberg's.
     RevealToParticipants,
+    /// Keep the recursion inputs secret and verify the inner proof on secret-shared values. The
+    /// circuit then blinds the pairing point accumulator it outputs, so that the public output
+    /// reveals nothing about the inner proof or verification key. This adds constraints: the
+    /// verification key differs from barretenberg's, and key generation and proving must both use
+    /// this setting. Proofs must be zero-knowledge. Supported by the plain and REP3 drivers.
+    PrivateRecursion,
 }
 
 impl RecursionInputVisibility {
@@ -39,6 +45,7 @@ impl RecursionInputVisibility {
         match self {
             RecursionInputVisibility::KeepSecret => 0,
             RecursionInputVisibility::RevealToParticipants => 1,
+            RecursionInputVisibility::PrivateRecursion => 2,
         }
     }
 }

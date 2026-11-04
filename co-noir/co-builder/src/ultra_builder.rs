@@ -45,6 +45,7 @@ use co_noir_common::crs::ProverCrs;
 use co_noir_common::honk_curve::HonkCurve;
 use co_noir_common::honk_proof::{HonkProofResult, TranscriptFieldType};
 use co_noir_common::keys::plain_proving_key::PlainProvingKey;
+use co_noir_common::keys::proof_privacy::ProofPrivacy;
 use co_noir_common::keys::verification_key::{VerifyingKey, VerifyingKeyBarretenberg};
 use co_noir_common::polynomials::entities::PrecomputedEntities;
 use co_noir_common::polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK;
@@ -203,6 +204,9 @@ pub struct GenericUltraCircuitBuilder<
     pub memory_records_shared: BTreeMap<u32, T::AcvmType>, // order does not matter
     pub is_write_vk_mode: bool,
     pub(crate) recursion_input_visibility: RecursionInputVisibility,
+    /// The public inputs that hold the blinded pairing point accumulator of the private recursion
+    /// profile. MPC key generation opens these and no other secret-shared public input.
+    pub(crate) recursion_public_output_indices: Vec<u32>,
 }
 
 // This workaround is required due to mutability issues
@@ -217,6 +221,15 @@ macro_rules! create_unconstrained_gate {
 impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
     GenericUltraCircuitBuilder<P, T>
 {
+    /// The proof privacy that the keys of this circuit require.
+    pub(crate) fn proof_privacy(&self) -> ProofPrivacy {
+        if self.recursion_public_output_indices.is_empty() {
+            ProofPrivacy::Standard
+        } else {
+            ProofPrivacy::PrivateRecursion
+        }
+    }
+
     pub(crate) const DUMMY_TAG: u32 = 0;
     pub(crate) const REAL_VARIABLE: u32 = u32::MAX - 1;
     pub(crate) const FIRST_VARIABLE_IN_CLASS: u32 = u32::MAX - 2;
@@ -4236,6 +4249,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             current_tag: 0,
             is_write_vk_mode: true,
             recursion_input_visibility: RecursionInputVisibility::default(),
+            recursion_public_output_indices: Vec::new(),
         }
     }
 
@@ -4516,7 +4530,15 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
 
         // Process the result of adding recursion constraints and propagate the public inputs as needed.
         if has_pairing_points {
-            honk_output.set_public(self, driver)?;
+            let private_recursion =
+                self.recursion_input_visibility == RecursionInputVisibility::PrivateRecursion;
+            if private_recursion {
+                honk_output.blind_for_private_recursion(crs, self, driver)?;
+            }
+            let start = honk_output.set_public(self, driver)?;
+            if private_recursion {
+                self.recursion_public_output_indices = self.public_inputs[start..].to_vec();
+            }
         } else {
             self.add_default_to_public_inputs();
         }

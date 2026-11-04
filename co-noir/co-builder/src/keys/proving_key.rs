@@ -24,6 +24,7 @@ use co_noir_common::{
     polynomials::polynomial::NUM_DISABLED_ROWS_IN_SUMCHECK,
 };
 use mpc_core::MpcState;
+use std::collections::HashMap;
 
 pub type Rep3ProvingKey<P> = ProvingKey<Rep3UltraHonkDriver, P>;
 pub type ShamirProvingKey<P> = ProvingKey<ShamirUltraHonkDriver, P>;
@@ -45,6 +46,29 @@ pub fn create_prover_instance<
 
     let dyadic_circuit_size = circuit.compute_dyadic_size();
 
+    // The public inputs must be public, except for the blinded accumulator of the private
+    // recursion profile, which is opened here. Check this before anything is opened.
+    let designated = &circuit.recursion_public_output_indices;
+    if circuit.public_inputs.iter().any(|index| {
+        U::is_shared(&circuit.get_variable(*index as usize)) && !designated.contains(index)
+    }) {
+        return Err(HonkProofError::ExpectedPublicWitness);
+    }
+    let (output_indices, output_shares): (Vec<_>, Vec<_>) = designated
+        .iter()
+        .filter_map(|index| {
+            U::get_shared(&circuit.get_variable(*index as usize)).map(|share| (*index, share))
+        })
+        .unzip();
+    let opened_outputs: HashMap<u32, C::ScalarField> = if output_shares.is_empty() {
+        HashMap::new()
+    } else {
+        output_indices
+            .into_iter()
+            .zip(driver.open_many(&output_shares)?)
+            .collect()
+    };
+
     // Complete the public inputs execution trace block from builder.public_inputs
     circuit.blocks.compute_offsets();
 
@@ -64,6 +88,7 @@ pub fn create_prover_instance<
         circuit_size: dyadic_circuit_size as u32,
         final_active_wire_idx,
         num_public_inputs: circuit.public_inputs.len() as u32,
+        proof_privacy: circuit.proof_privacy(),
         ..Default::default()
     };
 
@@ -91,6 +116,7 @@ pub fn create_prover_instance<
         .cloned()
     {
         let var = U::get_public(&circuit.get_variable(var_idx as usize))
+            .or_else(|| opened_outputs.get(&var_idx).copied())
             .ok_or(HonkProofError::ExpectedPublicWitness)?;
         proving_key.public_inputs.push(var);
     }
@@ -304,4 +330,138 @@ pub fn construct_lookup_polynomials<
         circuit,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::GenericUltraCircuitBuilder;
+    use ark_bn254::{Fr, G1Projective};
+    use co_acvm::{PlainAcvmSolver, Rep3AcvmSolver, Rep3AcvmType};
+    use co_noir_common::keys::proof_privacy::ProofPrivacy;
+    use co_noir_common::mpc::plain::PlainUltraHonkDriver;
+    use mpc_core::protocols::rep3::{conversion::A2BType, id::PartyID, share_field_elements};
+    use mpc_net::{Network, bytes::Bytes, local::LocalNetwork};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A [`Network`] that counts the messages its party sends.
+    struct CountingNetwork {
+        inner: LocalNetwork,
+        sent: AtomicUsize,
+    }
+
+    impl Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> mpc_net::ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    /// Key generation opens the designated outputs of the private recursion profile, and rejects
+    /// any other secret-shared public input before it opens anything.
+    #[test]
+    fn only_designated_outputs_are_opened() {
+        let values: Vec<_> = (100..109u64).map(Fr::from).collect();
+        let shares = share_field_elements(&values, &mut rand::thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(inner, shares)| {
+                let values = values.clone();
+                std::thread::spawn(move || {
+                    let net = CountingNetwork {
+                        inner,
+                        sent: AtomicUsize::new(0),
+                    };
+                    let mut driver =
+                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                    for undesignated_public in [false, true] {
+                        let mut builder =
+                            GenericUltraCircuitBuilder::<G1Projective, _>::new_minimal(0);
+                        let indices: Vec<_> = shares
+                            .iter()
+                            .map(|share| builder.add_variable(Rep3AcvmType::Shared(*share)))
+                            .collect();
+                        // The first value is secret-shared but not a designated output.
+                        builder.recursion_public_output_indices = indices[1..].to_vec();
+                        builder.public_inputs = if undesignated_public {
+                            indices.clone()
+                        } else {
+                            indices[1..].to_vec()
+                        };
+                        builder.finalize_circuit(&mut driver).unwrap();
+                        net.sent.store(0, Ordering::SeqCst);
+                        let key = create_prover_instance::<G1Projective, Rep3UltraHonkDriver, _>(
+                            PartyID::try_from(net.id()).unwrap(),
+                            builder,
+                            &mut driver,
+                        );
+                        if undesignated_public {
+                            assert!(matches!(key, Err(HonkProofError::ExpectedPublicWitness)));
+                            assert_eq!(net.sent.load(Ordering::SeqCst), 0);
+                        } else {
+                            let key = key.unwrap();
+                            assert_eq!(key.public_inputs, values[1..]);
+                            assert_eq!(key.proof_privacy, ProofPrivacy::PrivateRecursion);
+                            // One message: the opening of the designated outputs.
+                            assert_eq!(net.sent.load(Ordering::SeqCst), 1);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn both_key_constructors_set_the_proof_privacy() {
+        for private in [false, true] {
+            let builder = || {
+                let mut builder =
+                    GenericUltraCircuitBuilder::<G1Projective, PlainAcvmSolver<Fr>>::new_minimal(0);
+                builder.add_default_to_public_inputs();
+                if private {
+                    builder.recursion_public_output_indices = builder.public_inputs.clone();
+                }
+                let mut driver = PlainAcvmSolver::new();
+                builder.finalize_circuit(&mut driver).unwrap();
+                (builder, driver)
+            };
+            let expected = if private {
+                ProofPrivacy::PrivateRecursion
+            } else {
+                ProofPrivacy::Standard
+            };
+            let (circuit, mut driver) = builder();
+            let key = create_prover_instance::<G1Projective, PlainUltraHonkDriver, _>(
+                0,
+                circuit,
+                &mut driver,
+            )
+            .unwrap();
+            assert_eq!(key.proof_privacy, expected);
+            let (mut circuit, mut driver) = builder();
+            let key = crate::keys::plain_proving_key::create_prover_instance(
+                &mut circuit,
+                Default::default(),
+                &mut driver,
+            )
+            .unwrap();
+            assert_eq!(key.proof_privacy, expected);
+        }
+    }
 }

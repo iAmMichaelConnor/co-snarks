@@ -17,4 +17,6 @@ pub struct PlainProvingKey<P: CurveGroup> {
     pub rom_logup_records: Vec<u32>,
     pub final_active_wire_idx: usize,
     pub active_region_data: ActiveRegionData,
+    /// The privacy that proofs with this key must have.
+    pub proof_privacy: crate::keys::proof_privacy::ProofPrivacy,
 }

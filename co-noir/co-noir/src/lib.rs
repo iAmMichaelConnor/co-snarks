@@ -182,6 +182,7 @@ where
         final_active_wire_idx: proving_key.final_active_wire_idx,
         phantom: std::marker::PhantomData,
         active_region_data: proving_key.active_region_data,
+        proof_privacy: proving_key.proof_privacy,
     };
 
     Ok(result)
@@ -198,6 +199,32 @@ pub fn compute_circuit_size<P: HonkCurve<TranscriptFieldType>>(
         &ProverCrs::<P>::default(),
         &mut PlainAcvmSolver::new(),
     )
+}
+
+/// Compute the circuit size for the given treatment of recursion inputs. With
+/// [`RecursionInputVisibility::PrivateRecursion`], the circuit of a recursive verifier contains
+/// constraints that use the first two points of `prover_crs`; otherwise this equals
+/// [`compute_circuit_size`].
+pub fn compute_circuit_size_with_recursion_input_visibility<P: HonkCurve<TranscriptFieldType>>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+    prover_crs: &ProverCrs<P>,
+    recursion_input_visibility: RecursionInputVisibility,
+) -> Result<usize> {
+    if recursion_input_visibility != RecursionInputVisibility::PrivateRecursion
+        || !constraint_system.is_recursive_verification_circuit()
+    {
+        return compute_circuit_size::<P>(constraint_system);
+    }
+    let builder = UltraCircuitBuilder::<P>::create_circuit_with_recursion_input_visibility(
+        constraint_system,
+        0,
+        vec![],
+        HonkRecursion::UltraHonk,
+        prover_crs,
+        &mut PlainAcvmSolver::new(),
+        recursion_input_visibility,
+    )?;
+    Ok(builder.compute_dyadic_size())
 }
 
 /// Generate a REP3 shared proving key. Secret-shared recursion inputs are rejected, see
@@ -324,19 +351,39 @@ pub fn generate_proving_key_plain<P: HonkCurve<TranscriptFieldType>>(
     witness: Vec<P::ScalarField>,
     prover_crs: Arc<ProverCrs<P>>,
 ) -> Result<PlainProvingKey<P>> {
+    generate_proving_key_plain_with_recursion_input_visibility(
+        constraint_system,
+        witness,
+        prover_crs,
+        RecursionInputVisibility::default(),
+    )
+}
+
+/// Generate a plain proving key for the given treatment of recursion inputs, see
+/// [`RecursionInputVisibility`]. The plain witness is public to the caller, so only
+/// [`RecursionInputVisibility::PrivateRecursion`] changes the key.
+pub fn generate_proving_key_plain_with_recursion_input_visibility<
+    P: HonkCurve<TranscriptFieldType>,
+>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+    witness: Vec<P::ScalarField>,
+    prover_crs: Arc<ProverCrs<P>>,
+    recursion_input_visibility: RecursionInputVisibility,
+) -> Result<PlainProvingKey<P>> {
     let mut driver = PlainAcvmSolver::new();
     let crs = if constraint_system.is_recursive_verification_circuit() {
         &prover_crs //TACEO TODO: Maybe just use a subset of the crs here?
     } else {
         &Arc::new(ProverCrs::<P>::default())
     };
-    let mut builder = UltraCircuitBuilder::create_circuit(
+    let mut builder = UltraCircuitBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         witness,
         HonkRecursion::UltraHonk,
         crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     create_prover_instance(&mut builder, crs.clone(), &mut driver)
         .map_err(|e| eyre::eyre!("Failed to create proving key: {e:?}"))
@@ -374,14 +421,32 @@ pub fn generate_vk_barretenberg<P: HonkCurve<TranscriptFieldType>>(
     constraint_system: &AcirFormat<P::ScalarField>,
     prover_crs: Arc<ProverCrs<P>>,
 ) -> Result<VerifyingKeyBarretenberg<P>> {
+    generate_vk_barretenberg_with_recursion_input_visibility(
+        constraint_system,
+        prover_crs,
+        RecursionInputVisibility::default(),
+    )
+}
+
+/// Generate a barretenberg verification key for the given treatment of recursion inputs. With
+/// [`RecursionInputVisibility::PrivateRecursion`], the key of a recursive verifier differs from
+/// barretenberg's; the other settings give the same key as [`generate_vk_barretenberg`].
+pub fn generate_vk_barretenberg_with_recursion_input_visibility<
+    P: HonkCurve<TranscriptFieldType>,
+>(
+    constraint_system: &AcirFormat<P::ScalarField>,
+    prover_crs: Arc<ProverCrs<P>>,
+    recursion_input_visibility: RecursionInputVisibility,
+) -> Result<VerifyingKeyBarretenberg<P>> {
     let mut driver = PlainAcvmSolver::new();
-    let circuit = UltraCircuitBuilder::create_circuit(
+    let circuit = UltraCircuitBuilder::create_circuit_with_recursion_input_visibility(
         constraint_system,
         0,
         vec![],
         HonkRecursion::UltraHonk,
         &prover_crs,
         &mut driver,
+        recursion_input_visibility,
     )?;
     Ok(circuit.create_vk_barretenberg(prover_crs, &mut driver)?)
 }
@@ -549,4 +614,36 @@ pub fn download_g1_crs(num_points: usize, crs_path: impl AsRef<Path>) -> color_e
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use co_noir_common::keys::proof_privacy::ProofPrivacy;
+    use co_noir_common::polynomials::polynomial::Polynomials;
+
+    /// Splitting and translating a proving key keeps its proof privacy.
+    #[test]
+    fn key_conversions_keep_the_proof_privacy() {
+        for proof_privacy in [ProofPrivacy::Standard, ProofPrivacy::PrivateRecursion] {
+            let plain = || PlainProvingKey::<Bn254G1> {
+                proof_privacy,
+                circuit_size: 2,
+                polynomials: Polynomials::new(2),
+                ..Default::default()
+            };
+            for (id, key) in split_proving_key_rep3(plain())
+                .unwrap()
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(key.proof_privacy, proof_privacy);
+                let key = translate_proving_key(key, PartyID::try_from(id).unwrap()).unwrap();
+                assert_eq!(key.proof_privacy, proof_privacy);
+            }
+            for key in split_proving_key_shamir(plain(), 1, 3).unwrap() {
+                assert_eq!(key.proof_privacy, proof_privacy);
+            }
+        }
+    }
 }

@@ -199,6 +199,11 @@ pub struct SplitProvingKeyCli {
     /// Prove with or without the zero knowledge property
     #[arg(long)]
     pub zk: bool,
+    /// Build the circuit with the private recursion profile: the circuit blinds its pairing point
+    /// accumulator. The verification key differs from barretenberg's; create it with
+    /// `create-vk --private-recursion`. Proofs must use `--zk`.
+    #[arg(long)]
+    pub private_recursion: bool,
 }
 
 /// Config for `split_proving_key`
@@ -222,6 +227,8 @@ pub struct SplitProvingKeyConfig {
     pub recursive: bool,
     /// Prove with or without the zero knowledge property
     pub zk: bool,
+    /// Build the circuit with the private recursion profile.
+    pub private_recursion: bool,
 }
 
 /// Cli arguments for `merge_input_shares`
@@ -421,6 +428,12 @@ pub struct BuildProvingKeyCli {
     /// recursion inputs is rejected. All parties must pass the same value.
     #[arg(long)]
     pub reveal_recursion_inputs: bool,
+    /// Build the circuit with the private recursion profile: recursion inputs stay secret-shared
+    /// and the circuit blinds its pairing point accumulator. The verification key differs from
+    /// barretenberg's; create it with `create-vk --private-recursion`. Proofs must use `--zk`.
+    /// All parties must pass the same value.
+    #[arg(long, conflicts_with = "reveal_recursion_inputs")]
+    pub private_recursion: bool,
 }
 
 /// Config for `build_proving_key`
@@ -443,6 +456,8 @@ pub struct BuildProvingKeyConfig {
     /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
     /// and predicate) to all parties. All parties must use the same value.
     pub reveal_recursion_inputs: bool,
+    /// Build the circuit with the private recursion profile. All parties must use the same value.
+    pub private_recursion: bool,
 }
 
 /// Cli arguments for `generate_proof`
@@ -574,6 +589,12 @@ pub struct BuildAndGenerateProofCli {
     /// recursion inputs is rejected. All parties must pass the same value.
     #[arg(long)]
     pub reveal_recursion_inputs: bool,
+    /// Build the circuit with the private recursion profile: recursion inputs stay secret-shared
+    /// and the circuit blinds its pairing point accumulator. The verification key differs from
+    /// barretenberg's; create it with `create-vk --private-recursion`. Proofs must use `--zk`.
+    /// All parties must pass the same value.
+    #[arg(long, conflicts_with = "reveal_recursion_inputs")]
+    pub private_recursion: bool,
 }
 
 /// Config for `build_and_generate_proof`
@@ -606,6 +627,8 @@ pub struct BuildAndGenerateProofConfig {
     /// Open secret-shared recursion inputs (inner proof, its public inputs, verification key, key hash
     /// and predicate) to all parties. All parties must use the same value.
     pub reveal_recursion_inputs: bool,
+    /// Build the circuit with the private recursion profile. All parties must use the same value.
+    pub private_recursion: bool,
 }
 
 /// Cli arguments for `creating_vk`
@@ -634,6 +657,10 @@ pub struct CreateVKCli {
     /// Write the vk as fields to json. If not passed, the vk will only be written as bytes to a file consistent with Barretenberg.
     #[arg(long)]
     pub fields_as_json: bool,
+    /// Build the circuit with the private recursion profile: the circuit blinds its pairing point
+    /// accumulator. The verification key differs from barretenberg's
+    #[arg(long)]
+    pub private_recursion: bool,
 }
 
 /// Config for `creating_vk`
@@ -649,6 +676,8 @@ pub struct CreateVKConfig {
     pub vk: PathBuf,
     /// Write the vk as fields to json. If not passed, the vk will only be written as bytes to a file consistent with Barretenberg.
     pub fields_as_json: bool,
+    /// Build the circuit with the private recursion profile.
+    pub private_recursion: bool,
 }
 
 /// Cli arguments for `verify`
@@ -1034,10 +1063,15 @@ fn run_split_proving_key(config: SplitProvingKeyConfig) -> color_eyre::Result<Ex
     // parse witness
     let witness = co_noir::witness_from_reader(File::open(&witness_path)?)
         .context("while parsing witness")?;
-    let circuit_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
+    let recursion_input_visibility = recursion_input_visibility(false, config.private_recursion)?;
+    let circuit_size = circuit_size(&constraint_system, &crs_path, recursion_input_visibility)?;
     let prover_crs = CrsParser::<Bn254G1>::get_crs_g1(crs_path, circuit_size, has_zk)?;
-    let proving_key =
-        co_noir::generate_proving_key_plain(&constraint_system, witness, prover_crs.into())?;
+    let proving_key = co_noir::generate_proving_key_plain_with_recursion_input_visibility(
+        &constraint_system,
+        witness,
+        prover_crs.into(),
+        recursion_input_visibility,
+    )?;
 
     tracing::info!("Starting split proving key...");
     match protocol {
@@ -1303,17 +1337,48 @@ fn run_translate_proving_key(config: TranslateProvingKeyConfig) -> color_eyre::R
     Ok(ExitCode::SUCCESS)
 }
 
-fn recursion_input_visibility(reveal_recursion_inputs: bool) -> co_noir::RecursionInputVisibility {
-    if reveal_recursion_inputs {
-        co_noir::RecursionInputVisibility::RevealToParticipants
-    } else {
-        co_noir::RecursionInputVisibility::KeepSecret
+fn recursion_input_visibility(
+    reveal_recursion_inputs: bool,
+    private_recursion: bool,
+) -> color_eyre::Result<co_noir::RecursionInputVisibility> {
+    Ok(match (reveal_recursion_inputs, private_recursion) {
+        (false, false) => co_noir::RecursionInputVisibility::KeepSecret,
+        (true, false) => co_noir::RecursionInputVisibility::RevealToParticipants,
+        (false, true) => co_noir::RecursionInputVisibility::PrivateRecursion,
+        (true, true) => {
+            eyre::bail!("reveal_recursion_inputs and private_recursion exclude each other")
+        }
+    })
+}
+
+/// The circuit size. With the private recursion profile, the circuit of a recursive verifier uses
+/// the first points of the CRS, so they are read first.
+fn circuit_size(
+    constraint_system: &co_builder::prelude::AcirFormat<ark_bn254::Fr>,
+    crs_path: &std::path::Path,
+    recursion_input_visibility: co_noir::RecursionInputVisibility,
+) -> color_eyre::Result<usize> {
+    if recursion_input_visibility != co_noir::RecursionInputVisibility::PrivateRecursion
+        || !constraint_system.is_recursive_verification_circuit()
+    {
+        return co_noir::compute_circuit_size::<Bn254G1>(constraint_system);
     }
+    let crs = CrsParser::<Bn254G1>::get_crs_g1(
+        crs_path,
+        constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>(),
+        ZeroKnowledge::Yes, // as for key generation
+    )?;
+    co_noir::compute_circuit_size_with_recursion_input_visibility(
+        constraint_system,
+        &crs,
+        recursion_input_visibility,
+    )
 }
 
 #[instrument(level = "debug", skip(config))]
 fn run_build_proving_key(config: BuildProvingKeyConfig) -> color_eyre::Result<ExitCode> {
-    let recursion_input_visibility = recursion_input_visibility(config.reveal_recursion_inputs);
+    let recursion_input_visibility =
+        recursion_input_visibility(config.reveal_recursion_inputs, config.private_recursion)?;
     let witness = config.witness;
     let circuit_path = config.circuit;
     let protocol = config.protocol;
@@ -1602,7 +1667,13 @@ fn run_build_and_generate_proof(
     let t = config.threshold;
     let fields_as_json = config.fields_as_json;
     let has_zk = ZeroKnowledge::from(config.zk);
-    let recursion_input_visibility = recursion_input_visibility(config.reveal_recursion_inputs);
+    let recursion_input_visibility =
+        recursion_input_visibility(config.reveal_recursion_inputs, config.private_recursion)?;
+    if recursion_input_visibility == co_noir::RecursionInputVisibility::PrivateRecursion
+        && has_zk == ZeroKnowledge::No
+    {
+        eyre::bail!("--private-recursion requires --zk");
+    }
     let network_config = NetworkConfig::try_from(config.network)?;
 
     // parse witness shares
@@ -1616,7 +1687,7 @@ fn run_build_and_generate_proof(
     // connect to network
     let net = TcpNetwork::new(network_config).context("while connecting to network")?;
 
-    let circuit_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
+    let circuit_size = circuit_size(&constraint_system, &crs_path, recursion_input_visibility)?;
     let prover_crs =
         CrsParser::<ark_ec::short_weierstrass::Projective<ark_bn254::g1::Config>>::get_crs_g1(
             crs_path,
@@ -1810,12 +1881,13 @@ fn run_generate_vk(config: CreateVKConfig) -> color_eyre::Result<ExitCode> {
     let vk_path = config.vk;
     let hasher = config.hasher;
     let fields_as_json = config.fields_as_json;
+    let recursion_input_visibility = recursion_input_visibility(false, config.private_recursion)?;
 
     // parse constraint system
     let constraint_system = co_noir::constraint_system_from_reader(&File::open(&circuit_path)?)
         .context("while parsing constraint system")?;
 
-    let circuit_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system)?;
+    let circuit_size = circuit_size(&constraint_system, &crs_path, recursion_input_visibility)?;
     let prover_crs =
         CrsParser::<ark_ec::short_weierstrass::Projective<ark_bn254::g1::Config>>::get_crs_g1(
             crs_path,
@@ -1825,7 +1897,11 @@ fn run_generate_vk(config: CreateVKConfig) -> color_eyre::Result<ExitCode> {
 
     tracing::info!("Starting to generate verification key...");
     let start = Instant::now();
-    let vk = co_noir::generate_vk_barretenberg::<Bn254G1>(&constraint_system, prover_crs.into())?;
+    let vk = co_noir::generate_vk_barretenberg_with_recursion_input_visibility::<Bn254G1>(
+        &constraint_system,
+        prover_crs.into(),
+        recursion_input_visibility,
+    )?;
     let duration_ms = start.elapsed().as_micros() as f64 / 1000.;
     tracing::info!("Verification key generation took {} ms", duration_ms);
 
@@ -1978,5 +2054,32 @@ mod tests {
                 assert_eq!(parsed, reveal, "{command} {flags:?}");
             }
         }
+    }
+
+    #[test]
+    fn private_recursion_only_with_the_flag() {
+        for command in [
+            "build-proving-key",
+            "build-and-generate-proof",
+            "create-vk",
+            "split-proving-key",
+        ] {
+            for (flags, private) in [(&[][..], false), (&["--private-recursion"][..], true)] {
+                let cli = Cli::try_parse_from(["co-noir", command].iter().chain(flags)).unwrap();
+                let parsed = match cli.command {
+                    Commands::BuildProvingKey(cli) => cli.private_recursion,
+                    Commands::BuildAndGenerateProof(cli) => cli.private_recursion,
+                    Commands::CreateVK(cli) => cli.private_recursion,
+                    Commands::SplitProvingKey(cli) => cli.private_recursion,
+                    _ => unreachable!(),
+                };
+                assert_eq!(parsed, private, "{command} {flags:?}");
+            }
+        }
+        for command in ["build-proving-key", "build-and-generate-proof"] {
+            let both = ["--private-recursion", "--reveal-recursion-inputs"];
+            assert!(Cli::try_parse_from(["co-noir", command].iter().chain(&both)).is_err());
+        }
+        assert!(recursion_input_visibility(true, true).is_err());
     }
 }

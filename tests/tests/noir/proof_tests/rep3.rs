@@ -3,9 +3,14 @@ use ark_bn254::{Bn254, Fr};
 use co_acvm::solver::Rep3CoSolver;
 use co_noir::{Bn254G1, HonkProof, RecursionInputVisibility};
 use co_noir_common::{
+    constants::{
+        OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS, OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
+        PUBLIC_INPUTS_SIZE, ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
+        ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK, ULTRA_VERIFICATION_KEY_LENGTH,
+    },
     crs::parse::CrsParser,
     honk_proof::TranscriptFieldType,
-    keys::verification_key::VerifyingKey,
+    keys::{proof_privacy::ProofPrivacy, verification_key::VerifyingKey},
     transcript::{Poseidon2Sponge, TranscriptHasher},
     types::ZeroKnowledge,
 };
@@ -681,6 +686,136 @@ fn zk_recursion_proof_test_poseidon2sponge() {
             reveal,
         );
     }
+}
+
+/// Proves the circuit `name` of `test_vectors/noir` (a recursive verifier whose inputs are all
+/// private) with the private recursion profile and every recursion input secret-shared. With
+/// `disable`, the predicate is false and the inner proof is invalid. Checks that every party's
+/// key equals the verification key computed without a witness, which differs from the key of the
+/// canonical profile, and that the outer ZK proof verifies.
+fn private_recursion_test(name: &str, inner_zk: ZeroKnowledge, disable: bool) {
+    let dir = format!("../test_vectors/noir/{name}/kat");
+    let program_artifact =
+        co_noir::program_artifact_from_reader(File::open(format!("{dir}/{name}.json")).unwrap())
+            .unwrap();
+    let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+    let mut witness =
+        co_noir::witness_from_reader(File::open(format!("{dir}/{name}.gz")).unwrap()).unwrap();
+    if disable {
+        // The arguments are the first witnesses: the key, the proof, the key hash, the inner
+        // public input and the predicate.
+        let proof_len = PUBLIC_INPUTS_SIZE
+            + match inner_zk {
+                ZeroKnowledge::Yes => ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK,
+                ZeroKnowledge::No => ULTRA_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
+            };
+        let predicate = ULTRA_VERIFICATION_KEY_LENGTH + proof_len + 2;
+        assert_eq!(witness[predicate], Fr::from(1u64));
+        witness[predicate] = Fr::from(0u64);
+        // The first scalar after Oink: changing it makes the inner proof invalid.
+        let scalar_index = PUBLIC_INPUTS_SIZE
+            + match inner_zk {
+                ZeroKnowledge::Yes => OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS_ZK + 4,
+                ZeroKnowledge::No => OINK_PROOF_LENGTH_WITHOUT_PUB_INPUTS,
+            };
+        witness[ULTRA_VERIFICATION_KEY_LENGTH + scalar_index] += Fr::from(1u64);
+    }
+    assert!(constraint_system.public_inputs.is_empty());
+    let mut witness_shares: [Vec<Rep3Type<Fr>>; 3] = Default::default();
+    for value in witness {
+        let shares = share_field_element(value, &mut rand::thread_rng());
+        for (party, share) in witness_shares.iter_mut().zip(shares) {
+            party.push(Rep3Type::from(share));
+        }
+    }
+
+    let private = RecursionInputVisibility::PrivateRecursion;
+    let recursion_crs = CrsParser::<Bn254G1>::get_crs_g1(
+        CRS_PATH_G1,
+        constraint_system.get_honk_recursion_public_inputs_size::<Bn254G1>(),
+        ZeroKnowledge::Yes,
+    )
+    .unwrap();
+    let circuit_size = co_noir::compute_circuit_size_with_recursion_input_visibility(
+        &constraint_system,
+        &recursion_crs,
+        private,
+    )
+    .unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, circuit_size, ZeroKnowledge::Yes).unwrap(),
+    );
+    let verifier_crs = CrsParser::<Bn254G1>::get_crs_g2::<Bn254>(CRS_PATH_G2).unwrap();
+    let vk = co_noir::generate_vk_barretenberg_with_recursion_input_visibility(
+        &constraint_system,
+        prover_crs.clone(),
+        private,
+    )
+    .unwrap();
+    let canonical_vk =
+        co_noir::generate_vk_barretenberg(&constraint_system, prover_crs.clone()).unwrap();
+    assert_ne!(vk.to_buffer(), canonical_vk.to_buffer());
+
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), witness_shares)
+        .map(|(net, witness)| {
+            let prover_crs = prover_crs.clone();
+            let vk = vk.clone();
+            let constraint_system = co_noir::get_constraint_system_from_artifact(&program_artifact);
+            std::thread::spawn(move || {
+                let pk = co_noir::generate_proving_key_rep3_with_recursion_input_visibility(
+                    &constraint_system,
+                    witness,
+                    &net,
+                    &prover_crs,
+                    private,
+                )
+                .unwrap();
+                assert_eq!(pk.proof_privacy, ProofPrivacy::PrivateRecursion);
+                let party_vk: VerifyingKey<Bn254> =
+                    pk.create_vk(&prover_crs, verifier_crs).unwrap();
+                assert_eq!(party_vk.inner_vk.to_buffer(), vk.to_buffer());
+                Rep3CoUltraHonk::<_, Poseidon2Sponge>::prove(
+                    &net,
+                    pk,
+                    &prover_crs,
+                    ZeroKnowledge::Yes,
+                    &vk,
+                )
+                .unwrap()
+            })
+        })
+        .collect();
+    let mut results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let (proof, public_inputs) = results.pop().unwrap();
+    for result in results {
+        assert_eq!(result, (proof.clone(), public_inputs.clone()));
+    }
+    let vk = VerifyingKey::<Bn254>::from_barretenberg_and_crs(vk, verifier_crs);
+    assert!(UltraHonk::<_, Poseidon2Sponge>::verify(
+        proof,
+        &public_inputs,
+        &vk,
+        ZeroKnowledge::Yes
+    )
+    .unwrap());
+}
+
+#[test]
+#[ignore = "Test is too slow for the pipeline"]
+fn private_recursion_proof_test() {
+    private_recursion_test("recursion_private", ZeroKnowledge::No, false);
+}
+
+#[test]
+#[ignore = "Test is too slow for the pipeline"]
+fn private_zk_recursion_proof_test() {
+    private_recursion_test("recursion_private_zk", ZeroKnowledge::Yes, false);
+}
+
+#[test]
+#[ignore = "Test is too slow for the pipeline"]
+fn private_disabled_recursion_with_invalid_inner_proof_test() {
+    private_recursion_test("recursion_private", ZeroKnowledge::No, true);
 }
 
 /// A [`Network`] that counts the messages a party sends.

@@ -146,3 +146,10 @@ The corresponding Barretenberg command (from `barretenberg/cpp/build/bin`) is:
 ```
 
 Note: Barretenberg does not require the file for storing the CRS, since Barretenberg automatically downloads it if it is not present.
+
+#### Recursion with secret inputs
+
+If the inputs of a recursive verifier (inner proof, its public inputs, verification key, key hash and predicate) are secret-shared, key generation fails unless all parties choose one of two options:
+
+- `--reveal-recursion-inputs` opens these inputs to all parties. The circuit and verification key are the same as Barretenberg's.
+- `--private-recursion` keeps them secret and verifies the inner proof on secret-shared values (REP3 only). The circuit additionally blinds the pairing point accumulator it outputs, so the public inputs reveal nothing about the inner proof. The verification key differs from Barretenberg's: create it with `create-vk --private-recursion`, and pass the flag to `split-proving-key`, `build-proving-key` and `build-and-generate-proof` as well. Proofs must be zero-knowledge (`--zk`); the proving key records this, and `generate-proof` rejects it otherwise.
