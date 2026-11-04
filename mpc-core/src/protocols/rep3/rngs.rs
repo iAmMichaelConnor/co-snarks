@@ -18,15 +18,39 @@ pub struct Rep3CorrelatedRng {
     pub rand: Rep3Rand,
     pub(crate) bitcomp1: Rep3RandBitComp,
     pub(crate) bitcomp2: Rep3RandBitComp,
+    /// Stream for values that are equal on all three parties, see [`Self::with_common_seed`]
+    common: Option<RngType>,
 }
 
 impl Rep3CorrelatedRng {
-    /// Construct a new [`Rep3CorrelatedRng`]
+    /// Construct a new [`Rep3CorrelatedRng`] without a separate stream for common randomness.
+    ///
+    /// [`Self::generate_shared`] then draws from the bit-composition streams, which the
+    /// parties do not consume equally during conversions, so its values are only equal on
+    /// all parties until the first conversion. Prefer [`Self::with_common_seed`].
     pub fn new(rand: Rep3Rand, bitcomp1: Rep3RandBitComp, bitcomp2: Rep3RandBitComp) -> Self {
         Self {
             rand,
             bitcomp1,
             bitcomp2,
+            common: None,
+        }
+    }
+
+    /// Construct a new [`Rep3CorrelatedRng`] whose [`Self::generate_shared`] values come from
+    /// a separate stream seeded with `common_seed`, which must be equal on all three parties
+    /// and independent of the other streams.
+    pub fn with_common_seed(
+        rand: Rep3Rand,
+        bitcomp1: Rep3RandBitComp,
+        bitcomp2: Rep3RandBitComp,
+        common_seed: [u8; crate::SEED_SIZE],
+    ) -> Self {
+        Self {
+            rand,
+            bitcomp1,
+            bitcomp2,
+            common: Some(RngType::from_seed(common_seed)),
         }
     }
 
@@ -35,10 +59,15 @@ impl Rep3CorrelatedRng {
         let rand = self.rand.fork();
         let bitcomp1 = self.bitcomp1.fork();
         let bitcomp2 = self.bitcomp2.fork();
+        let common = self
+            .common
+            .as_mut()
+            .map(|rng| RngType::from_seed(rng.r#gen()));
         Self {
             rand,
             bitcomp1,
             bitcomp2,
+            common,
         }
     }
 
@@ -47,6 +76,9 @@ impl Rep3CorrelatedRng {
     where
         Standard: Distribution<T>,
     {
+        if let Some(common) = &mut self.common {
+            return common.r#gen();
+        }
         match id {
             PartyID::ID0 => self.bitcomp1.rng2.r#gen(),
             PartyID::ID1 => self.bitcomp1.rng2.r#gen(),
@@ -347,6 +379,7 @@ impl Rep3RandBitComp {
 mod tests {
     use super::*;
     use crate::uint::U256;
+    use ark_bn254::Fr;
 
     fn seeds() -> ([u8; crate::SEED_SIZE], [u8; crate::SEED_SIZE]) {
         ([1u8; crate::SEED_SIZE], [2u8; crate::SEED_SIZE])
@@ -371,5 +404,88 @@ mod tests {
         let single_b: U256 = rand_single.random_uint_rng2(64);
         assert_eq!(pair_a, single_a);
         assert_eq!(pair_b, single_b);
+    }
+
+    /// The rngs of the three parties with the key layout of `Rep3State::setup_bitcomp`.
+    fn three_parties() -> [Rep3CorrelatedRng; 3] {
+        let [a, b, c, d, e, f] = [11, 13, 17, 19, 23, 29].map(|x| [x; crate::SEED_SIZE]);
+        let ctor = |rand, bitcomp1, bitcomp2| {
+            Rep3CorrelatedRng::with_common_seed(rand, bitcomp1, bitcomp2, [31; crate::SEED_SIZE])
+        };
+        [
+            ctor(
+                Rep3Rand::new(a, c),
+                Rep3RandBitComp::new_2keys(a, c),
+                Rep3RandBitComp::new_3keys(d, e, f),
+            ),
+            ctor(
+                Rep3Rand::new(b, a),
+                Rep3RandBitComp::new_3keys(b, c, a),
+                Rep3RandBitComp::new_2keys(e, d),
+            ),
+            ctor(
+                Rep3Rand::new(c, b),
+                Rep3RandBitComp::new_3keys(c, a, b),
+                Rep3RandBitComp::new_3keys(f, d, e),
+            ),
+        ]
+    }
+
+    fn generate_shared(parties: &mut [Rep3CorrelatedRng; 3]) -> [[u8; 32]; 3] {
+        let [p0, p1, p2] = parties.each_mut();
+        [
+            p0.generate_shared(PartyID::ID0),
+            p1.generate_shared(PartyID::ID1),
+            p2.generate_shared(PartyID::ID2),
+        ]
+    }
+
+    /// Draws one mask from each bit-composition rng the way the conversions do: party 0
+    /// does not draw from `bitcomp1`, party 1 does not draw from `bitcomp2`.
+    fn draw_bitcomp_masks(parties: &mut [Rep3CorrelatedRng; 3]) {
+        let [p0, p1, p2] = parties.each_mut();
+        let sum = |(a, b, c): (Fr, Fr, Fr)| a + b + c;
+        let k2 = sum(p1.bitcomp1.random_fes_3keys());
+        assert_eq!(k2, sum(p2.bitcomp1.random_fes_3keys()));
+        let k3 = sum(p0.bitcomp2.random_fes_3keys());
+        assert_eq!(k3, sum(p2.bitcomp2.random_fes_3keys()));
+    }
+
+    #[test]
+    fn common_randomness_is_independent_of_bitcomp_masks() {
+        let mut parties = three_parties();
+        for _ in 0..4 {
+            let [c0, c1, c2] = generate_shared(&mut parties);
+            assert!(c0 == c1 && c1 == c2);
+            draw_bitcomp_masks(&mut parties);
+        }
+        let mut children = parties.each_mut().map(Rep3CorrelatedRng::fork);
+        for group in [&mut parties, &mut children] {
+            draw_bitcomp_masks(group);
+            let [c0, c1, c2] = generate_shared(group);
+            assert!(c0 == c1 && c1 == c2);
+        }
+        assert_ne!(
+            generate_shared(&mut parties),
+            generate_shared(&mut children)
+        );
+        // Drawing common randomness does not move the bit-composition streams.
+        let mut a = three_parties();
+        let mut b = three_parties();
+        generate_shared(&mut a);
+        let [a0, a1, a2] = a.each_mut();
+        let [b0, b1, b2] = b.each_mut();
+        assert_eq!(
+            a1.bitcomp1.random_fes_3keys::<Fr>(),
+            b1.bitcomp1.random_fes_3keys::<Fr>()
+        );
+        assert_eq!(
+            a2.bitcomp1.random_fes_3keys::<Fr>(),
+            b2.bitcomp1.random_fes_3keys::<Fr>()
+        );
+        assert_eq!(
+            a0.bitcomp2.random_fes_3keys::<Fr>(),
+            b0.bitcomp2.random_fes_3keys::<Fr>()
+        );
     }
 }

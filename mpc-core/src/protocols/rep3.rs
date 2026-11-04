@@ -31,6 +31,7 @@ use rand::prelude::Distribution;
 use rand::{CryptoRng, Rng, SeedableRng};
 use rngs::{Rep3CorrelatedRng, Rep3Rand, Rep3RandBitComp};
 use serde::{Deserialize, Serialize};
+use sha3::{Digest, Sha3_256};
 
 pub use arithmetic::types::Rep3PrimeFieldShare;
 pub use binary::types::Rep3UintShare;
@@ -57,8 +58,8 @@ impl Rep3State {
         let id = PartyID::try_from(net.id())?;
         let mut rng = rand_chacha::ChaCha12Rng::from_entropy();
         let mut rand = Self::setup_prf(net, &mut rng)?;
-        let bitcomps = Self::setup_bitcomp(net, &mut rand)?;
-        let rngs = Rep3CorrelatedRng::new(rand, bitcomps.0, bitcomps.1);
+        let (bitcomp1, bitcomp2, common_seed) = Self::setup_bitcomp(net, &mut rand)?;
+        let rngs = Rep3CorrelatedRng::with_common_seed(rand, bitcomp1, bitcomp2, common_seed);
 
         Ok(Rep3State {
             id,
@@ -75,13 +76,26 @@ impl Rep3State {
         Ok(Rep3Rand::new(seed1, seed2))
     }
 
+    /// Sets up the two bit-composition rngs and returns them together with a seed that is
+    /// equal on all three parties, for common public randomness.
     fn setup_bitcomp<N: Network>(
         net: &N,
         rands: &mut Rep3Rand,
-    ) -> eyre::Result<(Rep3RandBitComp, Rep3RandBitComp)> {
+    ) -> eyre::Result<(Rep3RandBitComp, Rep3RandBitComp, [u8; crate::SEED_SIZE])> {
         let id = PartyID::try_from(net.id())?;
         let (k1a, k1c) = rands.random_seeds();
         let (k2a, k2c) = rands.random_seeds();
+
+        // All three parties know party 2's key k1a (k1c on party 0, k1b on party 1). The
+        // common seed is derived from it by a domain-separated hash, so the common stream is
+        // independent of the bit-composition stream seeded with that key and does not depend
+        // on how many masks a party has drawn from it.
+        let common_seed = |key: [u8; crate::SEED_SIZE]| -> [u8; crate::SEED_SIZE] {
+            let mut hasher = Sha3_256::new();
+            hasher.update(b"rep3 common public randomness");
+            hasher.update(key);
+            hasher.finalize().into()
+        };
 
         match id {
             PartyID::ID0 => {
@@ -89,14 +103,14 @@ impl Rep3State {
                     net.send_and_recv(PartyID::ID1, k1c, PartyID::ID2)?;
                 let bitcomp1 = Rep3RandBitComp::new_2keys(k1a, k1c);
                 let bitcomp2 = Rep3RandBitComp::new_3keys(k2a, k2b, k2c);
-                Ok((bitcomp1, bitcomp2))
+                Ok((bitcomp1, bitcomp2, common_seed(k1c)))
             }
             PartyID::ID1 => {
                 net.send_next((k1c, k2c))?;
                 let k1b: [u8; crate::SEED_SIZE] = net.recv_prev()?;
                 let bitcomp1 = Rep3RandBitComp::new_3keys(k1a, k1b, k1c);
                 let bitcomp2 = Rep3RandBitComp::new_2keys(k2a, k2c);
-                Ok((bitcomp1, bitcomp2))
+                Ok((bitcomp1, bitcomp2, common_seed(k1b)))
             }
             PartyID::ID2 => {
                 net.send_next(k2c)?;
@@ -104,7 +118,7 @@ impl Rep3State {
                     net.recv_prev()?;
                 let bitcomp1 = Rep3RandBitComp::new_3keys(k1a, k1b, k1c);
                 let bitcomp2 = Rep3RandBitComp::new_3keys(k2a, k2b, k2c);
-                Ok((bitcomp1, bitcomp2))
+                Ok((bitcomp1, bitcomp2, common_seed(k1a)))
             }
         }
     }
