@@ -1708,4 +1708,45 @@ mod tests {
             );
         }
     }
+
+    /// The NAF of the input witness, with `self.0` bits.
+    #[derive(Clone, Copy)]
+    struct Naf(usize);
+
+    impl crate::types::field_ct::tests::Gadget for Naf {
+        fn build<T: co_acvm::mpc::NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            let scalar = FieldCT::from_witness(inputs[0].clone(), builder);
+            BigGroup::<Fr, T>::compute_naf::<Bn254G1>(&scalar, self.0, builder, driver).unwrap();
+        }
+    }
+
+    /// The NAF of a secret-shared scalar has the same constraints as for a public one (whatever
+    /// the scalar), satisfies them for scalars of the given width, including zero, and does not
+    /// for wider scalars.
+    #[test]
+    fn shared_naf_is_constrained() {
+        use crate::types::field_ct::tests::rep3_witness_verifies;
+        for width in [1usize, 127, 128, 254] {
+            let max = if width == 254 {
+                -Fr::one()
+            } else {
+                Fr::from((BigUint::one() << width) - BigUint::one())
+            };
+            for value in [Fr::zero(), Fr::one(), max] {
+                assert!(
+                    rep3_witness_verifies(&[value], Naf(width)),
+                    "{width} {value}"
+                );
+            }
+            if width < 254 {
+                let too_wide = Fr::from(BigUint::one() << width);
+                assert!(!rep3_witness_verifies(&[too_wide], Naf(width)), "{width}");
+            }
+        }
+    }
 }

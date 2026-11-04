@@ -2580,8 +2580,32 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
                         .collect()
                 });
         }
-        unimplemented!(
-            "Functionality compute_naf_entries not implemented for Rep3 in the shared case"
+        // Shared case, without opening anything. Entry 0 is the skew, the negated bit 0 of the
+        // scalar. Entry i > 0 is the negated bit i of the scalar plus the skew; adding the skew to
+        // an even scalar only sets bit 0, so this is the negated bit i of the scalar itself. A
+        // zero scalar needs no special case.
+        let num_rounds = if max_num_bits == 0 {
+            F::MODULUS_BIT_SIZE as usize
+        } else {
+            max_num_bits
+        };
+        eyre::ensure!(
+            num_rounds <= F::MODULUS_BIT_SIZE as usize,
+            "NAF of {num_rounds} bits exceeds the scalar field size"
+        );
+        let scalar = Self::get_shared(scalar).expect("We checked it is not public");
+        let bits = conversion::a2b_selector(scalar, self.net, &mut self.state)?;
+        let one = F::Uint::from(1u64);
+        let negated_bits: Vec<_> = (0..num_rounds)
+            .map(|i| {
+                binary::xor_public(&binary::and_with_public(&(bits >> i), &one), &one, self.id)
+            })
+            .collect();
+        Ok(
+            conversion::bit_inject_many(&negated_bits, self.net, &mut self.state)?
+                .into_iter()
+                .map(Rep3AcvmType::Shared)
+                .collect(),
         )
     }
 
