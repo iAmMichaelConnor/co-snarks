@@ -399,9 +399,8 @@ impl<F: PrimeField> BrilligDriver<F> for PlainBrilligDriver<F> {
         if let (PlainBrilligType::Field(val), PlainBrilligType::Int(radix, IntegerBitSize::U32)) =
             (val, radix)
         {
-            // this method is copied from
-            // https://github.com/noir-lang/noir/blob/7216f0829dcece948d3243471e6d57380522e997/acvm-repo/brillig_vm/src/black_box.rs#L323
-            // and modified for our implementation
+            // this method is adapted from `to_be_radix` in Noir v1.0.0
+            // https://github.com/noir-lang/noir/blob/v1.0.0/acvm-repo/brillig_vm/src/black_box.rs#L312
 
             let mut input: BigUint = val.into();
             let radix = BigUint::from(radix);
@@ -420,6 +419,10 @@ impl<F: PrimeField> BrilligDriver<F> for PlainBrilligDriver<F> {
                     limbs[i] = PlainBrilligType::Int(limb, IntegerBitSize::U8);
                 };
                 input /= &radix;
+            }
+            // As in Noir: the decomposition fails if `output_size` limbs do not consume the input
+            if !input.is_zero() {
+                eyre::bail!("Field failed to decompose into specified {output_size} limbs");
             }
             for limb in limbs.iter() {
                 tracing::debug!("{limb:?}");
@@ -464,5 +467,34 @@ impl<F: PrimeField> BrilligDriver<F> for PlainBrilligDriver<F> {
         } else {
             eyre::bail!("expected field, but got {val:?}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::Fr;
+
+    fn to_radix(value: u64, radix: u128, limbs: usize) -> eyre::Result<Vec<PlainBrilligType<Fr>>> {
+        PlainBrilligDriver::<Fr>::new().to_radix(
+            PlainBrilligType::Field(Fr::from(value)),
+            PlainBrilligType::Int(radix, IntegerBitSize::U32),
+            limbs,
+            false,
+        )
+    }
+
+    #[test]
+    fn to_radix_requires_a_complete_decomposition() {
+        let byte = |b| PlainBrilligType::Int(b, IntegerBitSize::U8);
+        assert_eq!(to_radix(300, 256, 2).unwrap(), vec![byte(1), byte(44)]);
+        assert_eq!(
+            to_radix(300, 10, 4).unwrap(),
+            vec![byte(0), byte(3), byte(0), byte(0)]
+        );
+        assert!(to_radix(0, 256, 0).unwrap().is_empty());
+        assert!(to_radix(300, 256, 1).is_err());
+        assert!(to_radix(300, 10, 2).is_err());
+        assert!(to_radix(42, 256, 0).is_err());
     }
 }

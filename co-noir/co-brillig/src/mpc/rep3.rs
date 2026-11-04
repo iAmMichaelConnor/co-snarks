@@ -1595,6 +1595,16 @@ impl<F: FieldUint, N: Network> BrilligDriver<F> for Rep3BrilligDriver<'_, F, N> 
                     eyre::bail!("can only ToRadix on field and radix must be Int32")
                 }
             }
+            (
+                Rep3BrilligType::Public(Public::Field(val)),
+                Rep3BrilligType::Shared(Shared::Ring32(_)),
+            ) if output_size == 0 => {
+                // Zero limbs only decompose zero (as in Noir), whatever the radix
+                if !val.is_zero() {
+                    eyre::bail!("Field failed to decompose into specified 0 limbs");
+                }
+                Vec::new()
+            }
             (Rep3BrilligType::Public(val), Rep3BrilligType::Shared(radix)) => {
                 if let (Public::Field(val), Shared::Ring32(radix)) = (val, radix) {
                     //todo: do we want to do checks for radix <= 256?
@@ -1809,6 +1819,42 @@ impl<F: FieldUint, N: Network> BrilligDriver<F> for Rep3BrilligDriver<'_, F, N> 
             Rep3BrilligType::Public(Public::Field(_))
             | Rep3BrilligType::Shared(Shared::Field(_)) => Ok(val),
             _ => eyre::bail!("expected field but got int"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_bn254::Fr;
+    use mpc_core::protocols::rep3::conversion::A2BType;
+    use mpc_net::local::LocalNetwork;
+
+    #[test]
+    fn to_radix_of_public_value_into_zero_limbs_with_shared_radix() {
+        let radix = rep3_ring::share_ring_element(RingElement(256u32), &mut rand::thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(radix)
+            .map(|(net, radix)| {
+                std::thread::spawn(move || {
+                    let state = Rep3State::new(&net, A2BType::default()).unwrap();
+                    let mut driver = Rep3BrilligDriver::<Fr, _>::new(&net, state);
+                    let mut to_radix = |value: u64| {
+                        driver.to_radix(
+                            Rep3BrilligType::public_field(Fr::from(value)),
+                            Rep3BrilligType::Shared(Shared::Ring32(radix)),
+                            0,
+                            false,
+                        )
+                    };
+                    assert!(to_radix(0).unwrap().is_empty());
+                    assert!(to_radix(42).is_err());
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
         }
     }
 }
