@@ -88,6 +88,30 @@ fn poseidon_test_keccak256() {
     plain_test::<Keccak256>(PROOF_FILE, CIRCUIT_FILE, WITNESS_FILE, ZeroKnowledge::Yes);
 }
 
+/// The prover's parallel reductions are exact field sums, so the proof bytes must not depend on the number of
+/// threads. Both runs are compared with the barretenberg proof.
+#[test]
+fn poseidon_test_thread_count_invariance() {
+    const PROOF_FILE: &str = "../test_vectors/noir/poseidon/kat/pos_proof_with_pos";
+    const CIRCUIT_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.json";
+    const WITNESS_FILE: &str = "../test_vectors/noir/poseidon/kat/poseidon.gz";
+
+    for num_threads in [1, 16] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                plain_test::<Poseidon2Sponge>(
+                    PROOF_FILE,
+                    CIRCUIT_FILE,
+                    WITNESS_FILE,
+                    ZeroKnowledge::No,
+                )
+            });
+    }
+}
+
 #[test]
 fn add3_test_keccak256() {
     const PROOF_FILE: &str = "../test_vectors/noir/add3u64/kat/add3u64_proof_with_kec";
