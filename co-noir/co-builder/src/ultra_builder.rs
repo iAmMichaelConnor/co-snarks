@@ -3167,9 +3167,10 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
                 if all_masks_zero {
                     return Ok(sublimb_indices);
                 }
+                // All five 14-bit sublimbs, as in the public case below
                 let slices = driver.decompose_arithmetic(
                     T::get_shared(&limb).expect("Checked it is shared"),
-                    56,
+                    14 * 5,
                     14,
                 )?;
                 for (val, (i, mask)) in slices.into_iter().zip(sublimb_masks.iter().enumerate()) {
@@ -5145,5 +5146,56 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         b.assert_equal(&b_accumulator, self, driver);
 
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript_ct::Bn254G1;
+    use crate::types::field_ct::tests::{Gadget, rep3_witness_verifies};
+    use ark_bn254::Fr;
+
+    /// Range-constrains two witnesses with `range_constrain_two_limbs`.
+    #[derive(Clone, Copy)]
+    struct TwoLimbs {
+        lo_bits: usize,
+        hi_bits: usize,
+    }
+
+    impl Gadget for TwoLimbs {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            let lo = builder.add_variable(inputs[0].clone());
+            let hi = builder.add_variable(inputs[1].clone());
+            builder
+                .range_constrain_two_limbs(lo, hi, self.lo_bits, self.hi_bits, driver)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn shared_range_constrain_two_limbs_uses_all_five_sublimbs() {
+        let big = |bits: usize| BigUint::one() << bits;
+        for (lo, hi, lo_bits, hi_bits, valid) in [
+            (big(68) - 1u32, big(67) + 1u32, 68, 68, true),
+            (big(57), big(69) + 5u32, 68, 70, true),
+            (big(56) - 1u32, big(50) - 1u32, 56, 50, true),
+            (big(68), BigUint::one(), 68, 68, false),
+            (BigUint::one(), big(68), 68, 68, false),
+            (BigUint::one(), big(56), 68, 56, false),
+        ] {
+            let values = [Fr::from(lo.clone()), Fr::from(hi.clone())];
+            let gadget = TwoLimbs { lo_bits, hi_bits };
+            assert_eq!(
+                rep3_witness_verifies(&values, gadget),
+                valid,
+                "lo = {lo}, hi = {hi}, bits = ({lo_bits}, {hi_bits})"
+            );
+        }
     }
 }

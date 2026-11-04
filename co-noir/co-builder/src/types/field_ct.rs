@@ -4687,7 +4687,7 @@ pub(crate) mod tests {
     type PlainBuilder = GenericUltraCircuitBuilder<Bn254G1, PlainAcvmSolver<Fr>>;
 
     /// A piece of circuit construction that runs unchanged on every driver.
-    trait Gadget: Copy + Send + 'static {
+    pub(crate) trait Gadget: Copy + Send + 'static {
         fn build<T: NoirWitnessExtensionProtocol<Fr>>(
             self,
             inputs: &[T::AcvmType],
@@ -4729,7 +4729,7 @@ pub(crate) mod tests {
     /// with the plain driver. Checks that all parties build the same constraints as the plain
     /// driver, then proves the plain circuit with the reconstructed Rep3 witness and returns
     /// whether it verifies.
-    fn rep3_witness_verifies(values: &[Fr], gadget: impl Gadget) -> bool {
+    pub(crate) fn rep3_witness_verifies(values: &[Fr], gadget: impl Gadget) -> bool {
         let shares = share_field_elements(values, &mut thread_rng());
         let threads: Vec<_> = LocalNetwork::new_3_parties()
             .into_iter()
@@ -4772,7 +4772,7 @@ pub(crate) mod tests {
             .map(|b| (b.wires.clone(), b.selectors.clone()))
             .collect();
         for (witness, rep3_blocks, real_variable_index) in &outputs {
-            assert_eq!(rep3_blocks, &blocks, "Rep3 constraints differ from plain");
+            assert!(rep3_blocks == &blocks, "Rep3 constraints differ from plain");
             assert_eq!(real_variable_index, &builder.real_variable_index);
             assert_eq!(witness.len(), builder.variables.len());
         }
