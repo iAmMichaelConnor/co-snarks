@@ -841,9 +841,9 @@ impl ShpleminiVerifier {
         // TODO(https://github.com/AztecProtocol/barretenberg/issues/1186).
         // Insecure pattern.
         // TACEO TODO: We could also ignore the result?
-        Ok(T::get_public(&diff.get_value(builder, driver))
-            .expect("Is this ever shared?")
-            .is_zero())
+        // The returned value is only a diagnostic; the check is the constraint above. If `diff` is
+        // secret-shared (inner proof data is secret), its value is unknown and not reported.
+        Ok(T::get_public(&diff.get_value(builder, driver)).is_none_or(|diff| diff.is_zero()))
     }
 
     fn compute_batched_barycentric_evaluations<
@@ -932,5 +932,57 @@ impl ShpleminiVerifier {
             result.push(prev.multiply(shplonk_batching_challenge, builder, driver)?);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcript_ct::Bn254G1;
+    use crate::types::field_ct::tests::{Gadget, rep3_witness_verifies};
+    use ark_bn254::Fr;
+
+    /// The SmallSubgroupIPA consistency check on the evaluations G(r), A(g*r), A(r), A(1), Q(r)
+    /// given as inputs, with F = 0 and claimed inner product 0.
+    #[derive(Clone, Copy)]
+    struct CheckConsistency;
+
+    impl Gadget for CheckConsistency {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            let evaluations: [FieldCT<Fr>; NUM_SMALL_IPA_OPENING_CLAIMS] =
+                array::from_fn(|i| FieldCT::from_witness(inputs[i].clone(), builder));
+            let subgroup_size = <Bn254G1 as HonkCurve<TranscriptFieldType>>::SUBGROUP_SIZE;
+            let challenge = FieldCT::from(Fr::from(5u64));
+            let vanishing_poly_eval =
+                FieldCT::from(Fr::from(5u64).pow([subgroup_size as u64]) - Fr::ONE);
+            let consistent = ShpleminiVerifier::check_consistency(
+                &evaluations,
+                &challenge,
+                &vec![FieldCT::from(Fr::ZERO); subgroup_size],
+                &FieldCT::from(Fr::ZERO),
+                &vanishing_poly_eval,
+                builder,
+                driver,
+            )
+            .unwrap();
+            // The value is reported only if it is known to all parties.
+            if inputs.iter().any(T::is_shared) {
+                assert!(consistent);
+            }
+        }
+    }
+
+    /// Secret-shared inner proof evaluations do not stop the in-circuit check, and the check is
+    /// still a constraint.
+    #[test]
+    fn shared_small_ipa_evaluations_are_constrained() {
+        assert!(rep3_witness_verifies(&[Fr::ZERO; 5], CheckConsistency));
+        let inconsistent = [1u64, 2, 3, 0, 4].map(Fr::from);
+        assert!(!rep3_witness_verifies(&inconsistent, CheckConsistency));
     }
 }
