@@ -32,7 +32,9 @@ use co_noir_common::{
     mpc::NoirUltraHonkProver,
     polynomials::{
         entities::Polynomials,
-        polynomial::{NUM_DISABLED_ROWS_IN_SUMCHECK, NUM_MASKED_ROWS, Polynomial},
+        polynomial::{
+            NUM_DISABLED_ROWS_IN_SUMCHECK, NUM_MASKED_ROWS, Polynomial, gemini_masking_support,
+        },
         shared_polynomial::SharedPolynomial,
     },
     transcript::{Transcript, TranscriptHasher},
@@ -663,9 +665,23 @@ impl<
             return Ok(());
         }
 
+        // As barretenberg, the mask is sparse: random values on a public support of 2 * log(n)
+        // coefficients (see `gemini_masking_support`), so the commitment is a small MSM.
         let polynomial_size = proving_key.polynomials.witness.w_l().len();
-        let masking_poly = SharedPolynomial::<T, C>::random(polynomial_size, self.net, self.state)?;
-        let masking_poly_commitment_shared = CoUtils::commit::<T, C>(masking_poly.as_ref(), crs);
+        if polynomial_size > crs.monomials.len() {
+            return Err(HonkProofError::CrsTooSmall);
+        }
+        let support = gemini_masking_support(polynomial_size);
+        let values = support
+            .iter()
+            .map(|_| T::rand(self.net, self.state))
+            .collect::<Result<Vec<_>, _>>()?;
+        let points: Vec<_> = support.iter().map(|&i| crs.monomials[i]).collect();
+        let masking_poly_commitment_shared = CoUtils::msm::<T, C>(&values, &points);
+        let mut masking_poly = SharedPolynomial::<T, C>::new_zero(polynomial_size);
+        for (&i, value) in support.iter().zip(values) {
+            masking_poly[i] = value;
+        }
         let masking_poly_commitment =
             T::open_point(masking_poly_commitment_shared, self.net, self.state)?;
         transcript.send_point_to_verifier::<C>(
