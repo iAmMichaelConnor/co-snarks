@@ -73,6 +73,86 @@ pub fn ohv<T: IntRing2k, N: Network>(
     Ok(f)
 }
 
+/// [`ohv`] for many indices at once. `bits[i]` holds the k_i bit shares of index i (LSB
+/// first); the result i is its one-hot-encoded vector of size 2^(k_i), with the same values as
+/// [`ohv`]. The level-j ANDs of all indices are independent, so each level is one reshare for
+/// all indices: max_i k_i - 1 rounds in total instead of the sum of k_i - 1 over the indices.
+/// The bits reshared are the same as in [`ohv`], regrouped per level.
+pub fn ohv_many<N: Network>(
+    bits: &[Vec<Rep3RingShare<Bit>>],
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<Vec<Vec<Rep3RingShare<Bit>>>> {
+    eyre::ensure!(
+        bits.iter().all(|bits| !bits.is_empty()),
+        "Every index needs at least one bit"
+    );
+    // The base case of ohv: [!b_0, b_0]
+    let mut fs = bits
+        .iter()
+        .map(|bits| vec![!bits[0], bits[0]])
+        .collect::<Vec<_>>();
+    let max_k = bits.iter().map(Vec::len).max().unwrap_or(0);
+
+    // Level j doubles the vectors of all indices with more than j bits from 2^j to 2^(j+1).
+    for j in 1..max_k {
+        let active = (0..bits.len())
+            .filter(|&i| bits[i].len() > j)
+            .collect::<Vec<_>>();
+        let len = (1 << j) - 1;
+        let inputs = active.iter().map(|&i| &fs[i][..len]).collect::<Vec<_>>();
+        let rhs = active.iter().map(|&i| bits[i][j]).collect::<Vec<_>>();
+        let es = match len.next_power_of_two() {
+            1 | 2 | 4 | 8 => pack_and_many::<u8, _>(&inputs, &rhs, net, state)?,
+            16 => pack_and_many::<u16, _>(&inputs, &rhs, net, state)?,
+            32 => pack_and_many::<u32, _>(&inputs, &rhs, net, state)?,
+            64 => pack_and_many::<u64, _>(&inputs, &rhs, net, state)?,
+            _ => pack_and_many::<u128, _>(&inputs, &rhs, net, state)?,
+        };
+        for (&i, vk, mut e) in itertools::izip!(&active, rhs, es) {
+            e.push(e.iter().fold(vk, |a, b| &a ^ b));
+            for (e, f) in e.iter().zip(fs[i].iter_mut()) {
+                *f ^= e;
+            }
+            fs[i].extend(e);
+        }
+    }
+    Ok(fs)
+}
+
+/// ANDs each of the `inputs` with its bit in `rhs`, packing the bits of each input into
+/// elements of `T` (several elements for inputs longer than `T::K`), in one reshare for all.
+fn pack_and_many<T: IntRing2k, N: Network>(
+    inputs: &[&[Rep3RingShare<Bit>]],
+    rhs: &[Rep3RingShare<Bit>],
+    net: &N,
+    state: &mut Rep3State,
+) -> eyre::Result<Vec<Vec<Rep3RingShare<Bit>>>>
+where
+    Standard: Distribution<T>,
+{
+    let mut local_a = Vec::new();
+    for (input, rhs) in inputs.iter().zip(rhs) {
+        for chunk in input.chunks(T::K) {
+            local_a.push(and_pre_bit(&pack::<T>(chunk), rhs, state));
+        }
+    }
+    let local_b = net.reshare_many(&local_a)?;
+    let mut shares = local_a
+        .into_iter()
+        .zip(local_b)
+        .map(|(a, b)| Rep3RingShare::new_ring(a, b));
+    Ok(inputs
+        .iter()
+        .map(|input| {
+            input
+                .chunks(T::K)
+                .flat_map(|chunk| unpack(shares.next().expect("one share per chunk"), chunk.len()))
+                .collect()
+        })
+        .collect())
+}
+
 fn pack<T: IntRing2k>(input: &[Rep3RingShare<Bit>]) -> Rep3RingShare<T> {
     let mut share_a = RingElement::<T>::zero();
     let mut share_b = RingElement::<T>::zero();

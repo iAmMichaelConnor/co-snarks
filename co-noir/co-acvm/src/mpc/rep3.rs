@@ -1,5 +1,5 @@
 use super::plain::PlainAcvmSolver;
-use super::{NoirWitnessExtensionProtocol, downcast};
+use super::{DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, downcast};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
@@ -41,6 +41,7 @@ pub struct Rep3AcvmSolver<'a, F: PrimeField, N: Network> {
     state: Rep3State,
     lut_provider: Rep3FieldLookupTable<F>,
     plain_solver: PlainAcvmSolver<F>,
+    lookup_read_count_batch_size: Option<usize>,
     phantom_data: PhantomData<F>,
 }
 
@@ -53,8 +54,17 @@ impl<'a, F: PrimeField + FieldUint, N: Network> Rep3AcvmSolver<'a, F, N> {
             state,
             lut_provider: Rep3FieldLookupTable::new(),
             plain_solver: PlainAcvmSolver::<F>::default(),
+            lookup_read_count_batch_size: Some(DEFAULT_LOOKUP_READ_COUNT_BATCH),
             phantom_data: PhantomData,
         })
+    }
+
+    /// Sets the maximum number of shared-index lookup gates per batch of the lookup read-count
+    /// construction (default [`DEFAULT_LOOKUP_READ_COUNT_BATCH`]), see
+    /// [`NoirWitnessExtensionProtocol::lookup_read_count_batch_size`]. All parties must use the
+    /// same value.
+    pub fn set_lookup_read_count_batch_size(&mut self, batch_size: Option<usize>) {
+        self.lookup_read_count_batch_size = batch_size;
     }
 
     /// Inverts a shared non-native field element without revealing whether it is zero (see
@@ -810,6 +820,23 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             self.net,
             &mut self.state,
         )
+    }
+
+    fn one_hot_vector_from_shared_index_many(
+        &mut self,
+        indices: &[Self::ArithmeticShare],
+        lens: &[usize],
+    ) -> eyre::Result<Vec<Vec<Self::ArithmeticShare>>> {
+        mpc_core::protocols::rep3_ring::lut_field::Rep3FieldLookupTable::<F>::ohv_from_index_many(
+            indices,
+            lens,
+            self.net,
+            &mut self.state,
+        )
+    }
+
+    fn lookup_read_count_batch_size(&self) -> Option<usize> {
+        self.lookup_read_count_batch_size
     }
 
     fn read_lut_with_ohv_by_shared_index(

@@ -252,6 +252,69 @@ impl<F: FieldUint> Rep3FieldLookupTable<F> {
         conversion::bit_inject_from_bits_to_field_many::<F, _>(&e, net, state)
     }
 
+    /// [`Self::ohv_from_index`] for many indices: `indices[i]` indexes a table of `lens[i]`
+    /// entries. The communication of all indices is batched: one bit decomposition
+    /// ([`rep3::conversion::a2b_many`]; its messages carry a few field elements per index,
+    /// while the garbled adder of the Yao conversion would be about 24 KiB per index), one
+    /// [`gadgets::ohv::ohv_many`] (max_i k_i - 1 rounds for tables of up to 2^(k_i) entries)
+    /// and one bit injection, so the number of rounds does not depend on the number of
+    /// indices. The values are the same as with [`Self::ohv_from_index`].
+    ///
+    /// The bit injection sends one field element per one-hot entry; it is split into
+    /// consecutive messages of at most [`mpc_net::DEFAULT_MAX_FRAME_LENGTH`] bytes. The
+    /// arithmetic-to-binary conversion sends a few field elements per index, so callers bound
+    /// the number of indices per call.
+    pub fn ohv_from_index_many<N: Network>(
+        indices: &[Rep3PrimeFieldShare<F>],
+        lens: &[usize],
+        net: &N,
+        state: &mut Rep3State,
+    ) -> eyre::Result<Vec<Vec<Rep3PrimeFieldShare<F>>>> {
+        eyre::ensure!(
+            indices.len() == lens.len(),
+            "Every index needs a table length"
+        );
+        if indices.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut ks = Vec::with_capacity(lens.len());
+        for len in lens {
+            let k = len.next_power_of_two().ilog2() as usize;
+            eyre::ensure!((1..=32).contains(&k), "Unsupported table size {len}");
+            ks.push(k);
+        }
+
+        let binary = rep3::conversion::a2b_many(indices, net, state)?;
+        let bits = binary
+            .iter()
+            .zip(ks)
+            .map(|(binary, k)| {
+                let index = Rep3RingShare::new(
+                    u32::cast_from_uint(&binary.a),
+                    u32::cast_from_uint(&binary.b),
+                );
+                (0..k).map(|i| index.get_bit(i)).collect()
+            })
+            .collect::<Vec<_>>();
+        let es = gadgets::ohv::ohv_many(&bits, net, state)?;
+
+        let sizes = es.iter().map(Vec::len).collect::<Vec<_>>();
+        let es = es.into_iter().flatten().collect::<Vec<_>>();
+        let max_len = (mpc_net::DEFAULT_MAX_FRAME_LENGTH - 8)
+            / ark_serialize::CanonicalSerialize::uncompressed_size(&F::zero());
+        let mut injected = Vec::with_capacity(es.len());
+        for chunk in es.chunks(max_len) {
+            injected.extend(conversion::bit_inject_from_bits_to_field_many::<F, _>(
+                chunk, net, state,
+            )?);
+        }
+        let mut injected = injected.into_iter();
+        Ok(sizes
+            .into_iter()
+            .map(|size| injected.by_ref().take(size).collect())
+            .collect())
+    }
+
     /// Reads from a LUT at a shared index and additionally returns the shared one-hot-encoded vector of the index (see [`Self::ohv_from_index`]),
     /// such that callers can reuse it without recomputing it. Reading from a public LUT is local given the one-hot-encoded vector,
     /// reading from a shared LUT requires one resharing.
