@@ -15,6 +15,7 @@ use co_noir_common::types::ZeroKnowledge;
 use noir_types::HonkProof;
 use sha3::Keccak256;
 use std::fs::File;
+use std::sync::Arc;
 
 fn plain_test<H: TranscriptHasher<TranscriptFieldType>>(
     proof_file: &str,
@@ -105,4 +106,35 @@ fn add3_test_poseidon2sponge() {
 
     plain_test::<Poseidon2Sponge>(PROOF_FILE, CIRCUIT_FILE, WITNESS_FILE, ZeroKnowledge::No);
     plain_test::<Poseidon2Sponge>(PROOF_FILE, CIRCUIT_FILE, WITNESS_FILE, ZeroKnowledge::Yes);
+}
+
+/// Proofs of a circuit with a recursive verifier are randomized (the in-circuit batch_mul masks its edge cases with a
+/// random offset point), so such circuits are pinned by their verification keys. Like `bb write_vk`, the key is built
+/// without a witness.
+fn vk_kat_test(name: &str) {
+    let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+    let constraint_system =
+        constraint_system_from_reader(File::open(circuit_file).unwrap()).unwrap();
+    let crs_size = co_noir::compute_circuit_size::<Bn254G1>(&constraint_system).unwrap();
+    let prover_crs = Arc::new(
+        CrsParser::<Bn254G1>::get_crs_g1(CRS_PATH_G1, crs_size, ZeroKnowledge::No).unwrap(),
+    );
+    let vk = co_noir::generate_vk_barretenberg(&constraint_system, prover_crs).unwrap();
+
+    let vk_file = |hasher: &str| format!("../test_vectors/noir/{name}/kat/{name}_vk_with_{hasher}");
+    assert_eq!(vk.to_buffer(), std::fs::read(vk_file("pos")).unwrap());
+    assert_eq!(
+        vk.to_buffer_keccak(),
+        std::fs::read(vk_file("kec")).unwrap()
+    );
+}
+
+#[test]
+fn recursion_vk_test() {
+    vk_kat_test("recursion");
+}
+
+#[test]
+fn recursion_zk_vk_test() {
+    vk_kat_test("recursion_zk");
 }

@@ -267,6 +267,33 @@ fn rom_shared_proof_test_poseidon2sponge() {
     proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::Yes, "");
 }
 
+// rom_shared reads a ROM at a secret index: the non-ZK proofs must match barretenberg byte for byte.
+#[test]
+fn rom_shared_witness_and_proof_kat_test_poseidon2sponge() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_pos";
+    witness_and_proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+}
+
+#[test]
+fn rom_shared_proof_kat_test_poseidon2sponge() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_pos";
+    proof_test::<Poseidon2Sponge>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+}
+
+#[test]
+fn rom_shared_witness_and_proof_test_keccak256() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_kec";
+    witness_and_proof_test::<Keccak256>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+    witness_and_proof_test::<Keccak256>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
+}
+
+#[test]
+fn rom_shared_proof_test_keccak256() {
+    const PROOF_FILE: &str = "../test_vectors/noir/rom_shared/kat/rom_shared_proof_with_kec";
+    proof_test::<Keccak256>("rom_shared", ZeroKnowledge::No, PROOF_FILE);
+    proof_test::<Keccak256>("rom_shared", ZeroKnowledge::Yes, PROOF_FILE);
+}
+
 #[test]
 #[ignore = "REP3 methods on shared values are not yet implemented"]
 fn recursion_witness_and_proof_test_poseidon2sponge() {
