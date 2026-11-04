@@ -170,6 +170,15 @@ where
         HonkProof::new(self.proof_data)
     }
 
+    /// Checks that the verifier has read the whole proof, so that a proof with trailing data is
+    /// rejected (as barretenberg's `enforce_proof_fully_consumed` does).
+    pub fn check_fully_consumed(&self) -> HonkProofResult<()> {
+        if self.num_frs_read != self.proof_data.len() {
+            return Err(HonkProofError::InvalidProofLength);
+        }
+        Ok(())
+    }
+
     #[expect(dead_code)]
     pub(crate) fn print(&self) {
         self.manifest.print();

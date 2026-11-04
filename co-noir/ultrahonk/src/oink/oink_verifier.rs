@@ -155,7 +155,7 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         verifying_key: &VerifyingKey<P>,
         transcript: &mut Transcript<TranscriptFieldType, H>,
         has_zk: ZeroKnowledge,
-    ) -> HonkVerifyResult<VerifierMemory<C>> {
+    ) -> HonkVerifyResult<(VerifierMemory<C>, Vec<C::ScalarField>)> {
         tracing::trace!("Oink verify");
 
         self.execute_preamble_round(verifying_key, transcript)?;
@@ -168,6 +168,6 @@ impl<C: HonkCurve<TranscriptFieldType>, H: TranscriptHasher<TranscriptFieldType>
         self.commit_to_z_perm(verifying_key, transcript)?;
 
         Oink::<C, H>::generate_alphas_round(&mut self.memory.challenges.alphas, transcript);
-        Ok(self.memory)
+        Ok((self.memory, self.public_inputs))
     }
 }
