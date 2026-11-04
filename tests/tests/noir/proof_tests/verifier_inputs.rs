@@ -181,3 +181,29 @@ mod pairing_point_accumulator {
         assert!(!verify_fixture("malicious").unwrap());
     }
 }
+
+#[test]
+fn zero_log_circuit_size_vk_is_rejected() {
+    let (_, _, vk) = prove::<Poseidon2Sponge>(ZeroKnowledge::No);
+    for keccak in [false, true] {
+        let mut buf = if keccak {
+            vk.inner_vk.to_buffer_keccak()
+        } else {
+            vk.inner_vk.to_buffer()
+        };
+        buf[..32].fill(0);
+        let decoded = if keccak {
+            VerifyingKeyBarretenberg::<Bn254G1>::from_buffer_keccak(&buf)
+        } else {
+            VerifyingKeyBarretenberg::<Bn254G1>::from_buffer(&buf)
+        };
+        assert!(matches!(decoded, Err(HonkProofError::CorruptedKey)));
+    }
+}
+
+#[test]
+fn zk_verification_without_padding_requires_three_rounds() {
+    let (proof, public_inputs, mut vk) = prove::<Keccak256>(ZeroKnowledge::Yes);
+    vk.inner_vk.log_circuit_size = 2;
+    assert!(verify::<Keccak256>(proof, &public_inputs, &vk, ZeroKnowledge::Yes).is_err());
+}
