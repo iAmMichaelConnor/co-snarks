@@ -4,6 +4,8 @@
 
 pub mod bristol_fashion;
 pub mod circuits;
+#[cfg(test)]
+pub(crate) mod cleartext_evaluator;
 pub mod evaluator;
 pub mod fancy;
 pub mod garbler;
