@@ -1,11 +1,3 @@
-use acir::native_types::WitnessStack;
-use co_acvm::solver::PlainCoSolver;
-use co_acvm::solver::Rep3CoSolver;
-use itertools::izip;
-use mpc_net::local::LocalNetwork;
-use noirc_artifacts::program::ProgramArtifact;
-use std::path::PathBuf;
-
 use super::add_rep3_acvm_test;
 
 add_rep3_acvm_test!("add3u64");

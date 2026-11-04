@@ -747,3 +747,126 @@ fn sha256_precomputed_reads_follow_the_gadget_order() {
     assert_eq!(opened[..3], sparse);
     assert_eq!(opened[3..], slices.map(Fr::from));
 }
+
+/// Runs the REP3 witness extension of a test vector and returns the opened witness and the number
+/// of messages party 0 sent.
+fn rep3_witness_extension(name: &str, level_scheduling: bool) -> (Vec<Fr>, usize) {
+    let artifact = co_noir::program_artifact_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.json")).unwrap(),
+    )
+    .unwrap();
+    let inputs = noir_types::partially_read_abi_bn254(
+        File::open(format!("../test_vectors/noir/{name}/Prover.toml")).unwrap(),
+        &artifact.abi,
+        &artifact.bytecode.functions[0].public_inputs().indices(),
+    )
+    .unwrap();
+    let shares = co_noir::split_input_rep3(inputs);
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), shares)
+        .map(|(inner, share)| {
+            let artifact = artifact.clone();
+            std::thread::spawn(move || {
+                let net = CountingNetwork {
+                    inner,
+                    sent: AtomicUsize::new(0),
+                };
+                let (witness, _) = co_noir::execute_circuit_rep3_with_level_scheduling(
+                    share,
+                    artifact,
+                    &net,
+                    level_scheduling,
+                )
+                .unwrap();
+                (witness, net.sent.load(Ordering::SeqCst))
+            })
+        })
+        .collect();
+    let mut results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    let (c, _) = results.pop().unwrap();
+    let (b, _) = results.pop().unwrap();
+    let (a, sent) = results.pop().unwrap();
+    let witness = izip!(a, b, c)
+        .map(|shares| match shares {
+            (Rep3Type::Public(a), Rep3Type::Public(_), Rep3Type::Public(_)) => a,
+            (Rep3Type::Shared(a), Rep3Type::Shared(b), Rep3Type::Shared(c)) => {
+                mpc_core::protocols::rep3::combine_field_element(a, b, c)
+            }
+            _ => panic!("parties disagree on which values are shared"),
+        })
+        .collect();
+    (witness, sent)
+}
+
+/// Level scheduling gives the known-answer witness and computes the independent multiplications of
+/// shared values together, so the witness extension sends fewer messages.
+#[test]
+fn level_scheduling_gives_the_same_witness_with_fewer_messages() {
+    let name = "poseidon";
+    let expected = co_noir::witness_from_reader(
+        File::open(format!("../test_vectors/noir/{name}/kat/{name}.gz")).unwrap(),
+    )
+    .unwrap();
+    let (sequential, sequential_messages) = rep3_witness_extension(name, false);
+    let (scheduled, scheduled_messages) = rep3_witness_extension(name, true);
+    assert_eq!(sequential, expected);
+    assert_eq!(scheduled, expected);
+    assert!(
+        scheduled_messages < sequential_messages,
+        "{scheduled_messages} vs {sequential_messages} messages"
+    );
+}
+
+/// The REP3 driver computes independent products of shared values in one message per party, split
+/// where a message would exceed the default network frame.
+#[test]
+fn rep3_solve_mul_terms_chunks_at_the_frame_length() {
+    use co_acvm::{mpc::NoirWitnessExtensionProtocol, Rep3AcvmSolver, Rep3AcvmType};
+    use co_noir_common::CoUtils;
+    use mpc_core::protocols::rep3::{
+        combine_field_elements, conversion::A2BType, share_field_elements,
+    };
+
+    let len = CoUtils::max_mul_many_len::<Fr>() + 2;
+    let lhs: Vec<Fr> = (0..len as u64).map(Fr::from).collect();
+    let rhs: Vec<Fr> = (0..len as u64).map(|i| Fr::from(i + 3)).collect();
+    let c = Fr::from(5u64);
+    let mut rng = rand::thread_rng();
+    let lhs_shares = share_field_elements(&lhs, &mut rng);
+    let rhs_shares = share_field_elements(&rhs, &mut rng);
+    let threads: Vec<_> = izip!(LocalNetwork::new_3_parties(), lhs_shares, rhs_shares)
+        .map(|(inner, lhs, rhs)| {
+            std::thread::spawn(move || {
+                let net = CountingNetwork {
+                    inner,
+                    sent: AtomicUsize::new(0),
+                };
+                let mut driver = Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                let mut terms: Vec<_> = izip!(lhs, rhs)
+                    .map(|(l, r)| (c, Rep3AcvmType::Shared(l), Rep3AcvmType::Shared(r)))
+                    .collect();
+                // A product with a public factor needs no communication.
+                terms.push((c, Rep3AcvmType::Public(Fr::from(2u64)), terms[0].2.clone()));
+                let start = net.sent.load(Ordering::SeqCst);
+                let products = driver.solve_mul_terms(terms).unwrap();
+                let sent = net.sent.load(Ordering::SeqCst) - start;
+                let products: Vec<_> = products
+                    .into_iter()
+                    .map(|p| match p {
+                        Rep3AcvmType::Shared(p) => p,
+                        Rep3AcvmType::Public(_) => panic!("expected shared products"),
+                    })
+                    .collect();
+                (products, sent)
+            })
+        })
+        .collect();
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    for (_, sent) in &results {
+        assert_eq!(*sent, 2);
+    }
+    let products = combine_field_elements(&results[0].0, &results[1].0, &results[2].0);
+    for (i, product) in products[..len].iter().enumerate() {
+        assert_eq!(*product, c * lhs[i] * rhs[i]);
+    }
+    assert_eq!(products[len], c * Fr::from(2u64) * rhs[0]);
+}

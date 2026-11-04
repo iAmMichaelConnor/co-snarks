@@ -6,15 +6,21 @@ use crate::solver::solver_utils;
 
 use super::{CoAcvmResult, CoSolver};
 
+/// Products `c * lhs * rhs` that are still to be computed.
+type MulTerms<F, A> = Vec<(F, A, A)>;
+
 impl<T, F> CoSolver<T, F>
 where
     T: NoirWitnessExtensionProtocol<F>,
     F: PrimeField,
 {
+    /// With `deferred`, the products of two shared values are not computed but appended to it as
+    /// `(c, lhs, rhs)`; the caller adds `c * lhs * rhs` to `acc.q_c`.
     fn evaluate_mul_terms(
         &mut self,
         expr: &Expression<GenericFieldElement<F>>,
         acc: &mut Expression<T::AcvmType>,
+        mut deferred: Option<&mut MulTerms<F, T::AcvmType>>,
     ) -> CoAcvmResult<()> {
         tracing::trace!("evaluating mul terms for simplification");
         if expr.mul_terms.is_empty() {
@@ -33,11 +39,16 @@ where
                     ) {
                         // we could batch this multiplication but our currently planned network design
                         // should solve this without batching
-                        (Some(lhs), Some(rhs)) => {
-                            tracing::trace!("solving mul term...");
-                            let solved = self.driver.solve_mul_term(c.into_repr(), lhs, rhs)?;
-                            self.driver.add_assign(&mut acc.q_c, solved);
-                        }
+                        (Some(lhs), Some(rhs)) => match deferred.as_deref_mut() {
+                            Some(deferred) if T::is_shared(&lhs) && T::is_shared(&rhs) => {
+                                deferred.push((c.into_repr(), lhs, rhs));
+                            }
+                            _ => {
+                                tracing::trace!("solving mul term...");
+                                let solved = self.driver.solve_mul_term(c.into_repr(), lhs, rhs)?;
+                                self.driver.add_assign(&mut acc.q_c, solved);
+                            }
+                        },
                         (Some(lhs), None) => {
                             tracing::trace!("partially solving mul term...");
                             let partly_solved = self.driver.mul_with_public(c.into_repr(), lhs);
@@ -84,6 +95,24 @@ where
         &mut self,
         expr: &Expression<GenericFieldElement<F>>,
     ) -> CoAcvmResult<Expression<T::AcvmType>> {
+        self.simplify_expression_with(expr, None)
+    }
+
+    /// Like [`Self::simplify_expression`], but the products of two shared values are appended to
+    /// `deferred` as `(c, lhs, rhs)` instead of being added to the constant term.
+    pub(super) fn simplify_expression_deferred(
+        &mut self,
+        expr: &Expression<GenericFieldElement<F>>,
+        deferred: &mut MulTerms<F, T::AcvmType>,
+    ) -> CoAcvmResult<Expression<T::AcvmType>> {
+        self.simplify_expression_with(expr, Some(deferred))
+    }
+
+    fn simplify_expression_with(
+        &mut self,
+        expr: &Expression<GenericFieldElement<F>>,
+        deferred: Option<&mut MulTerms<F, T::AcvmType>>,
+    ) -> CoAcvmResult<Expression<T::AcvmType>> {
         tracing::trace!("simplifying expression...");
         // default implementation not exposed if we not have AcirField trait bound
         let mut simplified = Expression {
@@ -92,7 +121,7 @@ where
             q_c: T::public_zero(),
         };
         // evaluate mul terms
-        self.evaluate_mul_terms(expr, &mut simplified)?;
+        self.evaluate_mul_terms(expr, &mut simplified, deferred)?;
         // evaluate linear terms
         self.evaluate_linear_terms(expr, &mut simplified);
         // add constants
@@ -112,6 +141,15 @@ where
             solver_utils::expr_to_string(expr)
         );
         let simplified = self.simplify_expression(expr)?;
+        self.finish_assert_zero(expr, simplified)
+    }
+
+    /// Solves the simplified expression of `expr` for its unknown witness, if any.
+    pub(super) fn finish_assert_zero(
+        &mut self,
+        expr: &Expression<GenericFieldElement<F>>,
+        simplified: Expression<T::AcvmType>,
+    ) -> CoAcvmResult<()> {
         tracing::trace!("simplified expr:     {:?}", simplified);
         // if we are here, we do not have any mul terms
         debug_assert!(simplified.mul_terms.is_empty());

@@ -4,6 +4,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
 use co_brillig::mpc::{Rep3BrilligDriver, Rep3BrilligType};
+use co_noir_common::CoUtils;
 use co_noir_common::utils::Utils;
 use co_noir_types::Rep3Type;
 use core::panic;
@@ -678,6 +679,33 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
             }
         };
         Ok(result)
+    }
+
+    fn solve_mul_terms(
+        &mut self,
+        terms: Vec<(F, Self::AcvmType, Self::AcvmType)>,
+    ) -> eyre::Result<Vec<Self::AcvmType>> {
+        let mut results = Vec::with_capacity(terms.len());
+        let mut shared = Vec::new();
+        for (i, (c, lhs, rhs)) in terms.into_iter().enumerate() {
+            match (lhs, rhs) {
+                (Rep3AcvmType::Shared(lhs), Rep3AcvmType::Shared(rhs)) => {
+                    shared.push((i, c, lhs, rhs));
+                    results.push(Rep3AcvmType::Public(F::zero()));
+                }
+                (lhs, rhs) => results.push(self.solve_mul_term(c, lhs, rhs)?),
+            }
+        }
+        // One round for all products, in chunks that fit into a network frame.
+        for chunk in shared.chunks(CoUtils::max_mul_many_len::<F>()) {
+            let (lhs, rhs): (Vec<_>, Vec<_>) = chunk.iter().map(|(_, _, l, r)| (*l, *r)).unzip();
+            let local = arithmetic::local_mul_vec(&lhs, &rhs, &mut self.state);
+            let products = arithmetic::reshare_vec(local, self.net)?;
+            for ((i, c, _, _), product) in chunk.iter().zip(products) {
+                results[*i] = Rep3AcvmType::Shared(arithmetic::mul_public(product, *c));
+            }
+        }
+        Ok(results)
     }
 
     fn solve_equation(

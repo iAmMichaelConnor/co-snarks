@@ -29,6 +29,7 @@ use crate::{
 mod assert_zero_solver;
 mod blackbox_solver;
 mod brillig_call_solver;
+mod level_schedule;
 mod memory_solver;
 
 pub type PlainCoSolver<F> = CoSolver<PlainAcvmSolver<F>, F>;
@@ -85,6 +86,8 @@ where
     memory_access: IntMap<u64, <T::Lookup as LookupTableProvider<F>>::LutType>,
     // pedantic solving
     pedantic_solving: bool,
+    // solve level by level, see `set_level_scheduling`
+    level_scheduling: bool,
 }
 
 impl<T> CoSolver<T, ark_bn254::Fr>
@@ -134,6 +137,7 @@ where
             function_index: Self::DEFAULT_FUNCTION_INDEX,
             memory_access: IntMap::new(),
             pedantic_solving: true,
+            level_scheduling: false,
         })
     }
 
@@ -166,6 +170,7 @@ where
             function_index: Self::DEFAULT_FUNCTION_INDEX,
             memory_access: IntMap::new(),
             pedantic_solving: true,
+            level_scheduling: false,
         })
     }
 }
@@ -307,6 +312,19 @@ where
         self.pedantic_solving
     }
 
+    /// Enables or disables level-scheduled solving (disabled by default).
+    ///
+    /// With level scheduling, the opcodes are grouped into levels of mutually independent opcodes,
+    /// using only the public circuit structure, and solved level by level. The multiplications of
+    /// two shared values in the `AssertZero` opcodes of a level are computed together with
+    /// [`NoirWitnessExtensionProtocol::solve_mul_terms`], so the REP3 driver needs one round per
+    /// level for them instead of one per opcode. The witness has the same values (the shares
+    /// differ). This helps on networks where latency dominates; on a local network the extra
+    /// bookkeeping can make it slower. All parties must use the same setting.
+    pub fn set_level_scheduling(&mut self, enabled: bool) {
+        self.level_scheduling = enabled;
+    }
+
     #[inline(always)]
     fn witness(&mut self) -> &mut WitnessMap<T::AcvmType> {
         &mut self.witness_map[self.function_index]
@@ -347,23 +365,19 @@ where
     ) -> CoAcvmResult<(WitnessStack<T::AcvmType>, PssStore<T, F>)> {
         let functions = std::mem::take(&mut self.functions);
 
-        for opcode in functions[self.function_index].opcodes.iter() {
-            match opcode {
-                Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
-                Opcode::MemoryInit {
-                    block_id,
-                    init,
-                    block_type: _, // apparently not used
-                } => self.solve_memory_init_block(*block_id, init)?,
-                Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
-                Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
-                Opcode::BrilligCall {
-                    id,
-                    inputs,
-                    outputs,
-                    predicate,
-                } => self.brillig_call(id, inputs, outputs, predicate)?,
-                _ => todo!("opcode {} detected, not supported yet", opcode),
+        let function = &functions[self.function_index];
+        if self.level_scheduling {
+            let initial = function
+                .private_parameters
+                .iter()
+                .chain(&function.public_parameters.0)
+                .copied();
+            for level in level_schedule::schedule_levels(&function.opcodes, initial) {
+                self.solve_level(&function.opcodes, &level)?;
+            }
+        } else {
+            for opcode in function.opcodes.iter() {
+                self.solve_opcode(opcode)?;
             }
         }
         tracing::trace!("we are done! Opening results...");
@@ -376,6 +390,59 @@ where
             witness_stack.push(u32::try_from(idx).expect("usize fits into u32"), witness);
         }
         Ok((witness_stack, self.value_store))
+    }
+
+    fn solve_opcode(&mut self, opcode: &Opcode<GenericFieldElement<F>>) -> CoAcvmResult<()> {
+        match opcode {
+            Opcode::AssertZero(expr) => self.solve_assert_zero(expr)?,
+            Opcode::MemoryInit {
+                block_id,
+                init,
+                block_type: _, // apparently not used
+            } => self.solve_memory_init_block(*block_id, init)?,
+            Opcode::MemoryOp { block_id, op } => self.solve_memory_op(*block_id, op)?,
+            Opcode::BlackBoxFuncCall(bb_func) => self.solve_blackbox(bb_func)?,
+            Opcode::BrilligCall {
+                id,
+                inputs,
+                outputs,
+                predicate,
+            } => self.brillig_call(id, inputs, outputs, predicate)?,
+            _ => todo!("opcode {} detected, not supported yet", opcode),
+        }
+        Ok(())
+    }
+
+    /// Solves a level of mutually independent opcodes. The other opcodes are solved one by one;
+    /// the multiplications of two shared values of all `AssertZero` opcodes are computed together
+    /// before the opcodes are finished.
+    fn solve_level(
+        &mut self,
+        opcodes: &[Opcode<GenericFieldElement<F>>],
+        level: &[usize],
+    ) -> CoAcvmResult<()> {
+        let mut simplified = Vec::new();
+        let mut products = Vec::new();
+        for opcode in level.iter().map(|&i| &opcodes[i]) {
+            if let Opcode::AssertZero(expr) = opcode {
+                let start = products.len();
+                let expr_simplified = self.simplify_expression_deferred(expr, &mut products)?;
+                simplified.push((expr, expr_simplified, products.len() - start));
+            } else {
+                self.solve_opcode(opcode)?;
+            }
+        }
+        if simplified.is_empty() {
+            return Ok(());
+        }
+        let mut products = self.driver.solve_mul_terms(products)?.into_iter();
+        for (expr, mut expr_simplified, num_products) in simplified {
+            for product in products.by_ref().take(num_products) {
+                self.driver.add_assign(&mut expr_simplified.q_c, product);
+            }
+            self.finish_assert_zero(expr, expr_simplified)?;
+        }
+        Ok(())
     }
 
     pub fn solve(self) -> CoAcvmResult<WitnessStack<T::AcvmType>> {

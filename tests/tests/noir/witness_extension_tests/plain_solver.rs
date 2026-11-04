@@ -1,7 +1,3 @@
-use acir::native_types::WitnessStack;
-use co_acvm::solver::PlainCoSolver;
-use noirc_artifacts::program::ProgramArtifact;
-
 use super::add_plain_acvm_test;
 
 add_plain_acvm_test!("add3u64");
