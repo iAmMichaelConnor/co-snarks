@@ -3,7 +3,7 @@ use crate::co_decider::{
     co_shplemini::types::{PolyF, PolyG},
     co_sumcheck::SumcheckOutput,
 };
-use ark_ff::{Field, One};
+use ark_ff::{Field, One, Zero};
 use co_noir_common::{
     CoUtils,
     co_shplemini::{OpeningPair, ShpleminiOpeningClaim},
@@ -246,9 +246,13 @@ impl<
         // A_l = Aₗ(X) is the polynomial being folded
         // in the first iteration, we take the batched polynomial
         // in the next iteration, it is the previously folded one
-        let mut a_l = a_0.coefficients;
+        let a_0 = a_0.coefficients;
         debug_assert!(multilinear_challenge.len() >= log_n - 1);
         for (l, u_l) in multilinear_challenge.iter().take(log_n - 1).enumerate() {
+            // Read the previous fold where it is stored instead of keeping a second copy of it.
+            let a_l = fold_polynomials
+                .last()
+                .map_or(a_0.as_slice(), |fold| fold.coefficients.as_slice());
             // size of the previous polynomial/2
             let n_l = 1 << (log_n - l - 1);
 
@@ -272,9 +276,8 @@ impl<
                     );
                 });
 
-            // Set Aₗ₊₁ = Aₗ for the next iteration
-            fold_polynomials.push(a_l_fold.clone());
-            a_l = a_l_fold.coefficients;
+            // Aₗ₊₁ is folded in the next iteration
+            fold_polynomials.push(a_l_fold);
         }
 
         // Virtual rounds (indices log_n .. virtual_log_n - 1). After real folding, the fold polynomials are
@@ -573,24 +576,29 @@ impl<
         let mut idx = 0;
         let mut fold_idx = 0;
         for claim in opening_claims.into_iter() {
+            // G -= νʲ ⋅ ( fⱼ(X) − vⱼ) / ( z − xⱼ ) for each opening of fⱼ. A Gemini fold is opened twice, so both
+            // updates are combined into one pass over its coefficients:
+            // −s₁⋅(f − v₁) − s₂⋅(f − v₂) = −(s₁ + s₂)⋅f + s₁⋅v₁ + s₂⋅v₂.
+            let mut combined_factor = P::ScalarField::zero();
+            let mut constant = T::ArithmeticShare::default();
             if claim.gemini_fold {
-                let mut tmp = claim.polynomial.clone();
-                let sub = T::sub(tmp[0], gemini_fold_pos_evaluations[fold_idx]);
-                tmp[0] = sub;
                 let scaling_factor = current_nu * inverse_vanishing_evals[idx]; // = νʲ / (z − xⱼ )
-                // G -= νʲ ⋅ ( fⱼ(X) − vⱼ) / ( z − xⱼ )
-                g.add_scaled(&tmp, &-scaling_factor);
+                combined_factor += scaling_factor;
+                constant =
+                    T::mul_with_public(scaling_factor, gemini_fold_pos_evaluations[fold_idx]);
 
                 current_nu *= nu_challenge;
                 idx += 1;
                 fold_idx += 1;
             }
-            let mut tmp = claim.polynomial;
-            let claim_neg = T::neg(claim.opening_pair.evaluation);
-            tmp[0] = T::add(tmp[0], claim_neg);
             let scaling_factor = current_nu * inverse_vanishing_evals[idx];
-
-            g.add_scaled(&tmp, &-scaling_factor);
+            combined_factor += scaling_factor;
+            constant = T::add(
+                constant,
+                T::mul_with_public(scaling_factor, claim.opening_pair.evaluation),
+            );
+            g.add_scaled(&claim.polynomial, &-combined_factor);
+            g[0] = T::add(g[0], constant);
 
             current_nu *= nu_challenge;
             idx += 1;

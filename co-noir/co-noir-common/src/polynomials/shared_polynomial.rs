@@ -12,6 +12,13 @@ use std::{
 use crate::mpc::NoirUltraHonkProver;
 use crate::polynomials::PAR_MIN_LEN;
 
+/// Minimum length for which [`SharedPolynomial::factor_roots`] divides in parallel blocks. The block
+/// method does about twice the arithmetic of the serial recurrence, so it needs enough coefficients and
+/// enough rayon threads to pay off.
+const PARALLEL_DIVISION_MIN_LEN: usize = 1 << 15;
+const PARALLEL_DIVISION_MIN_THREADS: usize = 4;
+const PARALLEL_DIVISION_BLOCK: usize = 1 << 13;
+
 pub struct SharedPolynomial<T: NoirUltraHonkProver<P>, P: CurveGroup> {
     pub coefficients: Vec<T::ArithmeticShare>,
 }
@@ -136,6 +143,12 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
 
             // For the simple case of one root we compute (−r)⁻¹ and
             let root_inverse = (-*root).inverse().expect("Root is not zero here");
+            if self.coefficients.len() >= PARALLEL_DIVISION_MIN_LEN
+                && rayon::current_num_threads() >= PARALLEL_DIVISION_MIN_THREADS
+            {
+                self.factor_root_blocks(root_inverse);
+                return;
+            }
             // set b₋₁ = 0
             let mut temp = Default::default();
             // We start multiplying lower coefficient by the inverse and subtracting those from higher coefficients
@@ -150,6 +163,54 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> SharedPolynomial<T, P> {
             // remove the last (zero) coefficient after synthetic division
             self.coefficients.pop();
         }
+    }
+
+    /// Synthetic division by (X − r) in parallel blocks, given (−r)⁻¹. Same result as the serial loop in
+    /// [`Self::factor_roots`].
+    ///
+    /// With a = (−r)⁻¹, the recurrence bᵢ = (aᵢ − bᵢ₋₁)⋅a is affine in the carry: over a block of length
+    /// len, a carry c entering the block contributes (−a)ʲ⁺¹⋅c to the j-th output of the block and
+    /// (−a)ˡᵉⁿ⋅c to the carry leaving it. So each block is first divided with a zero carry in parallel, the
+    /// carries entering the blocks are then computed serially from the block results, and finally each
+    /// block adds its carry contribution in parallel. All operations are local and linear.
+    fn factor_root_blocks(&mut self, root_inverse: P::ScalarField) {
+        let local_results: Vec<_> = self
+            .coefficients
+            .par_chunks_mut(PARALLEL_DIVISION_BLOCK)
+            .map(|block| {
+                let mut carry = T::ArithmeticShare::default();
+                for value in block.iter_mut() {
+                    carry = T::mul_with_public(root_inverse, T::sub(*value, carry));
+                    *value = carry;
+                }
+                (carry, block.len())
+            })
+            .collect();
+        let factor = -root_inverse;
+        let mut carry = T::ArithmeticShare::default();
+        let carries_in: Vec<_> = local_results
+            .into_iter()
+            .map(|(local_carry_out, len)| {
+                let carry_in = carry;
+                carry = T::add(
+                    local_carry_out,
+                    T::mul_with_public(factor.pow([len as u64]), carry),
+                );
+                carry_in
+            })
+            .collect();
+        self.coefficients
+            .par_chunks_mut(PARALLEL_DIVISION_BLOCK)
+            .zip(carries_in)
+            .for_each(|(block, carry_in)| {
+                let mut correction = carry_in;
+                for value in block.iter_mut() {
+                    correction = T::mul_with_public(factor, correction);
+                    *value = T::add(*value, correction);
+                }
+            });
+        // remove the last (zero) coefficient after synthetic division
+        self.coefficients.pop();
     }
 
     pub fn random<N: Network>(size: usize, net: &N, state: &mut T::State) -> eyre::Result<Self> {
@@ -366,5 +427,66 @@ impl<T: NoirUltraHonkProver<P>, P: CurveGroup> Index<usize> for SharedPolynomial
 impl<T: NoirUltraHonkProver<P>, P: CurveGroup> IndexMut<usize> for SharedPolynomial<T, P> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.coefficients[index]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PARALLEL_DIVISION_BLOCK, PARALLEL_DIVISION_MIN_LEN, SharedPolynomial};
+    use crate::mpc::{NoirUltraHonkProver, plain::PlainUltraHonkDriver, rep3::Rep3UltraHonkDriver};
+    use ark_bn254::{Fr, G1Projective};
+    use ark_ff::UniformRand;
+    use rand::{SeedableRng, rngs::StdRng};
+
+    type Share<T> = <T as NoirUltraHonkProver<G1Projective>>::ArithmeticShare;
+
+    /// Builds p = (X − root)⋅q and checks that dividing p by (X − root) returns q.
+    fn check_division<T: NoirUltraHonkProver<G1Projective>>(quotient: Vec<Share<T>>, root: Fr) {
+        let mut coefficients = vec![Share::<T>::default(); quotient.len() + 1];
+        for (i, value) in quotient.iter().enumerate() {
+            coefficients[i] = T::sub(coefficients[i], T::mul_with_public(root, *value));
+            coefficients[i + 1] = T::add(coefficients[i + 1], *value);
+        }
+        let mut p = SharedPolynomial::<T, G1Projective>::new(coefficients);
+        p.factor_roots(&root);
+        assert_eq!(p.coefficients, quotient);
+    }
+
+    #[test]
+    fn factor_roots_is_exact_at_block_boundaries() {
+        let mut rng = StdRng::seed_from_u64(0x51d1);
+        // Lengths of p on both sides of the parallel threshold and of block boundaries.
+        let lengths = [
+            1,
+            2,
+            31,
+            PARALLEL_DIVISION_MIN_LEN - 1,
+            PARALLEL_DIVISION_MIN_LEN,
+            PARALLEL_DIVISION_MIN_LEN + 1,
+            PARALLEL_DIVISION_MIN_LEN + PARALLEL_DIVISION_BLOCK,
+            2 * PARALLEL_DIVISION_MIN_LEN + 1,
+        ];
+        // Enough threads for the parallel path, independent of the test runner's pool.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            for n in lengths {
+                let values: Vec<Fr> = (0..n - 1).map(|_| Fr::rand(&mut rng)).collect();
+                let shares = mpc_core::protocols::rep3::share_field_elements(&values, &mut rng);
+                for root in [
+                    Fr::from(0u64),
+                    Fr::from(1u64),
+                    -Fr::from(1u64),
+                    Fr::rand(&mut rng),
+                ] {
+                    check_division::<PlainUltraHonkDriver>(values.clone(), root);
+                    for party in &shares {
+                        check_division::<Rep3UltraHonkDriver>(party.clone(), root);
+                    }
+                }
+            }
+        });
     }
 }
