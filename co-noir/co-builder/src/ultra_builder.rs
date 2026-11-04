@@ -318,34 +318,51 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
         self.create_big_mul_add_gate(mul_quad, false);
     }
 
-    pub(crate) fn create_big_quad_constraint(
+    /// Creates the gates of all `big_constraints`. The intermediate products a * b of all
+    /// constraints are independent of each other and of the gates, so they are computed in one
+    /// `mul_many` before the gates are built.
+    pub(crate) fn create_big_quad_constraints(
         &mut self,
         driver: &mut T,
-        big_constraint: &mut BigQuadConstraint<P::ScalarField>,
+        big_constraints: &[BigQuadConstraint<P::ScalarField>],
     ) -> eyre::Result<()> {
-        let num_products = big_constraint.len() - 1;
-        let lhs = big_constraint
-            .iter()
-            .take(num_products)
-            .map(|gate| {
+        let mut big_constraints = big_constraints.to_vec();
+        let mut lhs = Vec::new();
+        let mut rhs = Vec::new();
+        for big_constraint in big_constraints.iter_mut() {
+            let num_products = big_constraint.len() - 1;
+            for gate in big_constraint.iter_mut().take(num_products) {
                 assert_ne!(
                     gate.a,
                     u32::MAX,
                     "mul_quad_ gate cannot have IS_CONSTANT for witness a. An error here probably means a conversion issue in acir_to_constraint_buf."
                 );
-                self.get_variable(gate.a as usize)
-            })
-            .collect::<Vec<_>>();
-        let rhs = big_constraint
-            .iter_mut()
-            .take(num_products)
-            .map(|gate| {
+                lhs.push(self.get_variable(gate.a as usize));
                 self.replace_and_check_zero_scaling(&mut gate.b, &gate.b_scaling);
-                self.get_variable(gate.b as usize)
-            })
-            .collect::<Vec<_>>();
-        let products = driver.mul_many(&lhs, &rhs)?;
+                rhs.push(self.get_variable(gate.b as usize));
+            }
+        }
+        if lhs.is_empty() {
+            return Ok(());
+        }
+        let mut products = driver.mul_many(&lhs, &rhs)?.into_iter();
+        for big_constraint in big_constraints.iter_mut() {
+            let num_products = big_constraint.len() - 1;
+            let products = products.by_ref().take(num_products).collect();
+            self.create_big_quad_constraint(driver, big_constraint, products);
+        }
+        Ok(())
+    }
 
+    /// Creates the gates of one big quad constraint, given the products a * b of all its gates
+    /// but the last. The b indices of those gates must already be resolved.
+    fn create_big_quad_constraint(
+        &mut self,
+        driver: &mut T,
+        big_constraint: &mut BigQuadConstraint<P::ScalarField>,
+        products: Vec<T::AcvmType>,
+    ) {
+        debug_assert_eq!(products.len(), big_constraint.len() - 1);
         for (j, term1) in products.into_iter().enumerate() {
             // Replace IS_CONSTANT indices with zero indices
             let (c_scaling, d_scaling) = (big_constraint[j].c_scaling, big_constraint[j].d_scaling);
@@ -388,8 +405,6 @@ impl<P: CurveGroup, T: NoirWitnessExtensionProtocol<P::ScalarField>>
             // Create final gate
             self.create_big_mul_add_gate(last, false);
         }
-
-        Ok(())
     }
 
     fn set_zero_idx(&self, mul_quad: &mut MulQuad<P::ScalarField>) {
@@ -4358,9 +4373,7 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
         // When an expression doesn't fit into a single width-4 gate, we split it across multiple gates and we leverage
         // w4_shift to use the least possible number of intermediate witnesses. See the documentation of
         // split_into_mul_quad_gates for more information.
-        for big_constraint in constraint_system.big_quad_constraints.iter() {
-            self.create_big_quad_constraint(driver, &mut big_constraint.clone())?;
-        }
+        self.create_big_quad_constraints(driver, &constraint_system.big_quad_constraints)?;
 
         // Add logic constraint
         for constraint in constraint_system.logic_constraints.iter() {
@@ -5154,7 +5167,14 @@ mod tests {
     use super::*;
     use crate::transcript_ct::Bn254G1;
     use crate::types::field_ct::tests::{Gadget, rep3_witness_verifies};
+    use crate::types::types::MulQuad;
     use ark_bn254::Fr;
+    use bytes::Bytes;
+    use co_acvm::{Rep3AcvmSolver, Rep3AcvmType};
+    use mpc_core::protocols::rep3::{conversion::A2BType, share_field_elements};
+    use mpc_net::{ConnectionStats, Network, local::LocalNetwork};
+    use rand::thread_rng;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Range-constrains two witnesses with `range_constrain_two_limbs`.
     #[derive(Clone, Copy)]
@@ -5311,6 +5331,140 @@ mod tests {
                 1,
             );
             assert_eq!(table.column_1.len(), 1 << 10, "{id:?}");
+        }
+    }
+
+    /// x0 * x1 + x2 * x3 + x4 * x5 - y = 0 and x0 * x2 + x1 * x3 + x4 * x4 - z = 0 as big quad
+    /// constraints of three gates each.
+    #[derive(Clone, Copy)]
+    struct TwoBigQuads;
+
+    impl TwoBigQuads {
+        fn constraints(vars: &[u32]) -> Vec<BigQuadConstraint<Fr>> {
+            let gate = |a: u32, b: u32| MulQuad {
+                a,
+                b,
+                c: u32::MAX,
+                d: u32::MAX,
+                mul_scaling: Fr::one(),
+                ..Default::default()
+            };
+            let last = |a: u32, b: u32, out: u32| MulQuad {
+                c: out,
+                c_scaling: -Fr::one(),
+                ..gate(a, b)
+            };
+            vec![
+                vec![
+                    gate(vars[0], vars[1]),
+                    gate(vars[2], vars[3]),
+                    last(vars[4], vars[5], vars[6]),
+                ],
+                vec![
+                    gate(vars[0], vars[2]),
+                    gate(vars[1], vars[3]),
+                    last(vars[4], vars[4], vars[7]),
+                ],
+            ]
+        }
+
+        fn values(x: [u64; 6], wrong: bool) -> Vec<Fr> {
+            let x = x.map(Fr::from);
+            let y = x[0] * x[1] + x[2] * x[3] + x[4] * x[5];
+            let z = x[0] * x[2] + x[1] * x[3] + x[4] * x[4] + Fr::from(wrong as u64);
+            [x.as_slice(), &[y, z]].concat()
+        }
+    }
+
+    impl Gadget for TwoBigQuads {
+        fn build<T: NoirWitnessExtensionProtocol<Fr>>(
+            self,
+            inputs: &[T::AcvmType],
+            builder: &mut GenericUltraCircuitBuilder<Bn254G1, T>,
+            driver: &mut T,
+        ) {
+            let vars: Vec<_> = inputs
+                .iter()
+                .map(|input| builder.add_variable(input.clone()))
+                .collect();
+            builder
+                .create_big_quad_constraints(driver, &Self::constraints(&vars))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn shared_big_quad_constraints_match_plain() {
+        let x = [3, 5, 7, 11, 13, 17];
+        assert!(rep3_witness_verifies(
+            &TwoBigQuads::values(x, false),
+            TwoBigQuads
+        ));
+        assert!(!rep3_witness_verifies(
+            &TwoBigQuads::values(x, true),
+            TwoBigQuads
+        ));
+    }
+
+    /// Counts the messages a party sends.
+    struct CountingNetwork {
+        inner: LocalNetwork,
+        sent: AtomicUsize,
+    }
+
+    impl Network for CountingNetwork {
+        fn id(&self) -> usize {
+            self.inner.id()
+        }
+
+        fn send(&self, to: usize, data: Bytes) -> eyre::Result<()> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            self.inner.send(to, data)
+        }
+
+        fn recv(&self, from: usize) -> eyre::Result<Bytes> {
+            self.inner.recv(from)
+        }
+
+        fn get_connection_stats(&self) -> ConnectionStats {
+            self.inner.get_connection_stats()
+        }
+    }
+
+    #[test]
+    fn big_quad_constraints_share_one_multiplication_round() {
+        let values = TwoBigQuads::values([3, 5, 7, 11, 13, 17], false);
+        let shares = share_field_elements(&values, &mut thread_rng());
+        let threads: Vec<_> = LocalNetwork::new_3_parties()
+            .into_iter()
+            .zip(shares)
+            .map(|(inner, shares)| {
+                std::thread::spawn(move || {
+                    let net = CountingNetwork {
+                        inner,
+                        sent: AtomicUsize::new(0),
+                    };
+                    let mut driver =
+                        Rep3AcvmSolver::<Fr, _>::new(&net, A2BType::default()).unwrap();
+                    let mut builder = GenericUltraCircuitBuilder::<Bn254G1, _>::new_minimal(0);
+                    let inputs: Vec<_> = shares.into_iter().map(Rep3AcvmType::Shared).collect();
+
+                    let before = net.sent.load(Ordering::SeqCst);
+                    driver.mul_many(&inputs[..2], &inputs[2..4]).unwrap();
+                    let mul = net.sent.load(Ordering::SeqCst) - before;
+
+                    let before = net.sent.load(Ordering::SeqCst);
+                    TwoBigQuads.build(&inputs, &mut builder, &mut driver);
+                    let big_quads = net.sent.load(Ordering::SeqCst) - before;
+                    (mul, big_quads)
+                })
+            })
+            .collect();
+        for thread in threads {
+            let (mul, big_quads) = thread.join().unwrap();
+            assert!(mul > 0);
+            // The products of both constraints are computed in one multiplication.
+            assert_eq!(big_quads, mul);
         }
     }
 }

@@ -1249,6 +1249,7 @@ dependencies = [
  "ark-grumpkin",
  "ark-poly",
  "blake3",
+ "bytes",
  "co-acvm",
  "co-noir-common",
  "co-ultrahonk",
