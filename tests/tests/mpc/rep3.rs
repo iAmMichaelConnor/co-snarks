@@ -4161,6 +4161,22 @@ mod curve_share {
     }
 
     #[test]
+    fn secp256k1_to_fieldshares() {
+        for _ in 0..10 {
+            to_fieldshares(ark_secp256k1::Projective::zero());
+            to_fieldshares(ark_secp256k1::Projective::rand(&mut thread_rng()));
+        }
+    }
+
+    #[test]
+    fn secp256r1_to_fieldshares() {
+        for _ in 0..10 {
+            to_fieldshares(ark_secp256r1::Projective::zero());
+            to_fieldshares(ark_secp256r1::Projective::rand(&mut thread_rng()));
+        }
+    }
+
+    #[test]
     fn bn254_to_fieldshares_many() {
         const VEC_SIZE: usize = 10;
         const RUNS: usize = 10;
@@ -4304,6 +4320,22 @@ mod curve_share {
         for _ in 0..10 {
             from_fieldshares(ark_grumpkin::Projective::zero());
             from_fieldshares(ark_grumpkin::Projective::rand(&mut thread_rng()));
+        }
+    }
+
+    #[test]
+    fn secp256k1_from_fieldshares() {
+        for _ in 0..10 {
+            from_fieldshares(ark_secp256k1::Projective::zero());
+            from_fieldshares(ark_secp256k1::Projective::rand(&mut thread_rng()));
+        }
+    }
+
+    #[test]
+    fn secp256r1_from_fieldshares() {
+        for _ in 0..10 {
+            from_fieldshares(ark_secp256r1::Projective::zero());
+            from_fieldshares(ark_secp256r1::Projective::rand(&mut thread_rng()));
         }
     }
 
@@ -4462,5 +4494,136 @@ mod curve_share {
             let zero_points = vec![ark_grumpkin::Projective::zero(); 10];
             point_is_zero_many(&zero_points);
         }
+    }
+}
+
+/// The conversions and comparisons used by ECDSA verification on secret-shared inputs, over the
+/// secp256k1 and secp256r1 base and scalar fields.
+mod secp_fields {
+    use itertools::izip;
+    use mpc_core::protocols::rep3::{
+        self, arithmetic, conversion, conversion::A2BType, Rep3PrimeFieldShare, Rep3State,
+        Rep3UintShare,
+    };
+    use mpc_core::uint::{FieldUint, UintBackend};
+    use mpc_net::local::LocalNetwork;
+    use num_traits::{WrappingAdd, WrappingSub};
+    use rand::thread_rng;
+    use std::sync::mpsc;
+
+    /// Runs `f` on the three parties and returns their outputs.
+    fn run<I: Send + 'static, O: Send + 'static>(
+        inputs: [I; 3],
+        a2b_type: A2BType,
+        f: fn(I, &LocalNetwork, &mut Rep3State) -> O,
+    ) -> [O; 3] {
+        let nets = LocalNetwork::new_3_parties();
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let (tx3, rx3) = mpsc::channel();
+        for (net, tx, input) in izip!(nets, [tx1, tx2, tx3], inputs) {
+            std::thread::spawn(move || {
+                let mut state = Rep3State::new(&net, a2b_type).unwrap();
+                tx.send(f(input, &net, &mut state)).unwrap();
+            });
+        }
+        [
+            rx1.recv().unwrap(),
+            rx2.recv().unwrap(),
+            rx3.recv().unwrap(),
+        ]
+    }
+
+    fn field_ops<K: FieldUint>() {
+        let mut rng = thread_rng();
+        let p = K::modulus_uint();
+        let one = K::Uint::from(1u64);
+        let values = [
+            K::zero(),
+            K::one(),
+            -K::one(),
+            K::from_uint_unchecked(&(p >> 1)),
+            K::rand(&mut rng),
+        ];
+        for a2b_type in [A2BType::Yao, A2BType::Direct] {
+            for x in values {
+                let x_shares = rep3::share_field_element(x, &mut rng);
+
+                // a2b and back
+                let [a, b, c] = run(x_shares, a2b_type, |x, net, state| {
+                    let bits = conversion::a2b_selector(x, net, state).unwrap();
+                    let back = conversion::b2a_selector(&bits, net, state).unwrap();
+                    (bits, back)
+                });
+                assert_eq!(rep3::combine_binary_element(a.0, b.0, c.0), x.to_uint());
+                assert_eq!(rep3::combine_field_element(a.1, b.1, c.1), x);
+
+                // comparisons with public values around x
+                let [a, b, c] = run(x_shares.map(|s| (s, x)), a2b_type, |(s, x), net, state| {
+                    let next = x + K::one();
+                    let res = [
+                        arithmetic::eq_public(s, x, net, state).unwrap(),
+                        arithmetic::eq_public(s, next, net, state).unwrap(),
+                        arithmetic::eq(s, s, net, state).unwrap(),
+                        arithmetic::lt_public(s, x, net, state).unwrap(),
+                        arithmetic::lt_public(s, next, net, state).unwrap(),
+                    ];
+                    res.to_vec()
+                });
+                let res: Vec<K> = izip!(a, b, c)
+                    .map(|(a, b, c)| rep3::combine_field_element(a, b, c))
+                    .collect();
+                let next_is_larger = x + K::one() != K::zero();
+                let expected = [true, false, true, false, next_is_larger].map(K::from);
+                assert_eq!(res, expected, "x = {x}");
+            }
+
+            // b2a_mod_p of values in [0, 2^256), including values >= p.
+            let bits = K::MODULUS_BIT_SIZE as usize;
+            for x in [
+                p.wrapping_sub(&one),
+                p,
+                p.wrapping_add(&one),
+                K::Uint::mask(bits),
+                K::Uint::random_bits(&mut rng, bits),
+            ] {
+                let r1 = K::Uint::random_bits(&mut rng, bits);
+                let r2 = K::Uint::random_bits(&mut rng, bits);
+                let r3 = x ^ r1 ^ r2;
+                let x_shares = [
+                    Rep3UintShare::<K>::new(r1, r3),
+                    Rep3UintShare::new(r2, r1),
+                    Rep3UintShare::new(r3, r2),
+                ];
+                let [a, b, c]: [Rep3PrimeFieldShare<K>; 3] =
+                    run(x_shares, a2b_type, |x, net, state| {
+                        conversion::b2a_selector_mod_p(&x, net, state).unwrap()
+                    });
+                assert_eq!(
+                    rep3::combine_field_element(a, b, c),
+                    K::from_uint_reduced(&x)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn secp256k1_fq_ops() {
+        field_ops::<ark_secp256k1::Fq>();
+    }
+
+    #[test]
+    fn secp256k1_fr_ops() {
+        field_ops::<ark_secp256k1::Fr>();
+    }
+
+    #[test]
+    fn secp256r1_fq_ops() {
+        field_ops::<ark_secp256r1::Fq>();
+    }
+
+    #[test]
+    fn secp256r1_fr_ops() {
+        field_ops::<ark_secp256r1::Fr>();
     }
 }

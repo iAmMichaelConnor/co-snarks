@@ -120,6 +120,10 @@ impl_field_uint!(ark_bls12_377::Fr, U256);
 impl_field_uint!(ark_bls12_381::Fr, U320, widened);
 impl_field_uint!(ark_bls12_377::Fq, U384);
 impl_field_uint!(ark_bls12_381::Fq, U384);
+impl_field_uint!(ark_secp256k1::Fq, U320, widened);
+impl_field_uint!(ark_secp256k1::Fr, U320, widened);
+impl_field_uint!(ark_secp256r1::Fq, U320, widened);
+impl_field_uint!(ark_secp256r1::Fr, U320, widened);
 
 // Note: `ark_grumpkin::Fr`/`Fq` are re-exports of `ark_bn254::Fq`/`Fr`
 // respectively, so they are already covered by the impls above. Adding an
@@ -183,5 +187,9 @@ mod tests {
         ark_bls12_381::Fr => bls12_381_fr,
         ark_bls12_377::Fq => bls12_377_fq,
         ark_bls12_381::Fq => bls12_381_fq,
+        ark_secp256k1::Fq => secp256k1_fq,
+        ark_secp256k1::Fr => secp256k1_fr,
+        ark_secp256r1::Fq => secp256r1_fq,
+        ark_secp256r1::Fr => secp256r1_fr,
     );
 }
