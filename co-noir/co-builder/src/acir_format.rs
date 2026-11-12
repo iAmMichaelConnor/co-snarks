@@ -14,9 +14,9 @@ use crate::{
     transcript_ct::TranscriptFieldType,
     types::types::{
         AES128Constraint, AcirFormatOriginalOpcodeIndices, BigQuadConstraint, Blake2sConstraint,
-        Blake3Constraint, BlockConstraint, BlockType, EcAdd, LogicConstraint, MemOp, MulQuad,
-        MultiScalarMul, PolyTriple, Poseidon2Constraint, QuadConstraint, RangeConstraint,
-        RecursionConstraint, Sha256Compression, WitnessOrConstant,
+        Blake3Constraint, BlockConstraint, BlockType, EcAdd, EcdsaConstraint, LogicConstraint,
+        MemOp, MulQuad, MultiScalarMul, PolyTriple, Poseidon2Constraint, QuadConstraint,
+        RangeConstraint, RecursionConstraint, Sha256Compression, WitnessOrConstant,
     },
 };
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -92,8 +92,8 @@ pub struct AcirFormat<F: PrimeField> {
     pub(crate) range_constraints: Vec<RangeConstraint>,
     pub(crate) aes128_constraints: Vec<AES128Constraint<F>>,
     pub(crate) sha256_compression: Vec<Sha256Compression<F>>,
-    //  std::vector<EcdsaSecp256k1Constraint> ecdsa_k1_constraints;
-    //  std::vector<EcdsaSecp256r1Constraint> ecdsa_r1_constraints;
+    pub(crate) ecdsa_k1_constraints: Vec<EcdsaConstraint<F>>,
+    pub(crate) ecdsa_r1_constraints: Vec<EcdsaConstraint<F>>,
     pub(crate) blake2s_constraints: Vec<Blake2sConstraint<F>>,
     pub(crate) blake3_constraints: Vec<Blake3Constraint<F>>,
     //  std::vector<KeccakConstraint> keccak_constraints;
@@ -745,8 +745,46 @@ impl<F: PrimeField> AcirFormat<F> {
                     .blake3_constraints
                     .push(opcode_index);
             }
-            BlackBoxFuncCall::EcdsaSecp256k1 { .. } => todo!("BlackBoxFuncCall::EcdsaSecp256k1"),
-            BlackBoxFuncCall::EcdsaSecp256r1 { .. } => todo!("BlackBoxFuncCall::EcdsaSecp256r1"),
+            BlackBoxFuncCall::EcdsaSecp256k1 {
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            } => {
+                af.ecdsa_k1_constraints.push(EcdsaConstraint {
+                    hashed_message: hashed_message.map(Self::parse_input),
+                    signature: signature.map(Self::parse_input),
+                    pub_x_indices: public_key_x.map(Self::parse_input),
+                    pub_y_indices: public_key_y.map(Self::parse_input),
+                    predicate: Self::parse_input(predicate),
+                    result: to_witness(output),
+                });
+                af.original_opcode_indices
+                    .ecdsa_k1_constraints
+                    .push(opcode_index);
+            }
+            BlackBoxFuncCall::EcdsaSecp256r1 {
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            } => {
+                af.ecdsa_r1_constraints.push(EcdsaConstraint {
+                    hashed_message: hashed_message.map(Self::parse_input),
+                    signature: signature.map(Self::parse_input),
+                    pub_x_indices: public_key_x.map(Self::parse_input),
+                    pub_y_indices: public_key_y.map(Self::parse_input),
+                    predicate: Self::parse_input(predicate),
+                    result: to_witness(output),
+                });
+                af.original_opcode_indices
+                    .ecdsa_r1_constraints
+                    .push(opcode_index);
+            }
             BlackBoxFuncCall::MultiScalarMul {
                 points,
                 scalars,

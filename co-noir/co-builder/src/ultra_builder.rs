@@ -4461,9 +4461,32 @@ impl<P: HonkCurve<TranscriptFieldType>, T: NoirWitnessExtensionProtocol<P::Scala
             self.create_sha256_compression_constraints(driver, constraint)?;
         }
 
-        // Add ECDSA k1 constraints
-
-        // Add ECDSA r1 constraints
+        // Add ECDSA k1 and r1 constraints. Barretenberg verifies the signature with non-native
+        // (bigfield/biggroup) arithmetic over the secp256k1 and secp256r1 fields, which is not
+        // implemented here yet; fail instead of building a circuit that differs from
+        // barretenberg's.
+        for (name, opcode_indices) in [
+            (
+                "secp256k1",
+                &constraint_system
+                    .original_opcode_indices
+                    .ecdsa_k1_constraints,
+            ),
+            (
+                "secp256r1",
+                &constraint_system
+                    .original_opcode_indices
+                    .ecdsa_r1_constraints,
+            ),
+        ] {
+            if !opcode_indices.is_empty() {
+                eyre::bail!(
+                    "the circuit verifies ECDSA {name} signatures (ACIR opcodes {opcode_indices:?}), \
+                     which co-noir cannot build constraints for yet; witness generation for these \
+                     opcodes is supported, proving and key generation are not"
+                );
+            }
+        }
 
         // Add blake2s constraints
         for constraint in constraint_system.blake2s_constraints.iter() {
