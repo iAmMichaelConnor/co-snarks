@@ -34,3 +34,14 @@ add_rep3_acvm_test!("embedded_curve_predicate");
 add_rep3_acvm_test!("ecdsa_secp256k1");
 add_rep3_acvm_test!("ecdsa_secp256r1");
 add_rep3_acvm_test!("ecdsa_secp256r1_u2_is_one");
+add_rep3_acvm_test!("ecdsa_unconstrained");
+
+/// co-brillig rejects ECDSA verification on secret-shared inputs with an error.
+#[test]
+fn test_rep3_ecdsa_unconstrained_shared_inputs_error() {
+    let err = super::rep3_acvm_error("ecdsa_unconstrained_shared");
+    assert!(
+        err.contains("ecdsa_secp256k1 on secret-shared inputs is not supported in Brillig"),
+        "{err}"
+    );
+}
