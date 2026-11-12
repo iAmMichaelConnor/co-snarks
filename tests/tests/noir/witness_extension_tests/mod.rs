@@ -117,6 +117,51 @@ fn rep3_acvm_test(name: &str, level_scheduling: bool) {
     assert_eq!(should_witness, is_witness)
 }
 
+/// Solves the circuit with the REP3 driver, expecting every party to fail, and returns the error
+/// of the first party.
+fn rep3_acvm_error(name: &str) -> String {
+    let root = std::env!("CARGO_MANIFEST_DIR");
+    let program = std::fs::read_to_string(format!(
+        "{root}/../test_vectors/noir/{name}/kat/{name}.json"
+    ))
+    .unwrap();
+    let program_artifact = serde_json::from_str::<ProgramArtifact>(&program)
+        .expect("failed to parse program artifact");
+    let input = PathBuf::from(format!("{root}/../test_vectors/noir/{name}/Prover.toml"));
+    let inputs = noir_types::partially_read_abi_bn254(
+        std::fs::File::open(input).unwrap(),
+        &program_artifact.abi,
+        &program_artifact.bytecode.functions[0]
+            .public_inputs()
+            .indices(),
+    )
+    .expect("can share field elements for noir witness extension");
+
+    let shares = co_noir::split_input_rep3(inputs);
+    let nets = LocalNetwork::new_3_parties();
+    let threads = izip!(nets, shares)
+        .map(|(net, share)| {
+            let program_artifact = program_artifact.clone();
+            std::thread::spawn(move || {
+                let input_share =
+                    co_noir::witness_map_from_string_map(share, &program_artifact.abi)
+                        .expect("can translate witness for noir witness extension");
+                let solver =
+                    Rep3CoSolver::new_with_witness(&net, program_artifact, input_share).unwrap();
+                match solver.solve() {
+                    Ok(_) => panic!("solving must fail"),
+                    Err(err) => format!("{err:?}"),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let errors = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect::<Vec<_>>();
+    errors[0].clone()
+}
+
 fn combine_field_elements_for_acvm<F: PrimeField>(
     mut a: WitnessStack<Rep3AcvmType<F>>,
     mut b: WitnessStack<Rep3AcvmType<F>>,
