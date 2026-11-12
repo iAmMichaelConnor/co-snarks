@@ -522,6 +522,16 @@ pub(crate) fn point_from_xy<C: CurveGroup>(
         let y = *crate::downcast(&y).expect("We checked types");
         let result: ark_grumpkin::Projective = ark_grumpkin::Affine::new(x, y).into();
         *crate::downcast(&result).expect("We checked types")
+    } else if TypeId::of::<C>() == TypeId::of::<ark_secp256k1::Projective>() {
+        let x = *crate::downcast(&x).expect("We checked types");
+        let y = *crate::downcast(&y).expect("We checked types");
+        let result: ark_secp256k1::Projective = ark_secp256k1::Affine::new(x, y).into();
+        *crate::downcast(&result).expect("We checked types")
+    } else if TypeId::of::<C>() == TypeId::of::<ark_secp256r1::Projective>() {
+        let x = *crate::downcast(&x).expect("We checked types");
+        let y = *crate::downcast(&y).expect("We checked types");
+        let result: ark_secp256r1::Projective = ark_secp256r1::Affine::new(x, y).into();
+        *crate::downcast(&result).expect("We checked types")
     } else {
         panic!("Unsupported curve {}", std::any::type_name::<C>());
     };

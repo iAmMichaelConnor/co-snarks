@@ -48,6 +48,8 @@ ark-ff = { version = "0.6", features = ["asm"] }
 ark-grumpkin = "0.6"
 ark-poly = "0.6"
 ark-relations = "0.6"
+ark-secp256k1 = "0.6"
+ark-secp256r1 = "0.6"
 ark-serialize = { version = "0.6", features = ["derive", "std"] }
 ark-std = { version = "0.6", features = ["std"] }
 bincode = "1.3"
