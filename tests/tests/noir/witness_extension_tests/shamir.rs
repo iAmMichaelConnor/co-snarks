@@ -19,3 +19,10 @@ add_shamir_acvm_test!("poseidon_input2");
 add_shamir_acvm_test!("poseidon_stdlib");
 add_shamir_acvm_test!("unconstrained_fn_field");
 add_shamir_acvm_test!("blackbox_poseidon2");
+
+/// Secret-shared ECDSA inputs are rejected with an error under Shamir sharing.
+#[test]
+fn test_shamir_ecdsa_shared_inputs_error() {
+    let err = super::shamir_acvm_error("ecdsa_secp256r1_u2_is_one");
+    assert!(err.contains("not supported for Shamir sharing"), "{err}");
+}

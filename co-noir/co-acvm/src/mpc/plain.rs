@@ -1,4 +1,7 @@
-use super::{NoirWitnessExtensionProtocol, RecursionInputVisibility, downcast};
+use super::{
+    EcdsaCurve, NoirWitnessExtensionProtocol, RecursionInputVisibility, downcast,
+    ecdsa_verify_public,
+};
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
 use blake2::{Blake2s256, Digest};
@@ -873,6 +876,19 @@ impl<F: PrimeField> NoirWitnessExtensionProtocol<F> for PlainAcvmSolver<F> {
         } else {
             Ok((F::zero(), F::zero(), F::one()))
         }
+    }
+
+    fn ecdsa_verify(
+        &mut self,
+        curve: EcdsaCurve,
+        hashed_message: &[Self::AcvmType; 32],
+        public_key_x: &[Self::AcvmType; 32],
+        public_key_y: &[Self::AcvmType; 32],
+        signature: &[Self::AcvmType; 64],
+    ) -> eyre::Result<Self::AcvmType> {
+        let is_valid =
+            ecdsa_verify_public(curve, hashed_message, public_key_x, public_key_y, signature)?;
+        Ok(F::from(is_valid))
     }
 
     fn aes128_encrypt(

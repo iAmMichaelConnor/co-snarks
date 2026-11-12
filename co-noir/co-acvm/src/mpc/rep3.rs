@@ -1,7 +1,7 @@
 use super::plain::PlainAcvmSolver;
 use super::{
-    DEFAULT_LOOKUP_READ_COUNT_BATCH, NoirWitnessExtensionProtocol, RecursionInputVisibility,
-    downcast,
+    DEFAULT_LOOKUP_READ_COUNT_BATCH, EcdsaCurve, NoirWitnessExtensionProtocol,
+    RecursionInputVisibility, downcast, ecdsa_verify_public, public_array,
 };
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, Field, MontConfig, One, PrimeField, Zero};
@@ -39,6 +39,7 @@ use std::marker::PhantomData;
 use std::ops::BitXor;
 
 mod bigfield;
+mod ecdsa;
 mod sha256_reads;
 
 type ArithmeticShare<F> = Rep3PrimeFieldShare<F>;
@@ -2117,6 +2118,44 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         let res = arithmetic::mul_vec(&[x, y], &[mul, mul], self.net, &mut self.state)?;
 
         Ok((res[0].into(), res[1].into(), i.into()))
+    }
+
+    fn ecdsa_verify(
+        &mut self,
+        curve: EcdsaCurve,
+        hashed_message: &[Self::AcvmType; 32],
+        public_key_x: &[Self::AcvmType; 32],
+        public_key_y: &[Self::AcvmType; 32],
+        signature: &[Self::AcvmType; 64],
+    ) -> eyre::Result<Self::AcvmType> {
+        if let (Some(hashed_message), Some(public_key_x), Some(public_key_y), Some(signature)) = (
+            public_array::<F, Self, 32>(hashed_message),
+            public_array::<F, Self, 32>(public_key_x),
+            public_array::<F, Self, 32>(public_key_y),
+            public_array::<F, Self, 64>(signature),
+        ) {
+            let is_valid = ecdsa_verify_public(
+                curve,
+                &hashed_message,
+                &public_key_x,
+                &public_key_y,
+                &signature,
+            )?;
+            return Ok(Rep3AcvmType::Public(F::from(is_valid)));
+        }
+        let verify = match curve {
+            EcdsaCurve::Secp256k1 => ecdsa::ecdsa_verify::<F, ark_secp256k1::Config, N>,
+            EcdsaCurve::Secp256r1 => ecdsa::ecdsa_verify::<F, ark_secp256r1::Config, N>,
+        };
+        let is_valid = verify(
+            hashed_message,
+            public_key_x,
+            public_key_y,
+            signature,
+            self.net,
+            &mut self.state,
+        )?;
+        Ok(Rep3AcvmType::Shared(is_valid))
     }
 
     fn aes128_encrypt(

@@ -30,3 +30,6 @@ add_plain_acvm_test!("blake2s");
 add_plain_acvm_test!("blake3");
 add_plain_acvm_test!("embedded_curve_add");
 add_plain_acvm_test!("embedded_curve_predicate");
+add_plain_acvm_test!("ecdsa_secp256k1");
+add_plain_acvm_test!("ecdsa_secp256r1");
+add_plain_acvm_test!("ecdsa_secp256r1_u2_is_one");
