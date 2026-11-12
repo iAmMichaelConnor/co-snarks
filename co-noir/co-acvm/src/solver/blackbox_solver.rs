@@ -1,5 +1,5 @@
 use super::{CoAcvmResult, CoSolver};
-use crate::mpc::NoirWitnessExtensionProtocol;
+use crate::mpc::{EcdsaCurve, NoirWitnessExtensionProtocol};
 use acir::{
     AcirField,
     acir_field::GenericFieldElement,
@@ -501,6 +501,75 @@ where
         Ok(())
     }
 
+    /// Reads the byte inputs of an ECDSA black box. Like the ACVM, fails if a public input does
+    /// not fit into a byte; secret-shared inputs cannot be checked here and are constrained to be
+    /// bytes by the circuit.
+    fn read_bytes<const N: usize>(
+        initial_witness: &WitnessMap<T::AcvmType>,
+        inputs: &[FunctionInput<GenericFieldElement<F>>; N],
+    ) -> CoAcvmResult<[T::AcvmType; N]> {
+        let mut bytes = Vec::with_capacity(N);
+        for input in inputs {
+            let value = Self::input_to_value(initial_witness, *input)?;
+            if let Some(public) = T::get_public(&value)
+                && GenericFieldElement::from_repr(public).num_bits() > 8
+            {
+                Err(eyre::eyre!("ECDSA input {public} does not fit into a byte"))?;
+            }
+            bytes.push(value);
+        }
+        Ok(bytes
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("N inputs")))
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn solve_ecdsa_opcode(
+        driver: &mut T,
+        initial_witness: &mut WitnessMap<T::AcvmType>,
+        curve: EcdsaCurve,
+        public_key_x: &[FunctionInput<GenericFieldElement<F>>; 32],
+        public_key_y: &[FunctionInput<GenericFieldElement<F>>; 32],
+        signature: &[FunctionInput<GenericFieldElement<F>>; 64],
+        hashed_message: &[FunctionInput<GenericFieldElement<F>>; 32],
+        predicate: &FunctionInput<GenericFieldElement<F>>,
+        output: &Witness,
+    ) -> CoAcvmResult<()> {
+        let public_key_x = Self::read_bytes(initial_witness, public_key_x)?;
+        let public_key_y = Self::read_bytes(initial_witness, public_key_y)?;
+        let signature = Self::read_bytes(initial_witness, signature)?;
+        let hashed_message = Self::read_bytes(initial_witness, hashed_message)?;
+        let predicate = Self::input_to_value(initial_witness, *predicate)?;
+
+        // A disabled verification outputs 1 without looking at its inputs.
+        let is_valid = match T::get_public(&predicate) {
+            Some(predicate) if !predicate.is_one() => T::AcvmType::from(F::one()),
+            Some(_) => driver.ecdsa_verify(
+                curve,
+                &hashed_message,
+                &public_key_x,
+                &public_key_y,
+                &signature,
+            )?,
+            None => {
+                let is_valid = driver.ecdsa_verify(
+                    curve,
+                    &hashed_message,
+                    &public_key_x,
+                    &public_key_y,
+                    &signature,
+                )?;
+                // enabled * is_valid + (1 - enabled) = 1 - enabled * (1 - is_valid)
+                let enabled = driver.equal(&predicate, &T::AcvmType::from(F::one()))?;
+                let is_invalid = driver.sub(T::AcvmType::from(F::one()), is_valid);
+                let enabled_and_invalid = driver.mul(enabled, is_invalid)?;
+                driver.sub(T::AcvmType::from(F::one()), enabled_and_invalid)
+            }
+        };
+        Self::insert_value(output, is_valid, initial_witness)?;
+        Ok(())
+    }
+
     pub(super) fn solve_blackbox(
         &mut self,
         bb_func: &BlackBoxFuncCall<GenericFieldElement<F>>,
@@ -618,9 +687,48 @@ where
                 key,
                 outputs,
             )?,
+            BlackBoxFuncCall::EcdsaSecp256k1 {
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            } => Self::solve_ecdsa_opcode(
+                &mut self.driver,
+                initial_witness,
+                EcdsaCurve::Secp256k1,
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            )?,
+            BlackBoxFuncCall::EcdsaSecp256r1 {
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            } => Self::solve_ecdsa_opcode(
+                &mut self.driver,
+                initial_witness,
+                EcdsaCurve::Secp256r1,
+                public_key_x,
+                public_key_y,
+                signature,
+                hashed_message,
+                predicate,
+                output,
+            )?,
             // Recursive aggregation will be entirely handled by the backend and is not solved by the ACVM
             BlackBoxFuncCall::RecursiveAggregation { .. } => (),
-            _ => todo!("solve blackbox function {} not supported", bb_func.name()),
+            _ => Err(eyre::eyre!(
+                "solving the blackbox function {} is not supported",
+                bb_func.name()
+            ))?,
         }
 
         Ok(())

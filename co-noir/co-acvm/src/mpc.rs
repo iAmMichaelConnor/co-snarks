@@ -16,6 +16,66 @@ fn downcast<A: 'static, B: 'static>(a: &A) -> Option<&B> {
     (a as &dyn Any).downcast_ref::<B>()
 }
 
+/// The curve of an ECDSA signature verification black box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EcdsaCurve {
+    /// secp256k1
+    Secp256k1,
+    /// secp256r1 (NIST P-256)
+    Secp256r1,
+}
+
+impl EcdsaCurve {
+    fn name(self) -> &'static str {
+        match self {
+            EcdsaCurve::Secp256k1 => "secp256k1",
+            EcdsaCurve::Secp256r1 => "secp256r1",
+        }
+    }
+}
+
+/// Returns the values of `input` if they are all public.
+fn public_array<F: PrimeField, T: NoirWitnessExtensionProtocol<F>, const N: usize>(
+    input: &[T::AcvmType; N],
+) -> Option<[F; N]> {
+    let mut result = [F::zero(); N];
+    for (result, value) in result.iter_mut().zip(input) {
+        *result = T::get_public(value)?;
+    }
+    Some(result)
+}
+
+/// Verifies an ECDSA signature given as public big-endian bytes, see
+/// [`NoirWitnessExtensionProtocol::ecdsa_verify`].
+fn ecdsa_verify_public<F: PrimeField>(
+    curve: EcdsaCurve,
+    hashed_message: &[F; 32],
+    public_key_x: &[F; 32],
+    public_key_y: &[F; 32],
+    signature: &[F; 64],
+) -> eyre::Result<bool> {
+    fn to_bytes<F: PrimeField, const N: usize>(input: &[F; N]) -> eyre::Result<[u8; N]> {
+        let mut bytes = [0u8; N];
+        for (byte, value) in bytes.iter_mut().zip(input) {
+            let value: num_bigint::BigUint = (*value).into();
+            *byte = u8::try_from(&value).map_err(|_| {
+                eyre::eyre!("ECDSA verification input {value} does not fit into a byte")
+            })?;
+        }
+        Ok(bytes)
+    }
+    let hashed_message = to_bytes(hashed_message)?;
+    let public_key_x = to_bytes(public_key_x)?;
+    let public_key_y = to_bytes(public_key_y)?;
+    let signature = to_bytes(signature)?;
+    let verify = match curve {
+        EcdsaCurve::Secp256k1 => acvm::blackbox_solver::ecdsa_secp256k1_verify,
+        EcdsaCurve::Secp256r1 => acvm::blackbox_solver::ecdsa_secp256r1_verify,
+    };
+    verify(&hashed_message, &public_key_x, &public_key_y, &signature)
+        .map_err(|err| eyre::eyre!("ECDSA {} verification failed: {err}", curve.name()))
+}
+
 /// How the recursive verifier treats secret-shared recursion inputs: the inner proof, its public
 /// inputs, the inner verification key, the key hash and a witness predicate.
 ///
@@ -736,6 +796,24 @@ pub trait NoirWitnessExtensionProtocol<F: PrimeField> {
         iv: Vec<Self::AcvmType>,
         key: Vec<Self::AcvmType>,
     ) -> eyre::Result<Vec<Self::AcvmType>>;
+
+    /// Verifies an ECDSA signature over `curve` and returns 1 if it is valid and 0 otherwise.
+    ///
+    /// All inputs are bytes in big-endian order; the signature is `r || s`. The semantics are the
+    /// ones of the ACVM black box: the signature is valid iff the public key is a point on the
+    /// curve with coordinates smaller than the base field modulus, `0 < r < n`,
+    /// `0 < s <= (n - 1) / 2` (low-s), and `R = (H(m) / s) * G + (r / s) * P` is not the point at
+    /// infinity and satisfies `R.x mod n == r`. An invalid public key or signature makes the
+    /// verification return 0 rather than fail. The predicate of the black box is handled by the
+    /// caller.
+    fn ecdsa_verify(
+        &mut self,
+        curve: EcdsaCurve,
+        hashed_message: &[Self::AcvmType; 32],
+        public_key_x: &[Self::AcvmType; 32],
+        public_key_y: &[Self::AcvmType; 32],
+        signature: &[Self::AcvmType; 64],
+    ) -> eyre::Result<Self::AcvmType>;
 
     /// Slices the inputs and then puts these together to computes the accumulator for conversion from sparse bytes in AES.
     fn accumulate_from_sparse_bytes(

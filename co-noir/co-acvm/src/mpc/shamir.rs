@@ -1,4 +1,7 @@
-use super::{NoirWitnessExtensionProtocol, RecursionInputVisibility, plain::PlainAcvmSolver};
+use super::{
+    EcdsaCurve, NoirWitnessExtensionProtocol, RecursionInputVisibility, ecdsa_verify_public,
+    plain::PlainAcvmSolver, public_array,
+};
 use ark_ec::CurveGroup;
 use ark_ff::{One, PrimeField};
 use co_brillig::mpc::{ShamirBrilligDriver, ShamirBrilligType};
@@ -946,6 +949,37 @@ impl<'a, F: PrimeField + FieldUint, N: Network> NoirWitnessExtensionProtocol<F>
         _input2_infinite: Self::AcvmType,
     ) -> eyre::Result<(Self::AcvmType, Self::AcvmType, Self::AcvmType)> {
         panic!("functionality embedded_curve_add not feasible for Shamir")
+    }
+
+    fn ecdsa_verify(
+        &mut self,
+        curve: EcdsaCurve,
+        hashed_message: &[Self::AcvmType; 32],
+        public_key_x: &[Self::AcvmType; 32],
+        public_key_y: &[Self::AcvmType; 32],
+        signature: &[Self::AcvmType; 64],
+    ) -> eyre::Result<Self::AcvmType> {
+        match (
+            public_array::<F, Self, 32>(hashed_message),
+            public_array::<F, Self, 32>(public_key_x),
+            public_array::<F, Self, 32>(public_key_y),
+            public_array::<F, Self, 64>(signature),
+        ) {
+            (Some(hashed_message), Some(public_key_x), Some(public_key_y), Some(signature)) => {
+                let is_valid = ecdsa_verify_public(
+                    curve,
+                    &hashed_message,
+                    &public_key_x,
+                    &public_key_y,
+                    &signature,
+                )?;
+                Ok(F::from(is_valid).into())
+            }
+            _ => eyre::bail!(
+                "ECDSA {} verification on secret-shared inputs is not supported for Shamir sharing",
+                curve.name()
+            ),
+        }
     }
 
     fn aes128_encrypt(
