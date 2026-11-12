@@ -309,3 +309,35 @@ fn zk_recursion_proof_test_poseidon2sponge() {
 fn embedded_curve_predicate_witness_and_proof_test_poseidon2sponge() {
     witness_and_proof_test::<Poseidon2Sponge>("embedded_curve_predicate", ZeroKnowledge::Yes, "");
 }
+
+/// The circuit builder does not construct ECDSA constraints yet: building a circuit that verifies
+/// ECDSA signatures fails with an error instead of panicking.
+#[test]
+fn ecdsa_circuit_construction_is_rejected() {
+    for name in ["ecdsa_secp256k1", "ecdsa_secp256r1"] {
+        let circuit_file = format!("../test_vectors/noir/{name}/kat/{name}.json");
+        let witness_file = format!("../test_vectors/noir/{name}/kat/{name}.gz");
+        let constraint_system =
+            co_noir::constraint_system_from_reader(File::open(&circuit_file).unwrap())
+                .expect("failed to parse constraint system");
+        let witness = co_noir::witness_from_reader(File::open(&witness_file).unwrap())
+            .expect("failed to parse witness");
+        let mut driver = PlainAcvmSolver::new();
+        let Err(err) = UltraCircuitBuilder::<Bn254G1>::create_circuit(
+            &constraint_system,
+            0,
+            witness,
+            HonkRecursion::UltraHonk,
+            &ProverCrs::default(),
+            &mut driver,
+        ) else {
+            panic!("building an ECDSA circuit must fail");
+        };
+        let curve = name.trim_start_matches("ecdsa_");
+        assert!(
+            err.to_string()
+                .contains(&format!("ECDSA {curve} signatures")),
+            "unexpected error: {err}"
+        );
+    }
+}

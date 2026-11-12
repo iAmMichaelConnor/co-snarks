@@ -140,8 +140,8 @@ pub(crate) struct AcirFormatOriginalOpcodeIndices {
     pub(crate) range_constraints: Vec<usize>,
     pub(crate) aes128_constraints: Vec<usize>,
     pub(crate) sha256_compression: Vec<usize>,
-    // std::vector<size_t> ecdsa_k1_constraints;
-    // std::vector<size_t> ecdsa_r1_constraints;
+    pub(crate) ecdsa_k1_constraints: Vec<usize>,
+    pub(crate) ecdsa_r1_constraints: Vec<usize>,
     pub(crate) blake2s_constraints: Vec<usize>,
     pub(crate) blake3_constraints: Vec<usize>,
     // std::vector<size_t> keccak_permutations;
@@ -461,6 +461,24 @@ impl<F: PrimeField> RecursionConstraint<F> {
 pub(crate) struct Blake2sConstraint<F: PrimeField> {
     pub(crate) inputs: Vec<WitnessOrConstant<F>>,
     pub(crate) result: [u32; 32],
+}
+
+/// An ECDSA signature verification, as in barretenberg's `EcdsaConstraint` (the curve is given by
+/// the list the constraint is in). The 256-bit values are given by their big-endian bytes; the
+/// signature is `r || s`. Barretenberg expects the bytes to be witnesses; constants are kept here
+/// so that parsing does not fail on them.
+#[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "the ECDSA verification circuit is not constructed yet, see `build_constraints`"
+)]
+pub(crate) struct EcdsaConstraint<F: PrimeField> {
+    pub(crate) hashed_message: [WitnessOrConstant<F>; 32],
+    pub(crate) signature: [WitnessOrConstant<F>; 64],
+    pub(crate) pub_x_indices: [WitnessOrConstant<F>; 32],
+    pub(crate) pub_y_indices: [WitnessOrConstant<F>; 32],
+    pub(crate) predicate: WitnessOrConstant<F>,
+    pub(crate) result: u32,
 }
 
 #[derive(Debug)]
